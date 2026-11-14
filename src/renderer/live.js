@@ -1,0 +1,315 @@
+/* global S, $, esc, icon, toast, modal, confirmBox, cleanErr, api, timeAgo, trackInstalled, findTrack, joinServer, onlineTabs, renderOnline, refreshAccounts */
+'use strict';
+// ---------- Live online data: the game plugin + your online service ----------
+// Servers tab: "Live servers" (with tracks and riders). Friends tab: where friends are, join them.
+S.live = { status: null, servers: null, serversErr: null, friends: null, friendsErr: null };
+
+async function liveStatus(refresh) {
+  if (!S.live.status || refresh) S.live.status = await api.invoke(refresh ? 'online:refresh' : 'online:status').catch(() => null);
+  return S.live.status;
+}
+api.on('online:status', (st) => {
+  S.live.status = st;
+  if (S.view !== 'online') return;
+  if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(true); }
+  if (S.onlineTab === 'friends') renderFriends($('#content'));
+});
+
+const SESSION_NAMES = ['Waiting', 'Practice', 'Pre-qualifying', 'Qualifying practice', 'Qualifying', 'Warmup', 'Race 1', 'Race 2'];
+const trackLabel = (s) => s.trackName || s.trackId || '';
+const trackHave = (s) => !!(trackInstalled(s.trackName || '') || trackInstalled(s.trackId || ''));
+
+// Card that sets things up: plugin, then service. Shown until both are done; collapses to a status line after.
+function setupCardHtml(st, where) {
+  if (!st) return '';
+  const p = st.plugin, sv = st.service;
+  const pluginRow = p.installed
+    ? `<div class="live-step done">${icon('check')}<div><b>Game plugin installed</b><div class="muted">Tells the app which server and track you're on. ${st.game.running ? '' : 'It starts with MX Bikes.'}</div></div><button class="btn btn-sm btn-ghost" data-act="live-plugin-remove">Remove</button></div>`
+    : `<div class="live-step">${icon('download')}<div><b>Install the game plugin</b><div class="muted">A small plugin using MX Bikes' official plugin system. It only reads the server name, track and rider list and saves them for this app — no game changes, no network.</div></div>
+        ${p.available ? `<button class="btn btn-sm btn-primary" data-act="live-plugin-install">Install</button>` : '<span class="muted" style="font-size:12px">Not built yet</span>'}</div>`;
+  const svcRow = sv.connected
+    ? `<div class="live-step done">${icon('check')}<div><b>Online${sv.name ? ` as ${esc(sv.name)}` : ''}</b>${sv.error ? `<div style="color:var(--warn)">${esc(sv.error)}</div>` : '<div class="muted">Signed in with your Steam account.</div>'}</div><button class="btn btn-sm btn-ghost" data-act="live-disconnect">Go offline</button></div>`
+    : sv.defaultUrl
+      ? `<div class="live-step">${icon('globe')}<div style="flex:1"><b>Online features</b><div class="muted">${sv.error ? `<span style="color:var(--warn)">Couldn't reach the online service — it may be offline right now.</span>` : 'Signing in with your Steam account…'}</div></div>
+          <button class="btn btn-sm btn-primary" data-act="live-connect">${sv.error ? 'Try again' : 'Go online'}</button></div>`
+      : `<div class="live-step">${icon('globe')}<div style="flex:1"><b>Online features aren't set up</b><div class="muted">This copy of the app has no online service built in.</div></div></div>`;
+  if (p.installed && sv.connected && !sv.error && where !== 'friends') return '';
+  return `<div class="set-card live-setup"><h3>Live servers & friends</h3>${pluginRow}${svcRow}</div>`;
+}
+
+// "You're on <server> · <track>" while the plugin reports a session.
+function drawYouAreOn() {
+  const box = $('#youAreOn');
+  if (!box) return;
+  const st = S.live.status, pr = st && st.presence;
+  if (!pr || !pr.inEvent) { box.innerHTML = ''; return; }
+  const online = !!pr.server;
+  box.innerHTML = `<div class="set-card live-now"><div class="live-dot"></div><div style="flex:1">
+      <b>${online ? `You're on ${esc(pr.server)}` : pr.type === 1 ? 'Testing offline' : 'Riding offline'}</b>
+      <div class="muted">${esc(pr.trackName || pr.trackId)} · ${esc(pr.bikeName || '')}${pr.riders && pr.riders.length > 1 ? ` · ${pr.riders.length} riders` : ''}${pr.session != null && SESSION_NAMES[pr.session] && pr.type === 2 ? ` · ${SESSION_NAMES[pr.session]}` : ''}</div></div>
+    ${online && pr.serverAddress ? `<button class="btn btn-sm" data-act="live-copy-link" data-addr="${esc(pr.serverAddress)}">${icon('copy')}Copy join link</button>` : ''}</div>`;
+}
+
+async function drawLiveServers(refresh) {
+  const box = $('#allServers');
+  if (!box) return;
+  const st = await liveStatus();
+  const meta = $('#allSrvMeta');
+  const setup = setupCardHtml(st, 'servers');
+  if (!st || !st.service.connected) { box.innerHTML = setup; if (meta) meta.textContent = ''; return; }
+  if (!S.live.servers || refresh) {
+    try { S.live.servers = await api.invoke('online:servers'); S.live.serversErr = null; } catch (e) { S.live.serversErr = cleanErr(e); }
+  }
+  if (!$('#allServers')) return;
+  if (S.live.serversErr) { box.innerHTML = setup + `<div class="notice danger">${icon('alert')}<div>${esc(S.live.serversErr)}</div></div>`; return; }
+  const all = S.live.servers.servers;
+  const q = (S.allSrv.q || '').toLowerCase();
+  const xs = q ? all.filter((s) => `${s.name} ${trackLabel(s)} ${s.categories.join(' ')}`.toLowerCase().includes(q)) : all;
+  if (meta) meta.innerHTML = `${all.length} live · updated ${esc(timeAgo(S.live.servers.at))}`;
+  box.innerHTML = `${setup}<div class="filters" style="padding:0 0 12px"><div class="search wide">${icon('search')}<input id="allSrvQ" placeholder="Search by server, track or class…" value="${esc(S.allSrv.q || '')}" spellcheck="false"></div>
+      <span class="count">${xs.length === all.length ? '' : `${xs.length} match${xs.length === 1 ? '' : 'es'}`}</span>
+      <button class="btn btn-icon" data-act="live-refresh" title="Reload">${icon('refresh')}</button></div>
+    <div class="srv-list">${xs.map((s, i) => {
+      const have = trackHave(s);
+      const tl = trackLabel(s);
+      return `<div class="srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-ico">${icon('globe')}</div>
+        <div class="srv-txt"><div class="t">${esc(s.name)}</div>
+          <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
+          · ${icon('user')} ${s.riders.length}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
+        <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
+          ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : '<span class="muted" style="font-size:12px" title="No app user has joined this server by address yet — join it from the game\'s own server list">Join in game</span>'}</div></div>`;
+    }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
+  const qi = $('#allSrvQ');
+  if (qi) qi.addEventListener('input', () => { S.allSrv.q = qi.value; clearTimeout(drawLiveServers.t); drawLiveServers.t = setTimeout(() => drawLiveServers().then(() => { const n = $('#allSrvQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), 200); });
+}
+
+function openLiveServer(s) {
+  const tl = trackLabel(s), have = trackHave(s);
+  const m = modal({
+    title: esc(s.name),
+    body: `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
+        · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
+      <div class="section-title" style="margin-top:0">Riders (${s.riders.length})</div>
+      <div class="srv-list">${s.riders.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.name)}</div><div class="m">${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>`,
+    foot: `${tl && !have ? `<button class="btn" data-live-mfind>${icon('search')}Get track</button>` : ''}<span class="grow"></span><button class="btn" data-close>Close</button>
+      ${s.address ? `<button class="btn btn-primary" data-live-mjoin>${icon('play')}Join</button>` : ''}`,
+  });
+  const f = $('[data-live-mfind]', m); if (f) f.addEventListener('click', () => { m.close(); findTrack(tl); });
+  const j = $('[data-live-mjoin]', m); if (j) j.addEventListener('click', () => { m.close(); joinServer(s.address, { name: s.name, address: s.address, track: tl }); });
+}
+
+// ---------- Friends ----------
+// Layout: a slim online line, then your friends (status, join, their synced paints), then a small
+// "Sharing" card. Adding friends happens in one popup (Steam friends, or a friend code).
+async function renderFriends(c) {
+  if (!S.friends) S.friends = await api.invoke('friends:list');
+  if (!S.accounts.steam) await refreshAccounts();
+  const st = await liveStatus();
+  const connected = !!(st && st.service.connected);
+  if (connected && !S.live.friends && !S.live.friendsLoading) {
+    S.live.friendsLoading = true;
+    api.invoke('online:friends').then((f) => { S.live.friends = f; S.live.friendsErr = null; }).catch((e) => { S.live.friendsErr = cleanErr(e); })
+      .finally(() => { S.live.friendsLoading = false; if (S.view === 'online' && S.onlineTab === 'friends') renderFriends($('#content')); });
+  }
+  const live = new Map((S.live.friends || []).map((f) => [f.id, f]));
+  const paints = new Map(((st && st.paintSync && st.paintSync.friends) || []).map((f) => [f.id, f]));
+
+  // One status per friend: [dot colour, text, sort weight]
+  const statusOf = (f) => {
+    if (!connected) return ['off', 'Offline — go online to see status', 3];
+    const l = live.get(f.code);
+    if (!l) return ['off', S.live.friendsLoading ? 'Checking…' : '—', 3];
+    if (l.status === 'not-on-service') return ['off', "Hasn't installed MX Bikes Manager yet", 4];
+    if (l.status === 'not-added-back') return ['wait', 'Waiting for them to add you back', 2];
+    if (l.status === 'hidden' || !l.online) return ['off', l.lastSeen ? `Offline · last seen ${timeAgo(l.lastSeen)}` : 'Offline', 3];
+    if (l.server) return ['ride', `Riding on ${l.server}${l.trackName || l.trackId ? ` · ${l.trackName || l.trackId}` : ''}`, 0];
+    if (l.inEvent) return ['ride', `Riding offline${l.trackName ? ` · ${l.trackName}` : ''}`, 0];
+    return ['on', 'In MX Bikes', 1];
+  };
+  const joinable = (f) => { const l = live.get(f.code); return l && l.status === 'ok' && l.online && l.server && l.address ? l : null; };
+  const paintLine = (f) => {
+    const p = paints.get(f.code);
+    if (!p || !p.items.length) return '';
+    const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
+    const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
+    return `<div class="fr-paints">${icon('shirt')}<span>${got} of ${p.items.length} paint${p.items.length === 1 ? '' : 's'} synced${p.bikeName || p.bike ? ` · ${esc(p.bikeName || p.bike)}` : ''}</span>
+      ${need.map((n) => `<button class="fr-need" data-act="paint-get" data-name="${esc(n.name)}" title="Search Get Mods for it">Needs ${esc({ bike: 'bike', helmet: 'helmet', boots: 'boots', protection: 'protector' }[n.kind] || n.kind)} ${esc(n.name.replace(/_/g, ' '))} ${icon('search')}</button>`).join('')}</div>`;
+  };
+
+  const rows = S.friends.map((f, i) => ({ f, i, s: statusOf(f) })).sort((a, b) => a.s[2] - b.s[2] || a.f.name.localeCompare(b.f.name));
+  const friendCard = ({ f, i, s }) => {
+    const j = joinable(f);
+    return `<div class="fr-row"><div class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></div>
+      <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}">${esc(s[1])}</div>${paintLine(f)}</div>
+      <div class="fr-act">${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
+        <button class="btn btn-sm btn-ghost btn-icon" data-friend-remove="${i}" title="Remove ${esc(f.name)}">${icon('x')}</button></div></div>`;
+  };
+
+  const ps = st && st.paintSync;
+  const steam = S.accounts.steam || {};
+  const banner = !st ? '' : !connected
+    ? `<div class="fr-banner off"><span class="fr-dot off"></span><div><b>You're offline.</b> ${st.service.defaultUrl ? "Friends' status and paint sync are paused until the online service is reachable." : 'Online features are not set up in this copy of the app.'}</div>${st.service.defaultUrl ? `<button class="btn btn-sm" data-act="live-connect">Try again</button>` : ''}</div>`
+    : `<div class="fr-banner on"><span class="fr-dot ride"></span><div>Online as <b>${esc(st.service.name || steam.name || '')}</b>${st.service.error ? ` · <span style="color:var(--warn)">${esc(st.service.error)}</span>` : ''}</div>
+        ${ps && ps.enabled ? `<span class="muted" style="font-size:12px">${ps.busy ? 'Syncing paints…' : ps.at ? `Paints synced ${esc(timeAgo(ps.at))}` : ''}</span>` : ''}</div>`;
+  const pluginTip = st && !st.plugin.installed && st.plugin.available
+    ? `<div class="fr-banner tip">${icon('info')}<div>Install the game plugin so friends can see which server you're on.</div><button class="btn btn-sm" data-act="live-plugin-install">Install</button></div>` : '';
+
+  c.innerHTML = `<div class="view"><div class="main">
+    <div class="toolbar"><h2>Online</h2>${onlineTabs()}<div class="grow"></div>
+      ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
+      <button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button></div>
+    <div class="scroller"><div class="fr-page">
+      ${banner}${pluginTip}
+      ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
+      ${S.friends.length
+        ? `<div class="section-title">Friends · ${S.friends.length}</div><div class="fr-list">${rows.map(friendCard).join('')}</div>`
+        : `<div class="fr-empty"><div class="fr-empty-ico">${icon('user')}</div><h3>Ride with your friends</h3>
+            <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
+            <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
+      <div class="section-title">Sharing</div>
+      <div class="fr-settings">
+        <label class="fr-set"><span><b>Show friends where I'm riding</b><span class="muted">Only friends who added you back see it.</span></span>
+          <span class="toggle"><input type="checkbox" id="liveShare" ${!st || st.service.share ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label>
+        <label class="fr-set"><span><b>Paint sync</b><span class="muted">Swap bike liveries and gear paints with friends so you see each other's look in game. Paint files only.</span></span>
+          <span class="toggle"><input type="checkbox" id="paintSync" ${!ps || ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label>
+        ${connected && ps && ps.enabled ? `<div class="fr-set-links">${ps.error ? `<span style="color:var(--warn)">${esc(ps.error)}</span>` : ps.shared ? `<span class="muted">Sharing ${ps.shared.length} paint${ps.shared.length === 1 ? '' : 's'} from your outfit</span>` : ''}
+          <span class="grow"></span><a href="#" data-act="paint-now">${ps.busy ? 'Syncing…' : 'Sync now'}</a>${ps.received ? `<a href="#" data-act="paint-remove">Remove ${ps.received} downloaded</a>` : ''}</div>` : ''}
+        <div class="fr-set"><span><b>Your friend code</b><span class="muted mono">${steam.found ? esc(steam.steamId) : 'Sign in to Steam on this PC'}</span></span>
+          ${steam.found ? `<button class="btn btn-sm" data-act="copy-steamid">${icon('copy')}Copy</button>` : ''}</div>
+      </div>
+    </div></div></div></div>`;
+
+  const ps2 = $('#paintSync');
+  if (ps2) ps2.addEventListener('change', async () => { S.live.status = await api.invoke('online:paintSync', ps2.checked); renderFriends($('#content')); });
+  const sh = $('#liveShare');
+  if (sh) sh.addEventListener('change', async () => { S.live.status = await api.invoke('online:share', sh.checked); toast(sh.checked ? 'Friends can see where you ride' : 'Hidden from friends', 'ok', 1800); });
+}
+
+document.addEventListener('click', async (e) => {
+  const add = e.target.closest('[data-act="friends-add"]');
+  if (add) return addFriendsModal();
+  const rm = e.target.closest('[data-friend-remove]');
+  if (rm) {
+    const i = Number(rm.dataset.friendRemove), f = S.friends[i];
+    if (!(await confirmBox('Remove friend', `Remove <b>${esc(f.name)}</b> from your friends?`, 'Remove', true))) return;
+    S.friends.splice(i, 1);
+    S.friends = await api.invoke('friends:save', S.friends);
+    S.live.friends = null;
+    renderFriends($('#content'));
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-act]');
+  const act = a && a.dataset.act;
+  const busy = (fn) => async () => { const old = a.innerHTML; a.disabled = true; a.innerHTML = '<div class="spinner" style="width:14px;height:14px"></div>'; try { await fn(); } catch (err) { toast(esc(cleanErr(err)), 'err', 7000); } a.disabled = false; a.innerHTML = old; };
+  const rerender = () => { S.live.servers = null; S.live.friends = null; renderOnline($('#content')); };
+  if (act === 'live-plugin-install') return busy(async () => { S.live.status = await api.invoke('online:pluginInstall'); toast('Plugin installed — it starts next time you open MX Bikes', 'ok', 4000); rerender(); })();
+  if (act === 'live-plugin-remove') { if (await confirmBox('Remove plugin', 'Remove the MX Bikes Manager plugin from your game\'s plugins folder?', 'Remove', true)) busy(async () => { S.live.status = await api.invoke('online:pluginRemove'); rerender(); })(); return; }
+  if (act === 'live-connect') return busy(async () => { S.live.status = await api.invoke('online:connect'); toast('Online', 'ok'); rerender(); })();
+  if (act === 'paint-now') e.preventDefault();
+  if (act === 'paint-now') return busy(async () => { S.live.status = await api.invoke('online:paintSyncNow'); renderFriends($('#content')); })();
+  if (act === 'paint-remove') {
+    e.preventDefault();
+    const n = S.live.status.paintSync.received;
+    if (await confirmBox('Remove synced paints', `Delete the ${n} paint file${n === 1 ? '' : 's'} paint sync downloaded from friends? Files you changed are kept.`, 'Remove', true)) {
+      const r = await api.invoke('online:removeReceived'); S.live.status = r.status; toast(`Removed ${r.removed} paint${r.removed === 1 ? '' : 's'}`, 'ok'); renderFriends($('#content'));
+    }
+    return;
+  }
+  if (act === 'paint-get') { findMod(a.dataset.name); return; }
+  if (act === 'live-disconnect') { if (await confirmBox('Go offline', 'Stop using online features? Friends stop seeing you and paint sync pauses. You can go online again any time.', 'Go offline', true)) busy(async () => { S.live.status = await api.invoke('online:disconnect'); rerender(); })(); return; }
+  if (act === 'live-refresh') { await liveStatus(true); drawYouAreOn(); return drawLiveServers(true); }
+  if (act === 'live-friends-refresh') { S.live.friends = null; return renderFriends($('#content')); }
+  if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
+  const j = e.target.closest('[data-live-join]');
+  if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) }); }
+  const f = e.target.closest('[data-live-find]');
+  if (f) { e.stopPropagation(); return findTrack(trackLabel(S.live.servers.servers[Number(f.dataset.liveFind)])); }
+  const o = e.target.closest('[data-live-open]');
+  if (o && !e.target.closest('button')) return openLiveServer(S.live.servers.servers[Number(o.dataset.liveOpen)]);
+  const fj = e.target.closest('[data-friend-join]');
+  if (fj) {
+    const fr = S.friends[Number(fj.dataset.friendJoin)];
+    const l = (S.live.friends || []).find((x) => x.id === fr.code);
+    if (l && l.address) joinServer(l.address, { name: l.server, address: l.address, track: l.trackName || l.trackId });
+  }
+});
+
+// Search Get Mods for a model a friend's paint needs.
+function findMod(name) {
+  S.getSrc = 'free'; S.browse.tab = 'all'; S.browse.query = String(name || '').replace(/[_]+/g, ' '); S.browse.sort = 'relevance';
+  S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.req = (S.browse.req || 0) + 1;
+  go('get');
+}
+
+// ---------- Add friends popup: Steam friends list, or a friend code ----------
+async function addFriendsModal() {
+  const steam = S.accounts.steam || {};
+  const m = modal({
+    title: 'Add friends', size: 'sm',
+    body: `<div class="seg-tabs" style="margin:0 0 12px"><button class="active" data-af-tab="steam">${icon('steam')}Steam friends</button><button data-af-tab="code">${icon('key')}Friend code</button></div>
+      <div id="afBody"></div>`,
+    onClose: () => { if (S.view === 'online' && S.onlineTab === 'friends') renderFriends($('#content')); },
+  });
+  let list = null;
+  const added = () => new Set((S.friends || []).map((f) => f.code));
+  const addOne = async (name, code) => {
+    if (added().has(code)) { toast(`${esc(name)} is already a friend`, 'info', 1600); return; }
+    S.friends.push({ name, code, addedAt: Date.now() });
+    S.friends = await api.invoke('friends:save', S.friends);
+    S.live.friends = null;
+    toast(`Added <b>${esc(name)}</b>`, 'ok', 1600);
+  };
+
+  const showSteam = async () => {
+    const box = $('#afBody', m);
+    if (!list) {
+      box.innerHTML = '<div class="loadmore"><div class="spinner"></div></div>';
+      try { list = await api.invoke('online:steamFriends'); } catch (e) { box.innerHTML = `<div class="notice danger">${esc(cleanErr(e))}</div>`; return; }
+    }
+    if (!list.length) { box.innerHTML = '<div class="muted" style="padding:24px;text-align:center">No Steam friends found on this PC.<br>Make sure Steam is signed in, or use a friend code.</div>'; return; }
+    box.innerHTML = `<div class="search" style="margin-bottom:10px">${icon('search')}<input id="sfQ" placeholder="Search your Steam friends…" style="width:100%"></div><div class="opt-list" id="sfList"></div>`;
+    const draw = () => {
+      const q = $('#sfQ', m).value.toLowerCase();
+      const have = added();
+      const xs = list.filter((f) => f.name.toLowerCase().includes(q)).sort((a, b) => (b.onService - a.onService) || a.name.localeCompare(b.name));
+      $('#sfList', m).innerHTML = xs.map((f) => `<div class="opt" style="cursor:default"><span class="fr-av sm">${esc(f.name.slice(0, 1).toUpperCase())}</span>
+        <span class="opt-txt"><span>${esc(f.name)}</span><span class="muted">${f.onService ? 'Uses MX Bikes Manager' : "Hasn't installed the app yet"}</span></span>
+        ${have.has(f.steamId) ? `<span class="badge ok" style="position:static">${icon('check')}Added</span>` : `<button class="btn btn-sm ${f.onService ? 'btn-primary' : ''}" data-sf-add="${esc(f.steamId)}">Add</button>`}</div>`).join('') || '<div class="muted" style="padding:20px;text-align:center">No matches</div>';
+    };
+    $('#sfQ', m).addEventListener('input', draw);
+    $('#sfList', m).addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-sf-add]');
+      if (!b) return;
+      const f = list.find((x) => x.steamId === b.dataset.sfAdd);
+      await addOne(f.name, f.steamId);
+      draw();
+    });
+    draw();
+    setTimeout(() => $('#sfQ', m) && $('#sfQ', m).focus(), 50);
+  };
+
+  const showCode = () => {
+    $('#afBody', m).innerHTML = `<p class="muted" style="margin:0 0 12px;font-size:13px">Ask your friend for their friend code — it's in their app under <b>Online → Friends → Sharing</b>.</p>
+      <div class="field" style="margin-bottom:10px"><label>Their name</label><input class="input" id="afName" placeholder="What you call them" style="width:100%"></div>
+      <div class="field" style="margin-bottom:14px"><label>Friend code</label><input class="input mono" id="afCode" placeholder="7656119…" style="width:100%" spellcheck="false"></div>
+      <button class="btn btn-primary" id="afAdd" style="width:100%;justify-content:center">${icon('user')}Add friend</button>
+      ${steam.found ? `<div class="fr-mycode"><span class="muted">Your code</span><span class="mono">${esc(steam.steamId)}</span><button class="btn btn-sm" data-act="copy-steamid">${icon('copy')}Copy</button></div>` : ''}`;
+    $('#afAdd', m).addEventListener('click', async () => {
+      const name = $('#afName', m).value.trim(), code = $('#afCode', m).value.replace(/\s+/g, '');
+      if (!/^7656119\d{10}$/.test(code)) { toast('A friend code is a 17-digit number starting with 7656119', 'err', 3500); return; }
+      await addOne(name || 'Friend', code);
+      $('#afName', m).value = ''; $('#afCode', m).value = '';
+    });
+    setTimeout(() => $('#afName', m).focus(), 50);
+  };
+
+  m.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-af-tab]');
+    if (!t) return;
+    $$('[data-af-tab]', m).forEach((b) => b.classList.toggle('active', b === t));
+    if (t.dataset.afTab === 'steam') showSteam(); else showCode();
+  });
+  showSteam();
+}

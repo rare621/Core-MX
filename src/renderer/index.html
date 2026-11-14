@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' mxb: https: data: file:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'">
+  <title>MX Bikes Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="titlebar">
+    <div class="brand"><span class="brand-mark">MXB</span><span class="brand-name">Mod Manager</span></div>
+    <div class="titlebar-spacer"></div>
+    <button class="btn btn-launch" id="launchBtn" title="Launch MX Bikes"></button>
+  </header>
+
+  <div class="shell">
+    <nav class="rail" id="rail"></nav>
+    <main class="content" id="content"></main>
+  </div>
+
+  <div class="drawer-scrim" id="drawerScrim"></div>
+  <aside class="drawer" id="drawer"></aside>
+  <div class="modal-root" id="modalRoot"></div>
+  <div class="toasts" id="toasts"></div>
+  <div class="dropzone" id="dropzone"><div class="dropzone-inner"><div class="dz-icon"></div><div class="dz-title">Drop to install</div><div class="dz-sub">.pkz, .pnt, .zip, .rar or .7z mod files</div></div></div>
+
+  <script src="icons.js"></script>
+  <script src="app.js"></script>
+  <script src="online.js"></script>
+  <script src="live.js"></script>
+  <script src="gamepanel.js"></script>
+  <script src="graphicsview.js"></script>
+  <script src="ranked.js"></script>
+  <script src="host.js"></script>
+  <script type="module" src="viewer3d.js"></script>
+</body>
+</html>

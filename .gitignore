@@ -1,0 +1,19 @@
+# dependencies and build output
+node_modules/
+dist/
+out/
+
+# local-only files
+*.lnk
+plugin/*.lib
+plugin/*.tmp
+
+# online service runtime data (created next to the script)
+server/mxbm-data.json
+server/mxbm-data.json.tmp
+server/mxbm-files/
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
