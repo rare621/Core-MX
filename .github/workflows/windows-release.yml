@@ -1,0 +1,50 @@
+name: Windows installer
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      MXB_SERVICE_URL: ${{ vars.MXB_SERVICE_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw 'Tag must match package.json version' }
+      - run: npm test
+      - name: Build Windows setup
+        run: npm run build:win
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-setup
+          path: |
+            dist/MX-Bikes-Manager-Setup-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Create draft GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Output 'Release already exists; leaving its assets unchanged.'; exit 0 }
+          gh release create $env:GITHUB_REF_NAME dist/MX-Bikes-Manager-Setup-*.exe dist/SHA256SUMS.txt --verify-tag --draft --title "MX Bikes Manager $env:GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
