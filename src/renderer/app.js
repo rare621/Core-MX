@@ -2361,11 +2361,12 @@ document.addEventListener('click', async (e) => {
 });
 S.settingsTab = 'general';
 function settingsTabs() {
-  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button></div>`;
+  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button></div>`;
 }
 document.addEventListener('click', (e) => { const tab = e.target.closest('[data-settings-tab]'); if (tab) { S.settingsTab = tab.dataset.settingsTab; renderSettings($('#content')); } });
 async function renderSettings(c) {
   if (S.settingsTab === 'health') return renderHealth(c);
+  if (S.settingsTab === 'plugins') return renderPluginSettings(c);
   if (!S.accounts.shops.length) await refreshAccounts();
   const env = S.env, s = env.settings;
   const pathRow = (val, ok, which) => `<div class="path-row"><div class="path">${ok ? `<span class="ok">${icon('check')}</span>` : `<span class="bad">${icon('alert')}</span>`}${esc(val || 'Not found')}</div>

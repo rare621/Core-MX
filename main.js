@@ -139,6 +139,20 @@ function userDir() { return store.get('settings').gameUserDir; }
 function profUserDir() { return process.env.MXB_PROFILES_ROOT || userDir(); }
 function modsDir() { return path.join(userDir(), 'mods'); }
 function disabledDir() { return path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
+let discoveryInstall = null;
+async function ensureDiscoveryPlugin() {
+  if (discoveryInstall) return discoveryInstall;
+  discoveryInstall = (async () => {
+    const settings = store.get('settings');
+    const gameRunning = await profile.isGameRunning();
+    await frostmod.cleanup(settings.gameInstallDir, userDir(), { all: !gameRunning });
+    if (settings.frostmodAutoInstall === false || !settings.gameInstallDir || gameRunning) return;
+    const result = await frostmod.installBundled(app.isPackaged ? process.resourcesPath : __dirname, settings.gameInstallDir);
+    if (result.version && result.version !== settings.frostmodVersion) store.update('settings', (s) => ({ ...s, frostmodVersion: result.version }));
+    if (result.installed) { watchFrostList(); send('frostmod:list', {}); }
+  })();
+  try { return await discoveryInstall; } finally { discoveryInstall = null; }
+}
 const serverNameKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
 // The official game plugin does not receive an IP:port. Enrich live server
 // names from addresses the player saved or FrostMod saw, never by guessing.
@@ -152,7 +166,7 @@ async function knownServerAddresses() {
       if (parsed && (!latest || parsed.at > latest.at)) latest = parsed;
     } catch {}
   }
-  if (latest && Date.now() - latest.at < 6 * 3600 * 1000) known.push(...latest.servers);
+  if (latest && latest.at <= Date.now() + 60000 && Date.now() - latest.at < 6 * 3600 * 1000) known.push(...latest.servers);
   const out = new Map();
   for (const server of known) {
     const key = serverNameKey(server.name), address = String(server.address || '');
@@ -535,7 +549,12 @@ function watchFrostList() {
   for (const p of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
     if (frostWatched.has(p)) continue;
     frostWatched.add(p);
-    fs.watchFile(p, { interval: 3000 }, (cur, prev) => { if (cur.mtimeMs !== prev.mtimeMs) send('frostmod:list', {}); });
+    fs.watchFile(p, { interval: 3000 }, (cur, prev) => {
+      if (cur.mtimeMs !== prev.mtimeMs) {
+        send('frostmod:list', {});
+        online?.refresh().catch(() => {});
+      }
+    });
   }
 }
 
@@ -1003,20 +1022,29 @@ function registerIpc() {
   // ---- full server list via FrostMod's file ----
   handle('frostmod:status', async () => {
     const s = await frostmod.status(store.get('settings').gameInstallDir, userDir());
-    return { ...s, version: store.get('settings').frostmodVersion || null };
+    return { ...s, version: store.get('settings').frostmodVersion || null, autoInstall: store.get('settings').frostmodAutoInstall !== false };
   });
   handle('frostmod:install', async () => {
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes first — the game loads plugins when it starts.');
-    const r = await frostmod.install(ses, store.get('settings').gameInstallDir);
-    store.update('settings', (s) => ({ ...s, frostmodVersion: r.version }));
+    const r = await frostmod.installBundled(app.isPackaged ? process.resourcesPath : __dirname, store.get('settings').gameInstallDir);
+    store.update('settings', (s) => ({ ...s, frostmodAutoInstall: true, frostmodVersion: r.version || s.frostmodVersion }));
     watchFrostList();
     return r;
   });
   handle('frostmod:uninstall', async () => {
+    if (discoveryInstall) await discoveryInstall.catch(() => {});
     const p = frostmod.pluginPath(store.get('settings').gameInstallDir);
+    if (p && fs.existsSync(p) && await profile.isGameRunning()) throw new Error('Close MX Bikes before removing a loaded plugin.');
+    store.update('settings', (s) => ({ ...s, frostmodAutoInstall: false }));
     if (p && fs.existsSync(p)) await shell.trashItem(p);
     const fl = frostmod.flagPath(store.get('settings').gameInstallDir);
     if (fl && fs.existsSync(fl)) await fsp.rm(fl, { force: true });
+    await frostmod.cleanup(store.get('settings').gameInstallDir, userDir(), { all: true });
+    if (p) {
+      const licenses = path.join(path.dirname(p), 'frostmod-licenses');
+      for (const name of frostmod.LICENSES) await fsp.rm(path.join(licenses, name), { force: true });
+      await fsp.rmdir(licenses).catch((e) => { if (!['ENOENT', 'ENOTEMPTY'].includes(e.code)) throw e; });
+    }
     store.update('settings', (s) => ({ ...s, frostmodVersion: null }));
     return true;
   });
@@ -1472,6 +1500,10 @@ app.whenReady().then(async () => {
         .flatMap((r) => r.files || []);
       return bike ? { prof, bike, bikeName: bike, protectedPaths } : null;
     },
+    resolveServerAddress: async (name) => {
+      const matches = [...((await knownServerAddresses()).get(serverNameKey(name)) || [])];
+      return matches.length === 1 ? matches[0] : null;
+    },
     // Whether a model a friend's paint needs is installed (bike / helmet / boots / protection).
     haveMod: async (n) => {
       if (n.kind === 'bike') return !!(lastScan && lastScan.items.some((i) => !i.disabled && i.group === 'bikes' && i.name === n.name)) || fs.existsSync(path.join(modsDir(), 'bikes', n.name + '.pkz'));
@@ -1483,6 +1515,8 @@ app.whenReady().then(async () => {
     onChange: (st) => send('online:status', st),
   });
   online.start();
+  ensureDiscoveryPlugin().catch((e) => console.warn('Address discovery setup:', e.message));
+  setInterval(() => ensureDiscoveryPlugin().catch(() => {}), 30000).unref();
 });
 
 app.on('window-all-closed', () => { if (online) online.stop(); store && store.flush(); app.quit(); });

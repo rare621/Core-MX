@@ -15,7 +15,7 @@ module.exports = {
   ],
   extraResources: [
     { from: 'build/generated/online.config.json', to: 'online.config.json' },
-    { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md'] },
+    { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md', 'frostmod/**/*'] },
   ],
   protocols: [{ name: 'MX Bikes Manager join links', schemes: ['mxbm'] }],
   win: {

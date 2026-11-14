@@ -12,7 +12,7 @@ const REPORT_EVERY = 30 * 1000;
 const PAINT_EVERY = 60 * 1000;
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false;
   let lastSent = '';
@@ -120,7 +120,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         known[next.server] = lj.address;
         setCfg({ addresses: known, lastJoin: null });
       }
-      next.serverAddress = known[next.server] || null;
+      // Resolve locally observed browser addresses on every poll, and report
+      // them to friends too. Do not persist discovered entries beyond their TTL.
+      next.serverAddress = await resolveServerAddress(next.server).catch(() => null) || known[next.server] || null;
     }
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
@@ -134,6 +136,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       inGame: gameRunning, inEvent: !!s.inEvent,
       server: s.server || null, serverAddress: s.serverAddress || null,
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
+      session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }

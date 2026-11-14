@@ -36,3 +36,11 @@ The [I <3 MY GF/BF HOODIES listing](https://mxb-mods.com/i-3-my-gf-bf-hoodies-2/
 - The hoodie flattens several independent objects into one mesh. Applying the first object's transform to every sibling lays the body sideways. The existing bounds-based transform selection reproduces the EDF's recorded bounds (within float precision); the stock rider is unchanged. Enabled this selection for rider bodies and visually checked the upright hoodie with its Dropsize paint.
 - Only preview workers opt into this read path. Archive caches are separated by read mode; ordinary sync/export readers retain their existing restriction. No decoded package files or purchased assets are distributed with the app.
 - This confirms this package format, not support for every encrypted or owner-specific package.
+
+## 2026-11-14: automatic server address export
+
+- The official presence callback reports server name and session stage, but no address. Match names only against saved or freshly observed addresses; reject ambiguous matches.
+- The installed official FrostMod 0.52.0 logged server-browser rows but produced no masterlist. At upstream commit `fe1614ddbc294faba93e914697ae98bd89f494db`, `MasterListPublish` and the decoder existed but the browser callback called neither. Another manual Refresh could not fix this.
+- `plugin/frostmod/automatic-discovery.patch` connects the bounded row decoder to a background atomic writer. Opening Multiplayer should suffice. One replaceable list is cleared at startup and normal shutdown; the app clears expired/interrupted discovery outputs and clears all discovery lists after game exit. No user settings or mods are cleanup targets.
+- Built the explicitly labeled `0.52.0-mxbm.1` using Zig 0.17.1 and pinned MinHook 1.3.4. The upstream decoder tests and 103 app tests passed. A hidden Electron check verified Settings → Plugins and the address dialog, including its Close button. Installed the binary only after confirming MX Bikes was closed. Actual game/browser verification is pending the user's restart.
+- The service now drops an address when the reporting client no longer supplies it, rather than retaining expired discovery indefinitely. Session-stage transport and clearing are covered by two real clients against the local service fixture.

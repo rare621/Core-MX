@@ -113,6 +113,7 @@ function presenceView(id) {
     server: s.inEvent ? s.server || null : null, address: s.inEvent ? (srv && srv.address) || s.serverAddress || null : null,
     trackId: s.trackId || null, trackName: s.trackName || null, bikeName: s.bikeName || null, category: s.category || null,
     riders: srv ? srv.riders.length : null, lastSeen: p.at,
+    session: s.inEvent ? s.session ?? null : null,
   };
 }
 
@@ -139,6 +140,7 @@ const routes = {
     const state = {
       inGame: !!s.inGame, inEvent: !!s.inEvent, server: str(s.server, 64) || null, serverAddress: isAddress(s.serverAddress) ? s.serverAddress : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
+      session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
     };
     // The game plugin reports a fresh non-event state as soon as MX Bikes
     // closes or the rider leaves a server.  Remove that reporter from the
@@ -160,9 +162,10 @@ const routes = {
       const prev = db.servers[k] || { seenBy: [] };
       const riders = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
       db.servers[k] = {
-        name: state.server, address: state.serverAddress || prev.address || null,
+        name: state.server, address: state.serverAddress || null,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',
         riders, categories: [...new Set(riders.map((r) => r.category).filter(Boolean))],
+        session: state.session,
         lastSeen: Date.now(), seenBy: [...new Set([me.id, ...(prev.seenBy || [])])].slice(0, 50),
       };
       cleanServers();
@@ -174,7 +177,7 @@ const routes = {
   'GET /v1/servers': async () => {
     const now = Date.now();
     const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL)
-      .map((s) => ({ name: s.name, address: s.address, trackId: s.trackId, trackName: s.trackName, riders: s.riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length }))
+      .map((s) => ({ name: s.name, address: s.address, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders: s.riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length }))
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];
   },

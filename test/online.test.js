@@ -77,6 +77,31 @@ test('plugin server events replace game-only presence immediately and closing th
   assert.equal(reports.at(-1).inGame, false); assert.equal(reports.at(-1).server, null);
 });
 
+test('discovered addresses are reported to friends and cleared when discovery expires or the game closes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-address-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let address = '203.0.113.21:54210', running = true;
+  const reports = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/v1/presence')) reports.push(JSON.parse(options.body).state);
+    return new Response('{}');
+  });
+  const f = fixture({ userDir: () => root, isGameRunning: async () => running,
+    resolveServerAddress: async (name) => name === 'Fixture server' ? address : null });
+  await fs.writeFile(path.join(root, online.STATE_FILE), JSON.stringify({ v: 2, inEvent: 1, server: 'Fixture server', session: 5 }));
+  await f.client.refresh();
+  assert.equal(reports.at(-1).serverAddress, address);
+  assert.equal(reports.at(-1).session, 5, 'Warmup reaches the online service');
+  assert.equal(f.config().addresses, undefined, 'discovery must not become a permanent stale mapping');
+  address = null; await f.client.refresh();
+  assert.equal(reports.at(-1).serverAddress, null);
+  address = '203.0.113.22:54210'; await f.client.refresh();
+  assert.equal(reports.at(-1).serverAddress, address);
+  running = false; await f.client.refresh();
+  assert.equal(reports.at(-1).serverAddress, null);
+  assert.equal(reports.at(-1).session, null);
+});
+
 test('startup migrates only configured aliases and respects opting out', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => ({ ok: true, json: async () => ({}) }));
   for (const [url, expectedToken] of [['http://192.168.0.38:60000', 'fixture-token'], ['http://different.example', null]]) {
