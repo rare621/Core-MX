@@ -20,9 +20,9 @@ For another release, update the package version and lockfile with `npm version p
 
 ## Optional online service
 
-Local development continues to use the root `online.config.json`. Release builds generate a separate configuration with an empty server address, so the developer's LAN address is never bundled.
+Local development and release builds use the server address in the root `online.config.json`. The installer copies that address into its bundled configuration.
 
-To enable your hosted service, set the GitHub repository variable `MXB_SERVICE_URL` to its public HTTP(S) origin before building. Locally, set `$env:MXB_SERVICE_URL = 'https://your-server.example'` before `npm run build:win`. No server passwords or account tokens belong in this value. The service is deployed separately; see `server/README.md`.
+To override that address for a particular build, set the GitHub repository variable `MXB_SERVICE_URL` to an HTTP(S) origin. Locally, set `$env:MXB_SERVICE_URL = 'https://your-server.example'` before `npm run build:win`. A blank override keeps the configured project address. LAN addresses are reachable only within that network; users elsewhere need a reachable public service address. No server passwords or account tokens belong in this value. The service is deployed separately; see `server/README.md`.
 
 ## Code signing
 

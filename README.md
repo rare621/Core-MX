@@ -74,7 +74,7 @@ Join or save a server address, use shareable join links, and configure a session
 
 ![Online page with saved servers and joining by address](docs/screenshots/online.png)
 
-Live presence, friends, and paint sharing use the included presence plugin and a **separately hosted online service**. The server list reflects participating app users; it is not the game's complete public server browser. The default installer has no online-service address configured, so these shared features need a configured build and a running service. Local mod management, previews, profiles, and store browsing work independently.
+Live presence, friends, and paint sharing use the included presence plugin and a **separately hosted online service**. The server list reflects participating app users; it is not the game's complete public server browser. Installers include the server address configured in `online.config.json`, so these shared features need that service running and reachable from the user's network. Local mod management, previews, profiles, and store browsing work independently.
 
 ## Build from source
 

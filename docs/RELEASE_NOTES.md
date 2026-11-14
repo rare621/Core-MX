@@ -1,12 +1,9 @@
-## Fixed Husqvarna bike previews
+## Restore the configured online server
 
-Husqvarna models could appear as several bikes stacked on top of each other. Their model files use variant-suffixed part names such as `steer450f`, while the configuration asks for `steer`. The viewer now resolves the individual part instead of loading the whole model into each slot.
+The installer now includes the server address from `online.config.json` again: **http://192.168.0.38:60000**.
 
-- Verified the installed Husqvarna FC 250, FC 350, FC 450, TC 125, and TC 250.
-- Checked Kawasaki KX250 and Honda CR250 previews for regressions.
-- Missing or ambiguous parts now produce a warning instead of duplicating an entire bike.
-- Added regression tests for suffixed part names and combined model files.
+Earlier installers generated an empty server address. This update restores the configured server for live presence, friends, and paint sharing. An explicit `MXB_SERVICE_URL` build override is still supported.
 
-Download **MX-Bikes-Manager-Setup-1.0.1-x64.exe** and install it over the previous version. Your manager settings and game mods are preserved. Node.js is not required.
+The Husqvarna viewer fix from 1.0.1 is included. Download **MX-Bikes-Manager-Setup-1.0.2-x64.exe** and install it over your current version; manager settings and game mods are preserved.
 
-The installer is unsigned, so Windows may show an unknown-publisher warning. Verify the download against `SHA256SUMS.txt` if needed. Game and mod assets are not included.
+The configured address is on a local network. The online service must be running and reachable from the PC using the manager.
