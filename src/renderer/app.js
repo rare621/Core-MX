@@ -885,7 +885,7 @@ async function openPost(summary) {
     const mode = p.paid ? 'browser' : hostMode(d);
     const action = p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
-      : installed ? `<span class="have">${icon('check')}Installed</span>`
+      : installed ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
       : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}Install</button>`;
     return `<div class="dl"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
       <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
@@ -902,13 +902,25 @@ async function openPost(summary) {
       <h2>${esc(p.title)}</h2>
       <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
-      ${hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
+      ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
+      ${(p.modelDependencies || []).map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model: ${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing — this paint does not include the model' : 'Check this required model — compatibility is verified when installing'}</div><button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}Open model page</button></div></div>`).join('')}
+      ${p.needsModelNotice && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
+      ${(p.dependencies || []).length ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('')}</div></div>` : ''}
+      ${installed ? `<button class="btn btn-danger btn-sm" data-post-remove>${icon('trash')}Delete installed files</button>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
       ${p.paid ? `<div class="notice warn">${icon('alert')}<div>This is a paid mod — buy it from the creator's store, then drag the downloaded file onto this window to install it.</div></div>` : ''}
       <div class="section-title">Downloads</div>
       <div class="dl-list">${dls}</div>
     </div></div>`;
-  $('.modal-body', m).addEventListener('click', (e) => {
+  $('.modal-body', m).addEventListener('click', async (e) => {
+    const remove = e.target.closest('[data-post-remove]');
+    if (remove) {
+      if (!(await confirmBox('Delete installed files', `Move files installed by <b>${esc(p.title)}</b> to the Recycle Bin?`, 'Delete files', true))) return;
+      remove.disabled = true;
+      try { await api.invoke('installs:uninstall', String(p.id)); await refreshInstalledIds(); await rescan(true); m.close(); toast('Installed files removed', 'ok'); }
+      catch (error) { remove.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+      return;
+    }
     const g = e.target.closest('[data-gal]');
     if (g) { $('#galMain', m).src = p.images[Number(g.dataset.gal)]; $$('[data-gal]', m).forEach((x) => x.classList.toggle('active', x === g)); }
     const d = e.target.closest('[data-dl]');
@@ -1048,6 +1060,7 @@ function openReview(id) {
     const ctl = [];
     ctl.push(`<div class="field"><label>Mod type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`);
     if (p.kind === 'track') ctl.push(`<div class="field"><label>Track type</label><select data-opt="trackType">${p.trackTypes.map((t) => `<option ${t === p.options.trackType ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`);
+    if (p.riderModels?.length) ctl.push(`<div class="field"><label>Rider model for these paints</label><select data-opt="riderTarget"><option value="">— choose a compatible rider model —</option>${p.riderModels.map((r) => `<option value="${esc(r.name)}" ${r.name === p.options.riderTarget ? 'selected' : ''} ${!r.compatible && !r.unverified ? 'disabled' : ''}>${esc(r.name)}${r.unverified ? ' · compatibility unverified' : !r.compatible ? ' · incompatible paint textures' : ''}</option>`).join('')}</select></div>`);
     if (p.paintModelsBase && (p.needsPaintTarget || p.paintGuess === 'title')) {
       const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
       const candidates = p.paintModels.filter((n) => !bikeTarget || targetMatches(n));
@@ -1070,9 +1083,15 @@ function openReview(id) {
     $('#rv', m).innerHTML = `<div class="plan-controls">${ctl.join('')}</div>${warn}${guess}
       <div class="section-title">Files <span class="muted">(${p.totalEntries})</span></div><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<div class="muted" style="margin-top:6px">…and ${p.totalEntries - p.entries.length} more</div>` : ''}`;
     $('#rvSummary', m).textContent = `${p.installable} file(s) will be installed`;
-    $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
+    $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || p.needsRiderTarget || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
   };
   draw(j);
+  if (j.plan.needsRiderTarget || (j.plan.requiredModels || []).some((r) => !r.installed && !r.included)) {
+    api.invoke('jobs:plan', id, opts).then((fresh) => {
+      if (!m.isConnected || !fresh?.plan) return;
+      S.jobs.set(id, fresh); opts = { ...fresh.plan.options, kind: fresh.plan.kind }; draw(fresh);
+    }).catch((e) => toast(esc(cleanErr(e)), 'err', 5000));
+  }
   $('#rv', m).addEventListener('click', async (e) => {
     const t = e.target.closest('[data-kind]');
     if (!t) return;
@@ -1388,7 +1407,7 @@ function gearPicker(slot, opts, lo) {
   const tileImg = (key) => {
     const u = S.gearThumbs.get(key);
     if (u && u.pic && !u.locked) return u.pic;
-    if (u && u.locked) return `${u.pic ? u.pic : `<span class="gear-noimg">${icon(SLOT_ICONS[slot.id] || 'box')}</span>`}<span class="gear-lock">Preview unavailable</span>`;
+    if (u && u.locked) return `${u.pic ? u.pic : `<span class="gear-noimg">${icon(SLOT_ICONS[slot.id] || 'box')}</span>`}<span class="gear-lock" title="${esc(u.reason || 'Preview unavailable')}">${u.reason ? 'Check required model' : 'Preview unavailable'}</span>`;
     if (u) return `<img src="${u}" alt="">`;
     if (u === null) return `<span class="gear-noimg">${icon(SLOT_ICONS[slot.id] || 'box')}<span>No preview</span></span>`;
     return '<span class="gear-spin"><span class="spinner"></span></span>';
@@ -1420,7 +1439,7 @@ function gearPicker(slot, opts, lo) {
         const model = await api.invoke('rider:thumbModel', R.profile, R.bike, slot.id, value);
         // Missing, unsupported and protected assets all lack a preview; this
         // alone does not establish that the creator encrypted the file.
-        if ((model.unreadable || []).includes(slot.id)) url = { locked: true, pic };
+        if ((model.unreadable || []).includes(slot.id)) url = { locked: true, pic, reason: (model.warnings || []).find((w) => /requires? .*model|model.*missing/i.test(w)) };
         else url = window.RiderViewer.thumb(model, GEAR_FRAMING[slot.id] || 'full', 320);
       } catch { url = null; }
       }

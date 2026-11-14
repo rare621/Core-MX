@@ -33,6 +33,7 @@ const gearAssets = require('./src/lib/gear-assets');
 const riderPaints = require('./src/lib/rider-paints');
 const installSummary = require('./src/lib/install-summary');
 const { mergeMove } = require('./src/lib/merge-move');
+const paintCompat = require('./src/lib/paint-compat');
 let online = null;
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
@@ -239,7 +240,7 @@ function jobView(j) {
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
-      requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget,
+      requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget,
       entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size })),
       totalEntries: p.entries.length,
     },
@@ -288,6 +289,9 @@ async function afterDownload(j, file) {
       j.ctx.kindHint = d.kind;
       j.ctx.detectReason = d.reason;
     }
+    const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), (j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories)) === 'riderKit');
+    Object.assign(j.ctx, inspected, { dependencies: [...(j.dependencies || []), ...inspected.dependencies] });
+    if (!j.ctx.categories.length && !j.ctx.kindHint && inspected.knownBodyPaintFiles.length && inspected.knownBodyPaintFiles.length === j.files.filter((f) => /\.pnt$/i.test(f.rel)).length) { j.ctx.kindHint = 'riderKit'; j.ctx.detectReason = 'paint-textures'; }
     j.plan = installer.plan(j.files, j.ctx, j.opts || {});
     // Already have exactly these files? Don't install a second copy.
     const placed = j.plan.entries.filter((e) => e.dest);
@@ -587,7 +591,35 @@ function registerIpc() {
     const seen = new Set();
     return { posts: posts.filter((p) => !seen.has(p.image) && seen.add(p.image)) };
   });
-  handle('site:post', (id) => site.post(id));
+  handle('site:post', async (id) => {
+    const post = await site.post(id), rec = store.get('installs')[id];
+    if (rec) {
+      const files = [];
+      for (const rel of rec.files.filter((f) => /\.pnt$/i.test(f) && !f.startsWith('game:'))) {
+        const abs = path.resolve(modsDir(), rel);
+        if (!insideRoots(abs)) continue;
+        try { files.push({ rel, abs, size: (await fsp.stat(abs)).size }); } catch {}
+      }
+      const info = await paintCompat.inspect(files, modsDir(), stockRiderPkz(), rec.kind === 'riderKit');
+      if (info.bodyPaintTextures.length && !info.riderModels.some((m) => info.bodyPaintTextures.every((t) => m.textures.includes(t)))) {
+        post.missingModelTextures = info.bodyPaintTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t));
+        post.dependencies = [...post.dependencies, ...info.dependencies];
+      }
+    }
+    const dependencyKey = (url) => { try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.toLowerCase(); } catch { return null; } };
+    const records = Object.values(store.get('installs'));
+    const paintListing = post.categories.some((c) => [127, 126, 135, 35, 309].includes(c)) && !post.categories.some((c) => [313, 343, 344, 365].includes(c));
+    if (paintListing) post.modelDependencies = post.dependencies.filter((d) => /model|helmet|boot|hoodie|protection|rider/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url)).map((d) => {
+      const installed = records.some((r) => dependencyKey(r.link) === dependencyKey(d.url) && r.files.some((f) => /\.(pkz|edf)$/i.test(f) && !f.startsWith('game:') && fs.existsSync(path.join(modsDir(), f))));
+      return { ...d, installed: installed ? true : null };
+    });
+    const hoodie = post.dependencies.find((d) => /\/rider-hoodie-abdesigns\/?(?:[?#].*)?$/.test(d.url));
+    if (hoodie) {
+      const models = await paintCompat.riderModels(modsDir(), stockRiderPkz());
+      post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: models.some((m) => m.textures.includes('abhoodie') || m.unverified && /ab.?hoodie/i.test(m.name)) }];
+    }
+    return post;
+  });
   handle('site:installedIds', () => Object.values(store.get('installs')).filter((r) => r.postId).map((r) => r.postId));
   handle('installs:keys', () => Object.values(store.get('installs')).map((r) => ({ postId: r.postId, shopKey: r.shopKey, title: r.title, siteModified: r.siteModified })));
 
@@ -645,9 +677,10 @@ function registerIpc() {
     emitJob(j); await scan(); send('library:changed', {});
     return { removed: removed.size };
   });
-  handle('jobs:plan', (id, opts) => {
+  handle('jobs:plan', async (id, opts) => {
     const j = jobs.get(id);
     if (!j || !j.files) return null;
+    if (j.ctx.bodyPaintTextures?.length) j.ctx.riderModels = await paintCompat.riderModels(modsDir(), stockRiderPkz());
     j.opts = opts;
     j.plan = installer.plan(j.files, j.ctx, opts);
     emitJob(j);
@@ -924,7 +957,14 @@ function registerIpc() {
     await scan(); send('library:changed', {});
     return { ok: true };
   });
-  handle('rider:save', async (name, changes) => { const result = await profile.saveLoadouts(profUserDir(), name, changes); online?.syncPaints().catch(() => {}); return result; });
+  handle('rider:save', async (name, changes) => {
+    const prof = await profile.readProfile(profUserDir(), name);
+    for (const [bike, slots] of Object.entries(changes)) if (slots.suitPaint) {
+      const lo = await profile.loadout(modsDir(), prof, bike);
+      await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: { ...lo.current, ...slots } });
+    }
+    const result = await profile.saveLoadouts(profUserDir(), name, changes); online?.syncPaints().catch(() => {}); return result;
+  });
   handle('rider:deletePaint', async (name, bike, slot, value) => {
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting a paint');
     const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);

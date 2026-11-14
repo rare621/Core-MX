@@ -7,4 +7,8 @@ function paint(name = 'helmet', color = 100) {
   plain.writeUInt32LE(8 + image.length, 232); image.copy(plain, 244);
   return plain;
 }
-module.exports = { paint };
+function multiPaint(names) {
+  const header = Buffer.from(paint().subarray(0, 108)); header.writeUInt32LE(names.length, 104);
+  return Buffer.concat([header, ...names.map((n) => paint(n).subarray(108))]);
+}
+module.exports = { paint, multiPaint };

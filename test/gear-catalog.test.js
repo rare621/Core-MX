@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { model, zip } = require('./helpers/assets');
-const { paint } = require('./helpers/paint');
+const { paint, multiPaint } = require('./helpers/paint');
 const profile = require('../src/lib/profile');
 const rider3d = require('../src/lib/rider3d');
 const installer = require('../src/lib/installer');
@@ -12,6 +12,7 @@ const paints = require('../src/lib/rider-paints');
 const { openArchive } = require('../src/lib/assetread');
 const { dependenciesFromHtml, browseCategory, gearKind } = require('../src/lib/site');
 const health = require('../src/lib/health');
+const paintCompat = require('../src/lib/paint-compat');
 
 test('modern paint-only folders cannot hide legacy helmets, and package paints stay listed after switching', async (t) => {
   const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-catalog-'));
@@ -78,6 +79,8 @@ test('paint-only model folders are not treated as installed dependencies', async
   assert.ok(plan.warnings.some((w) => w.includes('Missing model')));
   assert.ok(!installer.listModels(mods, 'rider/helmets').includes('Missing'));
   assert.deepEqual(dependenciesFromHtml('<p>These paints need the helmet model: <a href="https://mxbikes-shop.com/downloads/helmet/">6 Helmet</a></p><p>My template <a href="https://unrelated.example/">Template</a></p>'), [{ label: '6 Helmet', url: 'https://mxbikes-shop.com/downloads/helmet/' }]);
+  const plainLink = dependenciesFromHtml('<p>This paint needs its hoodie model (https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/) to work.</p>');
+  assert.equal(plainLink[0].url, 'https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/');
 });
 
 test('old archive gear paths are translated to the current rider layout even on a fresh install', async (t) => {
@@ -86,6 +89,8 @@ test('old archive gear paths are translated to the current rider layout even on 
   const files = ['rider/paints/Kit.pnt', 'rider/gloves/Gloves.pnt', 'rider/helmets/Helmet/paints/Blue.pnt'].map((rel) => ({ rel, size: 1 }));
   const plan = installer.plan(files, { modsDir: mods, categories: [127, 35] });
   assert.ok(plan.entries.every((e) => e.dest.startsWith('rider/riders/default_mx/')));
+  const local = installer.plan(files, { modsDir: mods, local: true, categories: [] });
+  assert.ok(local.entries.every((e) => e.dest.startsWith('rider/riders/default_mx/')));
   await fs.mkdir(path.join(mods, 'rider', 'riders', 'default_mx'), { recursive: true });
   const issues = await health.scan({ modsDir: mods, items: [
     { id: 'active', group: 'rider', parts: ['rider/helmets/Helmet'], sub: 'legacy/helmets' },
@@ -104,4 +109,26 @@ test('Get Mods separates helmet, boot and protection models from paint-only list
   assert.equal(gearKind([33, 127]), 'paint');
   assert.equal(gearKind([33, 313]), 'model');
   assert.equal(gearKind([33, 313, 127]), 'bundle');
+});
+
+test('custom hoodie paints require a compatible rider instead of silently installing on the default rider', async (t) => {
+  const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-hoodie-'));
+  t.after(() => fs.rm(mods, { recursive: true, force: true }));
+  const file = path.join(mods, 'Essentials.pnt'), bytes = multiPaint(['rider', 'ABHOODIE']);
+  await fs.writeFile(file, bytes);
+  const files = [{ rel: 'Essentials.pnt', abs: file, size: bytes.length }];
+  const inspected = await paintCompat.inspect(files, mods);
+  assert.deepEqual(inspected.bodyPaintTextures, ['rider', 'abhoodie']);
+  const context = { modsDir: mods, categories: [35], ...inspected };
+  const missing = installer.plan(files, context);
+  assert.equal(missing.needsRiderTarget, true);
+  assert.equal(missing.installable, 0);
+  assert.equal(missing.confident, false);
+  assert.ok(inspected.dependencies[0].url.includes('rider-hoodie-abdesigns'));
+  context.riderModels.push({ name: 'AB-HOODIE', textures: ['rider', 'abhoodie'] });
+  const compatible = installer.plan(files, context);
+  assert.equal(compatible.needsRiderTarget, false);
+  assert.equal(compatible.entries[0].dest, 'rider/riders/AB-HOODIE/paints/Essentials.pnt');
+  const dir = path.join(mods, 'rider', 'riders', 'default_mx', 'paints'); await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, 'Essentials.pnt'), bytes);
+  await assert.rejects(paintCompat.validateRiderPaint({ modsDir: mods, current: { rider: 'default_mx', suitPaint: 'Essentials' } }), /matching rider model/);
 });

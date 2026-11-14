@@ -12,6 +12,7 @@ const MAX_TEX = 1024; // textures are shrunk to this for the preview
 
 const { chainOf, readChain } = require('./asset-sources');
 const gearAssets = require('./gear-assets');
+const { missingTextures } = require('./paint-compat');
 
 // ---------- tiny parsers for gfx.cfg / .hrc ----------
 function parseCfg(text) {
@@ -144,6 +145,10 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   if (hrcName) { const h = await readChain(bodyChain, hrcName); const l = h && hrcLevel0(h.buf.toString('latin1')); if (l) bodyFile = l.scene; }
   const body = await loadModel(bodyChain, bodyFile);
   if (!body) throw new Error("Couldn't find the rider model (rider.edf) — is the game folder set in Settings?");
+  if (!/^default_(mx|sm)$/.test(riderName)) {
+    const selected = await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, stock(`rider/riders/${riderName}`)]);
+    if (!await readChain(selected, bodyFile)) { unreadable.push('rider', 'suitPaint'); warnings.push(`The selected rider model ${riderName} is missing or unreadable. Install its model before using its paints.`); }
+  }
   const { bones, locals } = cached(modelCache, 'skel:' + bodyChain.map((f) => f.key).join('|') + bodyFile, () => edf.parseSkeleton(body.buf), 8);
   const boneMat = (name) => {
     if (!name) return null;
@@ -159,10 +164,12 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   const glovePaint = await loadPaint(await gearAssets.subchain(gearRoots, 'gloves'), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
     .then(async (p) => (p.length || !cur.glovesPaint ? p : loadPaint(bodyChain, `gloves/${cur.glovesPaint}.pnt`)));
   const suit2 = suitPaint.length || !cur.suitPaint ? suitPaint : await loadPaint(bodyChain, `paints/${cur.suitPaint}.pnt`);
+  const missing = body.model.colors.length ? missingTextures(suit2.map((p) => p.name), body.model.colors) : [];
+  if (missing.length) { unreadable.push('suitPaint'); warnings.push(`This paint requires a different rider model (${missing.join(', ')}). The current rider cannot display those parts.`); }
   if (cur.suitPaint && !suit2.length) unreadable.push('suitPaint');
   if (cur.glovesPaint && !glovePaint.length) unreadable.push('glovesPaint');
   if (cur.suitPaint && !suit2.length) warnings.push('Your rider kit paint couldn\'t be read (it may be protected), so the default kit is shown.');
-  parts.push(buildPart('body', body, null, null, [...suit2, ...glovePaint], textures, texMax));
+  parts.push(buildPart('body', body, null, null, [...(missing.length || unreadable.includes('rider') ? [] : suit2), ...glovePaint], textures, texMax));
   }
 
   // --- helmet ---
