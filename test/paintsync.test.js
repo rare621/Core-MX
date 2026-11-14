@@ -51,7 +51,39 @@ test('store-protected equipped files are reported but never included in friend s
   const f = await fixture(t);
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture', ['rider/helmets/Helmet.pkz', 'bikes/Fixture/paints/Livery.pnt']);
   assert.ok(!outfit.items.some((it) => it.path === 'rider/helmets/Helmet.pkz' || it.path === 'bikes/Fixture/paints/Livery.pnt'));
-  assert.deepEqual(outfit.unavailable.filter((it) => /store-protected/.test(it.error)).map((it) => it.slot).sort(), ['bikePaint', 'helmet']);
+  assert.deepEqual(outfit.unavailable.filter((it) => /Paid mod/.test(it.error)).map((it) => it.slot).sort(), ['bikePaint', 'helmet']);
+});
+
+test('paid models are identified before decoding, and installed recipient models enable their free paints', async (t) => {
+  const f = await fixture(t);
+  const bound = sealed(zip({ 'Helmet/helmet.edf': model('helmet') }), true, true);
+  await f.write(f.source, 'rider/helmets/Helmet.pkz', bound);
+  await f.write(f.source, 'rider/helmets/Helmet/paints/Active.pnt', f.helmetPaint);
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
+  assert.equal(outfit.unavailable.find((it) => it.slot === 'helmet').error, 'Paid mod — not installing.');
+  assert.ok(!outfit.items.some((it) => it.slot === 'helmet'));
+  assert.ok(outfit.items.some((it) => it.slot === 'helmetPaint'));
+  const options = { call: async () => ({ loadouts: [{ id: 'friend', ...outfit }] }), modsDir: f.receiver,
+    have: (n) => n.kind === 'helmet' ? gear.hasModel({ modsDir: f.receiver }, 'helmets', n.name) : true };
+  let report = await sync.listFriends(options);
+  assert.equal(report[0].unavailable[0].state, 'unavailable');
+  assert.equal(report[0].items.find((it) => it.slot === 'helmetPaint').needs.length, 1);
+  // A paints-only folder does not prove the base model is installed.
+  await f.write(f.receiver, 'rider/helmets/Helmet/paints/Other.pnt', paint('helmet'));
+  assert.equal(await gear.hasModel({ modsDir: f.receiver }, 'helmets', 'Helmet'), false);
+  await f.write(f.receiver, 'rider/helmets/Helmet.pkz', bound);
+  report = await sync.listFriends(options);
+  assert.equal(report[0].unavailable[0].state, 'have');
+  assert.deepEqual(report[0].items.find((it) => it.slot === 'helmetPaint').needs, []);
+  await assert.rejects(modelBundle({ modsDir: f.receiver, kind: 'helmet', name: 'Helmet' }), { code: 'MXBM_ACCOUNT_BOUND' });
+  const received = {};
+  await sync.fetchFriends({ ...options, received, download: async (hash) => outfit.items.find((it) => it.sha256 === hash).buf });
+  assert.deepEqual(await fs.readFile(path.join(f.receiver, 'rider/helmets/Helmet/paints/Active.pnt')), f.helmetPaint);
+  assert.deepEqual(await fs.readFile(path.join(f.receiver, 'rider/helmets/Helmet.pkz')), bound);
+  // A store record still gives the correct explanation if its package cannot be read.
+  await f.write(f.source, 'rider/helmets/Helmet.pkz', Buffer.from('unreadable'));
+  const stored = await sync.outfitFiles(f.source, f.prof, 'Fixture', ['rider/helmets/Helmet.pkz']);
+  assert.equal(stored.unavailable.find((it) => it.slot === 'helmet').error, 'Paid mod — not installing.');
 });
 
 test('sync previews before download, skips identical loose and packaged files, and skips every download on a repeat sync', async (t) => {

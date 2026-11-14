@@ -54,3 +54,11 @@ test('a missing helmet is reported instead of rendering an empty success', async
   const { render } = fixture(t);
   assert.deepEqual((await render()).unreadable, ['helmet']);
 });
+
+test('a missing custom body never silently renders the stock body', async (t) => {
+  const { gd } = fixture(t);
+  const modsDir = path.resolve(gd, '../../..');
+  const stockPkz = path.join(modsDir, 'stock.pkz');
+  fs.writeFileSync(stockPkz, zip({ 'rider/riders/default_mx/rider.edf': model('stock') }));
+  await assert.rejects(build({ modsDir, stockPkz, current: { rider: 'Missing hoodie' } }), /Preview unavailable for Missing hoodie/);
+});

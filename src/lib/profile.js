@@ -115,7 +115,7 @@ async function loadout(modsDir, prof, bike, stockPkz) {
   // MX Bikes falls back to [info] protection when a bike has no explicit
   // [protection] value.  Treat that fallback as the selected item too; an
   // empty per-bike value is not automatically "None" in the game.
-  if (cur.protection == null) cur.protection = val('info', 'protection') || '';
+  if (!cur.protection) cur.protection = val('info', 'protection') || '';
   const protModel = cur.protection || '';
   cur.protectionPaint = val('protection_paint', protModel);
 

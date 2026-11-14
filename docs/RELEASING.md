@@ -10,7 +10,18 @@ npm run build:win
 
 The shareable setup, `latest.yml` update manifest, server ZIP and SHA-256 checksums are in `dist/`. Publish all four files together in a GitHub release; the updater verifies the EXE against the SHA-512 digest in `latest.yml`. Do not upload `node_modules`, `win-unpacked`, local settings, or temporary build folders. Users install the EXE; they do not need Node.js or this source folder.
 
-The updater checks on each installed-app start, downloads in the background, and installs on a normal quit or explicit restart. It uses the GitHub provider configured in `electron-builder.config.cjs`; do not embed GitHub credentials. The current source repository is private. Anonymous updates for friends require an approved public release feed, or each user must have access to the private feed. Changing repository visibility or creating a public distribution repository requires the owner's choice first.
+The updater checks on each installed-app start, downloads in the background, and installs on a normal quit or explicit restart. Version 1.0.10 and later override the build's GitHub provider with the shared Google Drive folder below. GitHub releases remain a separate archive for repository members; friends do not need repository access.
+
+## Google Drive updates
+
+Upload these two files from the same build to [the update folder](https://drive.google.com/drive/folders/1giNr8lC7cCLE_L62fSCIfRR-vfiwbMVk):
+
+- `MX-Bikes-Manager-Setup-1.0.10-x64.exe` (use the version you just built).
+- `latest.yml` (keep its original filename and contents).
+
+Upload the EXE first, then replace `latest.yml` last. Keep exactly one file named `latest.yml`; Drive permits duplicate names and the app rejects ambiguous updates. Folder and file sharing must allow **Anyone with the link → Viewer**. The manifest must refer to an EXE present in this same folder. Its SHA-512 checksum is checked before installation. Google Drive download quotas can temporarily prevent updates.
+
+`SHA256SUMS.txt` is optional for manual verification. The server ZIP is separate and is not installed by the app updater. Do not upload source code, `win-unpacked`, user data, or mod assets. Users on 1.0.9 or earlier must run the 1.0.10 installer once; their previous private GitHub update feed cannot deliver this switch automatically.
 
 The setup uses an assisted per-user install, offers a destination folder, adds shortcuts, registers `mxbm://` join links, and supports uninstall/reinstall. The app stores settings in the user's AppData folder and locates that user's game folders on first launch.
 

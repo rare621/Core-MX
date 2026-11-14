@@ -50,4 +50,12 @@ test('plain-text base model requirements are retained for add-on checks', () => 
   const result = module.exports.listingRequirements('<p>2026 Fox MXoN Boot Pack made to work on the Aeffertz Fox Instinct 2.0 FREE on MXBMods.</p>');
   assert.equal(result.needsModelNotice, true);
   assert.deepEqual(JSON.parse(JSON.stringify(result.dependencies)), [{ label: 'Aeffertz Fox Instinct 2.0 FREE', url: '', inferred: true }]);
+  const hoodie = module.exports.listingRequirements('<html><body><nav><a href="https://mxb-mods.com/category/boots/">Boot Models</a></nav><p>Unrelated sidebar requires a model</p></body></html>', '<p>You need this hoodie model: <a href="https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/">ABDesigns Hoodie</a></p>');
+  assert.equal(hoodie.dependencies.length, 1);
+  assert.equal(hoodie.dependencies[0].label, 'ABDesigns Hoodie');
+  const fullPage = '<html><body><nav><a href="https://mxb-mods.com/category/rider-models/">Rider models</a></nav><div class="entry-content"><section class="nd-desc"><p>Hoodie model: https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/ You need it for the paint!</p></section><div class="stuff"><p>Needs 10 more recommendations!</p><a href="https://mxb-mods.com/login/">Log in to get this model</a></div></div></body></html>';
+  const listing = module.exports.listingRequirements(fullPage);
+  assert.equal(listing.needsModelNotice, true);
+  assert.equal(listing.dependencies.length, 1);
+  assert.match(listing.dependencies[0].url, /rider-hoodie-abdesigns/);
 });

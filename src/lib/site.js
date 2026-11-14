@@ -49,19 +49,21 @@ function contentKindFromInstructions(text) {
 function listingRequirements(html, description = '') {
   const $ = cheerio.load(html);
   const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
-  // Some posts put the dependency in the normal description, not in an
-  // instructions box. Include both so the same parser works for every source.
-  const combined = description + '\n' + $.root().html() + '\n' + instructions;
+  $('nav,header,footer,aside,script,style,.related,.comments-area,.stuff,.quick-links').remove();
+  const content = description || $('.nd-desc, .mod-description, [data-mod-description]').first().html() || $('.entry-content').first().html() ||
+    (!/<(?:html|body)\b/i.test(html) ? $('body').html() : '') || '';
+  const combined = content + '\n' + instructions;
   const needsModelNotice = needsCustomModel(combined);
   const dependencies = dependenciesFromHtml(combined);
   // A lot of creators state the required base model in plain text instead of
   // linking it. Treat that as a dependency too, so an add-on can be checked
   // against the user's installed models before it is downloaded.
   for (const dependency of dependenciesFromText(combined)) {
-    if (!dependencies.some((d) => d.label.toLowerCase() === dependency.label.toLowerCase())) dependencies.push(dependency);
+    if (!dependencies.some((d) => d.label.toLowerCase() === dependency.label.toLowerCase() ||
+      /hoodie/i.test(dependency.label) && /hoodie/i.test(d.label + d.url))) dependencies.push(dependency);
   }
   if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
-  return { needsModelNotice: needsModelNotice || dependencies.some((d) => d.inferred), dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
+  return { needsModelNotice: needsModelNotice || dependencies.length > 0, dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
 }
 const requirementCache = new Map();
 const requirementRequests = new Map();
@@ -387,6 +389,7 @@ function dependenciesFromHtml(html) {
     try {
       const u = new URL(url.replace(/[).,;]+$/, ''));
       if (!/^https?:$/.test(u.protocol) || !/^(?:www\.)?(?:mxb-mods\.com|mxbikes-shop\.com|shop\.mxb-hub\.com)$/.test(u.hostname) || /\.(webp|png|jpe?g|gif|psd)$/i.test(u.pathname)) return;
+      if (/\/(?:category|categories|tag|tags|product-category|author|creators?|page|my-account|login|register|wp-login\.php)(?:\/|$)/i.test(u.pathname) || u.pathname === '/') return;
       if (!found.some((x) => x.url === u.href)) found.push({ label: (label || decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || 'Required model').replace(/-/g, ' ')).slice(0, 100), url: u.href });
     } catch {}
   };
@@ -413,7 +416,7 @@ function dependenciesFromText(html) {
   for (const match of text.matchAll(pattern)) {
     let label = match[1].replace(/\b(?:model|mod)\s*(?:to\s+work)?\b\s*$/i, '').trim();
     label = label.replace(/\s+(?:for|with)\s+(?:this|the)\s+(?:mod|paint|pack)\s*$/i, '').trim();
-    if (label.length < 4 || /^(?:this|it|a|an)\b/i.test(label) || /\b(?:psd|template|discord)\b/i.test(label)) continue;
+    if (label.length < 4 || /^(?:this|it|a|an|to|help|no|nothing)\b/i.test(label) || /https?:|\b(?:psd|template|discord|recommendations?|ratings?|votes?)\b/i.test(label)) continue;
     label = label.slice(0, 100);
     if (!found.some((d) => d.label.toLowerCase() === label.toLowerCase())) found.push({ label, url: '', inferred: true });
   }

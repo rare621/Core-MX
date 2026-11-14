@@ -1067,6 +1067,7 @@ async function openPost(summary) {
 
 function needsModelWarning(p) {
   if (p.installKind === 'bikePaint' || p.kind === 'bikePaint' || (p.categories || []).some((c) => [37, 51, 361].includes(Number(c)))) return false;
+  if (p.modelDependencies?.length && p.modelDependencies.every((d) => d.installed === true) && !p.missingModelTextures?.length) return false;
   return p.gearKind === 'paint' || !!p.needsModelNotice || !!p.modelDependencies?.length || !!p.missingModelTextures?.length;
 }
 
@@ -1378,7 +1379,7 @@ const riderDirty = () => S.rider.selectionDirty || Object.keys(S.rider.drafts[ri
 const SLOT_ICONS = { bikePaint: 'paint', rider: 'rider', helmet: 'helmet', helmetPaint: 'paint', gogglesPaint: 'goggles', suitPaint: 'shirt', protection: 'shield', protectionPaint: 'paint', glovesPaint: 'glove', boots: 'boot', bootsPaint: 'paint' };
 const PAINT_SLOTS = new Set(['bikePaint', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'protectionPaint', 'glovesPaint', 'bootsPaint']);
 // Choosing a new model resets the paints that belonged to the old one.
-const RESETS = { helmet: ['helmetPaint', 'gogglesPaint'], boots: ['bootsPaint'], protection: ['protectionPaint'] };
+const RESETS = { rider: ['suitPaint', 'glovesPaint'], helmet: ['helmetPaint', 'gogglesPaint'], boots: ['bootsPaint'], protection: ['protectionPaint'] };
 
 function gearBrand(value) {
   const text = String(value || '').replace(/[_-]/g, ' ').replace(/\d{4}/g, ' ');
@@ -2339,7 +2340,7 @@ document.addEventListener('click', async (e) => {
 S.appUpdate = { phase: 'idle' };
 function appUpdateHtml() {
   const update = S.appUpdate;
-  const text = { idle: 'Checks GitHub every time you open the app.', checking: 'Checking GitHub…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, ready: `${esc(update.version || '')} is ready. It will install when you close the app.`, error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
+  const text = { idle: 'Checks Google Drive every time you open the app.', checking: 'Checking Google Drive…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, ready: `${esc(update.version || '')} is ready. It will install when you close the app.`, error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
   return `<p>${text || ''}</p>${update.phase === 'downloading' ? `<progress max="100" value="${Number(update.percent) || 0}" style="width:100%"></progress>` : ''}<button class="btn" data-act="app-update-check" ${['checking', 'downloading'].includes(update.phase) ? 'disabled' : ''}>${icon('refresh')}Check now</button>${update.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Restart to update</button>' : ''}`;
 }
 function drawAppUpdate() {

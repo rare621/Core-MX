@@ -17,7 +17,7 @@ MX Bikes Manager is a Windows desktop app for organizing your MX Bikes mods, fin
 
 You need 64-bit Windows and your own copy of MX Bikes. The installed app includes its runtime, so you do **not** need Node.js, npm, or the source code. Game and mod assets shown in the screenshots are installed separately.
 
-The app checks its configured GitHub release feed at startup, downloads an available update in the background, and installs it when you close the app or choose **Restart to update**. **Settings → General → App updates** also has Check now. A release feed must be reachable by the user; private GitHub repositories require access. Updates preserve the manager's settings and installed mods.
+From version 1.0.10, the app checks the [shared Google Drive update folder](https://drive.google.com/drive/folders/1giNr8lC7cCLE_L62fSCIfRR-vfiwbMVk) at startup, downloads an available update in the background, and installs it when you close the app or choose **Restart to update**. **Settings → General → App updates** also has Check now. No private GitHub access is required. Older versions need the new installer once to switch feeds. Updates preserve the manager's settings and installed mods.
 
 This first release is unsigned, so Windows may show an unknown-publisher warning. Each release includes `SHA256SUMS.txt` for checking the installer download. Uninstalling the manager keeps your game mods and manager settings.
 

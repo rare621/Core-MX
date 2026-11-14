@@ -64,13 +64,13 @@ function shrink(w, h, rgba, max = MAX_TEX) {
   return { width: nw, height: nh, data: out };
 }
 
-async function loadModel(chain, file, helmet = false) {
+async function loadModel(chain, file, helmet = false, fitBounds = false) {
   try {
     const r = await readChain(chain, file);
     if (!r) return null;
     r.buf = decodeBlob(r.buf);
     if (!edf.isEdf(r.buf)) return null;
-    const parsed = cached(modelCache, r.key + (helmet ? ':helmet' : ''), () => ({ buf: r.buf, model: edf.parse(r.buf, { gear: true, helmet }) }), 8);
+    const parsed = cached(modelCache, r.key + (helmet ? ':helmet' : '') + (fitBounds ? ':bounds' : ''), () => ({ buf: r.buf, model: edf.parse(r.buf, { gear: true, helmet, fitBounds }) }), 8);
     return parsed.model.nodes.length ? parsed : null;
   } catch { return null; } // One unreadable piece must not abort the entire outfit.
 }
@@ -144,12 +144,11 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   let bodyFile = 'rider.edf';
   const hrcName = gfx.model && gfx.model.file;
   if (hrcName) { const h = await readChain(bodyChain, hrcName); const l = h && hrcLevel0(h.buf.toString('latin1')); if (l) bodyFile = l.scene; }
-  const body = await loadModel(bodyChain, bodyFile);
+  const customBody = !/^default_(mx|sm)$/i.test(riderName);
+  const selectedBody = customBody ? await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, stock(`rider/riders/${riderName}`)]) : bodyChain;
+  const body = await loadModel(selectedBody, bodyFile, false, true);
+  if (!body && customBody) throw new Error(`Preview unavailable for ${riderName}. Its installed model could not be read. No substitute rider is shown.`);
   if (!body) throw new Error("Couldn't find the rider model (rider.edf) — is the game folder set in Settings?");
-  if (!/^default_(mx|sm)$/.test(riderName)) {
-    const selected = await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, stock(`rider/riders/${riderName}`)]);
-    if (!await readChain(selected, bodyFile)) { unreadable.push('rider', 'suitPaint'); warnings.push(`The selected rider model ${riderName} is missing or unreadable. Install its model before using its paints.`); }
-  }
   const { bones, locals } = cached(modelCache, 'skel:' + bodyChain.map((f) => f.key).join('|') + bodyFile, () => edf.parseSkeleton(body.buf), 8);
   const boneMat = (name) => {
     if (!name) return null;

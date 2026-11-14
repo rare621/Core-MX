@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chainOf, readChain, listFiles } = require('./asset-sources');
+const { withLocalPreview } = require('./assetread');
 
 const validName = (name) => typeof name === 'string' && !!name && !/[\\/:\0]/.test(name) && name !== '.' && name !== '..';
 const unique = (values) => [...new Map(values.map((v) => [v.toLowerCase(), v])).values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
@@ -96,6 +97,8 @@ async function paintSource(options, slot, current) {
 }
 
 async function hasModel(options, kind, name) {
-  return (await listFiles(await modelSources(options, kind, name))).some((n) => /\.edf$/i.test(n));
+  if (!validName(name) || !['riders', 'helmets', 'boots', 'protections'].includes(kind)) return false;
+  // Inspect only the installed model's directory; never export its bytes.
+  return withLocalPreview(async () => (await listFiles(await modelSources(options, kind, name))).some((n) => /\.edf$/i.test(n)));
 }
 module.exports = { roots, subchain, children, modelSources, catalog, paintSource, validName, hasModel };

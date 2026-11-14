@@ -55,3 +55,15 @@ test('invalid/duplicate names and a running game cannot modify profiles', async 
   finally { running = false; }
   assert.equal(fs.existsSync(path.join(root, 'profiles', 'Blocked')), false);
 });
+
+test('blank bike protection reflects the global chest fallback and applying None clears both', async (t) => {
+  const root = fixture(t);
+  await profile.writeValues(root, 'Original', [['info', 'protection', 'chest'], ['protection', 'Bike', '']]);
+  const before = await profile.loadout(root, await profile.readProfile(root, 'Original'), 'Bike');
+  assert.equal(before.current.protection, 'chest');
+  await profile.saveLoadouts(root, 'Original', { Bike: { protection: '', protectionPaint: '' } });
+  const saved = await profile.readProfile(root, 'Original');
+  assert.equal(saved.sections.info.values.protection, '');
+  assert.equal(saved.sections.protection.values.Bike, '');
+  assert.equal((await profile.loadout(root, saved, 'Bike')).current.protection, '');
+});
