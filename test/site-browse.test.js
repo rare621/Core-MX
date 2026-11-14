@@ -23,3 +23,21 @@ test('filtered browsing reads separate instructions, keeps stock kits in MXB Mod
   assert.deepEqual(Array.from(addons.posts, (p) => p.id), [2,4]); assert.ok(addons.posts.every((p) => p.gearKind === 'paint' && p.needsModelNotice));
   assert.equal(calls.filter((u) => /\/kit-\d+\/$/.test(u)).length, 4); assert.ok(calls.every((u) => !/\.(pnt|zip|pkz)/i.test(u)));
 });
+
+test('creator install paths override broad website tags when filtering gear tabs', async () => {
+  const raw = { id: 9, title: { rendered: 'Royal Polar' }, categories: [31, 32, 35], content: { rendered: '' }, excerpt: { rendered: '' }, link: 'https://mxb-mods.com/royal-polar/' };
+  const fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.includes('/categories')) return new Response(JSON.stringify([{ id: 31, name: 'Boots' }, { id: 32, name: 'Gloves' }, { id: 35, name: 'Rider Kit' }]));
+    if (u.pathname.includes('/posts')) return new Response(JSON.stringify([raw]), { headers: { 'x-wp-total': '1' } });
+    return new Response('<div id="instructions">Put the PNT file(s) in mods/rider/riders/*rider model*/paints folder.</div>');
+  };
+  const module = { exports: {} }, context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch } } : require(name) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
+  const site = module.exports;
+  const boots = await site.search({ tab: 'boots', scope: 'free', perPage: 20, orderby: 'date' });
+  const kits = await site.search({ tab: 'riderkit', scope: 'free', perPage: 20, orderby: 'date' });
+  assert.equal(boots.posts.length, 0);
+  assert.equal(kits.posts.length, 1);
+  assert.equal(kits.posts[0].contentKind, 'riderkit');
+});

@@ -916,11 +916,15 @@ async function browseLoad() {
 function siteCard(p) {
   const installed = haveMod({ postId: p.id, title: p.title });
   const cat = p.categoryNames.filter((n) => !/^(Bikes|Rider|Other|Paid Mods)$/.test(n)).slice(-1)[0] || p.categoryNames[0] || '';
+  // A website paint category does not necessarily mean a dependency: many
+  // standalone kit packs are tagged under every gear type.  Only label a card
+  // as requiring a model after its creator instructions confirm that fact.
+  const dependencyLabel = S.view === 'get' && S.getSrc === 'addons' && p.needsModelNotice ? 'Requires another model' : '';
   return `<div class="card" data-post="${p.id}">
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
-    <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${p.gearKind ? `<div class="mod-content-kind">${{ paint: 'Paint only · model required', model: 'Includes model', bundle: 'Model & paints', addon: 'Helmet addon' }[p.gearKind]}</div>` : ''}
+    <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
 
@@ -959,6 +963,13 @@ function renderBrowseGrid() {
     brObserver = new IntersectionObserver((ents) => { if (ents.some((e) => e.isIntersecting)) browseLoad(); }, { root: sc, rootMargin: '700px' });
     brObserver.observe(more);
   }
+  // IntersectionObserver is occasionally suppressed while Electron is
+  // repainting image-heavy cards. Keep the observer, but also load when the
+  // user actually reaches the end of the browse scroller.
+  sc.onscroll = () => {
+    if (b.loading || b.error || b.page >= b.totalPages) return;
+    if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 700) browseLoad();
+  };
 }
 
 document.addEventListener('click', (e) => {
@@ -1961,7 +1972,7 @@ async function shopLoad() {
 }
 
 function priceHtml(p) {
-  if (p.price == null) return p.shop === 'mxbs' ? '<span class="price muted">…</span>' : '';
+  if (p.price == null) return p.shop === 'mxbs' ? '<span class="price muted" title="Loading the store price">Loading…</span>' : '';
   if (p.price === 0) return '<span class="price free">Free</span>';
   return `<span class="price">${esc(p.currency)}${p.price.toFixed(2)}</span>`;
 }
@@ -2003,25 +2014,38 @@ function drawShopGrid() {
 }
 
 // MX Bikes Shop only shows prices on product pages: fill them in a few at a time.
-let pricing = false;
+let pricing = false, pricingTimer = null;
 async function fillPrices() {
   if (pricing) return;
   pricing = true;
-  const queue = () => S.shop.products.filter((p) => p.shop === 'mxbs' && p.price == null && !p._priced);
+  const now = Date.now();
+  // MX Bikes Shop's feed has no prices. Fetch only a small batch at a time,
+  // and retry a temporarily failed product later instead of permanently
+  // marking it as "priced" with an empty badge.
+  const queue = () => S.shop.products.filter((p) => p.shop === 'mxbs' && p.price == null && (!p._priceCheckedAt || now - p._priceCheckedAt >= 30000));
+  const batch = queue().slice(0, 8);
+  let next = 0;
   const worker = async () => {
-    for (let p = queue()[0]; p; p = queue()[0]) {
-      p._priced = true;
+    for (let p = batch[next++]; p; p = batch[next++]) {
+      p._priceCheckedAt = Date.now();
       try {
         const d = await api.invoke('shops:details', 'mxbs', p.link);
-        p.price = d.price; p.creator = d.creator; p.images = d.images;
+        p.price = Number.isFinite(d.price) ? d.price : null; p.creator = d.creator; p.images = d.images;
         const b = $(`[data-price-of="${p.id}"]`);
         if (b && !productInstalled(p) && !ownedGroupFor(p)) b.innerHTML = priceHtml(p);
         const cr = $(`[data-creator-of="${p.id}"]`); if (cr && p.creator) cr.textContent = p.creator;
-      } catch {}
+      } catch {
+        // Leave the loading label in place and try again after the cooldown.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   };
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all([worker(), worker()]);
   pricing = false;
+  if (S.shop.products.some((p) => p.shop === 'mxbs' && p.price == null)) {
+    clearTimeout(pricingTimer);
+    pricingTimer = setTimeout(() => { if (isShop() && S.shop.id === 'mxbs' && S.shop.mode === 'store') fillPrices(); }, 31000);
+  }
 }
 
 function descToHtml(html) {

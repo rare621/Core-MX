@@ -33,6 +33,19 @@ function needsCustomModel(html) {
   const text = decode(html).replace(/\s+/g, ' ').replace(/\bno (?:other |additional |extra )?(?:mods?|models?)(?: are| is)? (?:required|needed)\b/gi, '');
   return /\b(?:requires?|needs?|must (?:have|use)|only (?:works?(?: with)?|for)|made for|for use with)\b[^.!?]{0,150}\b(?:model|rider\+|hoodie|helmet|boots?|protector)\b|\b(?:custom model|rider\+|hoodie model)\b[^.!?]{0,100}\b(?:required|needed|not included|sold separately)\b/i.test(text);
 }
+// Website categories are often broad (a rider kit can be tagged Boots,
+// Gloves and Helmets).  When creators include install instructions, those
+// paths are a much better indication of where the actual files belong.
+function contentKindFromInstructions(text) {
+  const value = decode(text).replace(/\\/g, '/').toLowerCase();
+  if (/rider\/riders(?:\/[^/]+)?\/paints\b/.test(value)) return 'riderkit';
+  if (/rider\/(?:riders\/[^/]+\/)?helmets\b/.test(value)) return 'helmets';
+  if (/rider\/(?:riders\/[^/]+\/)?boots\b/.test(value)) return 'boots';
+  if (/rider\/(?:riders\/[^/]+\/)?protections\b/.test(value)) return 'protection';
+  if (/rider\/(?:riders\/[^/]+\/)?gloves\b/.test(value)) return 'gloves';
+  if (/(?:^|\s)mods\/bikes\b/.test(value)) return 'liveries';
+  return null;
+}
 function listingRequirements(html, description = '') {
   const $ = cheerio.load(html);
   const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
@@ -40,7 +53,7 @@ function listingRequirements(html, description = '') {
   const needsModelNotice = needsCustomModel(combined);
   const dependencies = dependenciesFromHtml(combined);
   if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
-  return { needsModelNotice, dependencies, instructions };
+  return { needsModelNotice, dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
 }
 const requirementCache = new Map();
 const requirementRequests = new Map();
@@ -55,7 +68,7 @@ async function enrichListing(post, signal) {
       const response = await net.fetch(post.link, { headers: { 'User-Agent': UA }, signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
       if (!response.ok) throw new Error('Instructions unavailable');
       const details = listingRequirements(await response.text());
-      const result = { needsModelNotice: details.needsModelNotice, ...(details.needsModelNotice ? { gearKind: 'paint' } : {}) };
+      const result = { needsModelNotice: details.needsModelNotice, contentKind: details.contentKind, ...(details.needsModelNotice ? { gearKind: 'paint' } : {}) };
       requirementCache.set(post.id, { result, at: Date.now() });
       while (requirementCache.size > 200) requirementCache.delete(requirementCache.keys().next().value);
       return result;
@@ -66,7 +79,16 @@ async function enrichListing(post, signal) {
 }
 async function enrichListings(posts, signal) {
   const result = new Array(posts.length); let next = 0;
-  await Promise.all(Array.from({ length: Math.min(4, posts.length) }, async () => { while (next < posts.length) { const index = next++; result[index] = await enrichListing(posts[index], signal); } }));
+  // Full post pages can be image-heavy.  Keep this deliberately small and
+  // yield between parses so a long Get Mods page never monopolises Electron's
+  // main process (which would make scrolling and clicks feel frozen).
+  await Promise.all(Array.from({ length: Math.min(2, posts.length) }, async () => {
+    while (next < posts.length) {
+      const index = next++;
+      result[index] = await enrichListing(posts[index], signal);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }));
   return result;
 }
 function isAddonPost(post) {
@@ -166,7 +188,10 @@ function popular(range) {
 async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats) {
   const deadline = AbortSignal.timeout(20000);
   const t = browseCategory(tab, kind), scoped = scope === 'addons' ? { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() } : t;
-  const matches = (p) => (!scoped.cats || p.categories.some((id) => scoped.cats.includes(id) || scoped.cats.includes(cats[id]?.parent))) && (!scoped.exclude || !p.categories.some((id) => scoped.exclude.includes(id))) && (!query || p.title.toLowerCase().includes(query.toLowerCase()));
+  const matches = (p) => (!scoped.cats || p.categories.some((id) => scoped.cats.includes(id) || scoped.cats.includes(cats[id]?.parent)))
+    && (!scoped.exclude || !p.categories.some((id) => scoped.exclude.includes(id)))
+    && (!p.contentKind || tab === 'all' || p.contentKind === tab)
+    && (!query || p.title.toLowerCase().includes(query.toLowerCase()));
   const sort = orderby === 'relevance' && !query ? 'popular-month' : orderby;
   const featured = sort.startsWith('popular') ? scopePosts(await enrichListings((await popular(sort.split('-')[1] || 'month')).filter(matches), deadline), scope) : [];
   let offset = Math.max(0, Number(cursor?.offset) || 0), featuredOffset = Math.max(0, Number(cursor?.featuredOffset) || 0), total = Infinity;
@@ -186,7 +211,7 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     const enriched = await enrichListings(response.json.map((raw) => summarizePost(raw, cats)), deadline);
     for (const p of enriched) {
       offset++;
-      if (isAddonPost(p) === (scope === 'addons')) posts.push(p);
+      if (matches(p) && isAddonPost(p) === (scope === 'addons')) posts.push(p);
       if (posts.length >= perPage) break;
     }
   }
