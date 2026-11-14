@@ -264,7 +264,16 @@ async function lookup(ses, shopId, items) {
         const result = (await getJson(ses, `${endpoint}_embed=wp:featuredmedia&_fields=id,title,link,excerpt,content,date,edd-categories,_links,_embedded`)).json;
         prods = (Array.isArray(result) ? result : [result]).map(eddProduct);
       }
-      if (prods[0]) { out[it.key] = prods[0]; lookupCache.set(cacheKey, { at: Date.now(), value: prods[0] }); }
+      if (prods[0]) {
+        // Account/download tables frequently omit thumbnails. Resolve the
+        // product page once so "My purchases" shows the actual mod artwork
+        // instead of a generic cart tile for both supported shop engines.
+        if (!prods[0].image && prods[0].link) {
+          const detail = await details(ses, shopId, prods[0].link).catch(() => null);
+          if (detail?.images?.length) { prods[0].image = detail.images[0]; prods[0].images = detail.images; }
+        }
+        out[it.key] = prods[0]; lookupCache.set(cacheKey, { at: Date.now(), value: prods[0] });
+      }
       while (lookupCache.size > 400) lookupCache.delete(lookupCache.keys().next().value);
     } catch {}
   });

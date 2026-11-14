@@ -49,11 +49,19 @@ function contentKindFromInstructions(text) {
 function listingRequirements(html, description = '') {
   const $ = cheerio.load(html);
   const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
-  const combined = description + '\n' + instructions;
+  // Some posts put the dependency in the normal description, not in an
+  // instructions box. Include both so the same parser works for every source.
+  const combined = description + '\n' + $.root().html() + '\n' + instructions;
   const needsModelNotice = needsCustomModel(combined);
   const dependencies = dependenciesFromHtml(combined);
+  // A lot of creators state the required base model in plain text instead of
+  // linking it. Treat that as a dependency too, so an add-on can be checked
+  // against the user's installed models before it is downloaded.
+  for (const dependency of dependenciesFromText(combined)) {
+    if (!dependencies.some((d) => d.label.toLowerCase() === dependency.label.toLowerCase())) dependencies.push(dependency);
+  }
   if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
-  return { needsModelNotice, dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
+  return { needsModelNotice: needsModelNotice || dependencies.some((d) => d.inferred), dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
 }
 const requirementCache = new Map();
 const requirementRequests = new Map();
@@ -396,9 +404,25 @@ function dependenciesFromHtml(html) {
   return found.slice(0, 8);
 }
 
+function dependenciesFromText(html) {
+  const text = decode(cheerio.load(html).text()).replace(/\s+/g, ' ');
+  const found = [];
+  // Examples seen in real posts: "made to work on the Aeffertz Fox Instinct
+  // 2.0 FREE on MXBMods" and "requires the ABDesigns hoodie model".
+  const pattern = /(?:made\s+(?:to\s+)?work\s+on|requires?|needs?|only\s+(?:for|with)|based\s+on)\s+(?:the\s+)?(.{3,110}?)(?=\s+(?:on|from)\s+(?:mxb[- ]?mods|mxbikes[- ]?shop|mxb[- ]?hub)|[!?]|\.(?!\d)|$)/gi;
+  for (const match of text.matchAll(pattern)) {
+    let label = match[1].replace(/\b(?:model|mod)\s*(?:to\s+work)?\b\s*$/i, '').trim();
+    label = label.replace(/\s+(?:for|with)\s+(?:this|the)\s+(?:mod|paint|pack)\s*$/i, '').trim();
+    if (label.length < 4 || /^(?:this|it|a|an)\b/i.test(label) || /\b(?:psd|template|discord)\b/i.test(label)) continue;
+    label = label.slice(0, 100);
+    if (!found.some((d) => d.label.toLowerCase() === label.toLowerCase())) found.push({ label, url: '', inferred: true });
+  }
+  return found;
+}
+
 async function postBySlug(slug) {
   const { json } = await getJson(`${BASE}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_fields=id`);
   return json[0] ? post(json[0].id) : null;
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements };
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements };

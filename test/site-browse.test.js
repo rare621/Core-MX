@@ -41,3 +41,13 @@ test('creator install paths override broad website tags when filtering gear tabs
   assert.equal(kits.posts.length, 1);
   assert.equal(kits.posts[0].contentKind, 'riderkit');
 });
+
+test('plain-text base model requirements are retained for add-on checks', () => {
+  const sitePath = path.join(__dirname, '../src/lib/site.js');
+  const module = { exports: {} };
+  const context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch: async () => new Response('') } } : require(name) });
+  vm.runInContext(fs.readFileSync(sitePath, 'utf8'), context);
+  const result = module.exports.listingRequirements('<p>2026 Fox MXoN Boot Pack made to work on the Aeffertz Fox Instinct 2.0 FREE on MXBMods.</p>');
+  assert.equal(result.needsModelNotice, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.dependencies)), [{ label: 'Aeffertz Fox Instinct 2.0 FREE', url: '', inferred: true }]);
+});

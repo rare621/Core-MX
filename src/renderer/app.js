@@ -1014,9 +1014,9 @@ async function openPost(summary) {
       <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
-      ${(p.modelDependencies || []).map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model: ${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing — this paint does not include the model' : 'Check this required model — compatibility is verified when installing'}</div><button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}Open model page</button></div></div>`).join('')}
+      ${(p.modelDependencies || []).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>Base model: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''} — this add-on is ready to use.` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}Open model page</button>` : `<button class="btn btn-sm" data-find-required="${i}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
       ${p.needsModelNotice && needsModelWarning(p) && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
-      ${(p.dependencies || []).length ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('')}</div></div>` : ''}
+      ${(p.dependencies || []).some((d) => d.url) ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.filter((d) => d.url).map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('')}</div></div>` : ''}
       ${installed ? `<button class="btn btn-danger btn-sm" data-post-remove>${icon('trash')}Delete installed files</button>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
       ${p.paid ? `<div class="notice warn">${icon('alert')}<div>This is a paid mod — buy it from the creator's store, then drag the downloaded file onto this window to install it.</div></div>` : ''}
@@ -1025,6 +1025,21 @@ async function openPost(summary) {
     </div></div>`;
   refreshInlineDownloads(m);
   $('.modal-body', m).addEventListener('click', async (e) => {
+    const findRequired = e.target.closest('[data-find-required]');
+    if (findRequired) {
+      const dependency = (p.modelDependencies || [])[Number(findRequired.dataset.findRequired)];
+      if (!dependency) return;
+      const label = findRequired.innerHTML; findRequired.disabled = true; findRequired.textContent = 'Finding…';
+      try {
+        const matches = await api.invoke('site:findDependency', dependency);
+        const best = matches[0];
+        if (!best) { toast(`Could not find <b>${esc(dependency.label)}</b> in MXB Mods, MXB Hub, or MX Bikes Shop.`, 'err', 5000); return; }
+        if (best.source === 'mxb-mods') openPost(best);
+        else openProduct(best);
+      } catch (err) { toast(esc(cleanErr(err)), 'err', 5000); }
+      finally { if (findRequired.isConnected) { findRequired.disabled = false; findRequired.innerHTML = label; } }
+      return;
+    }
     const review = e.target.closest('[data-inline-review]');
     if (review) { openReview(review.dataset.inlineReview); return; }
     const remove = e.target.closest('[data-post-remove]');
@@ -2057,7 +2072,9 @@ function descToHtml(html) {
 }
 
 async function openProduct(p, files) {
-  const sh = currentShop();
+  // Dependency search can open a product from either paid source while the
+  // current Get Mods tab is MXB Mods (or the other shop).
+  const sh = S.accounts.shops.find((shop) => shop.id === p.shop) || currentShop();
   const group = files ? { files } : ownedGroupFor(p);
   const m = modal({ title: esc(p.title), body: `<div class="loadmore"><div class="spinner"></div></div>`, foot: `<span class="grow">${esc(sh.name)}</span>${p.link ? `<button class="btn" data-open="${esc(p.link)}">${icon('external')}Open in my browser</button>` : ''}` });
   let d = {};
