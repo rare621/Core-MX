@@ -1,23 +1,28 @@
 const path = require('path');
-const fs = require('fs/promises');
-const { chainOf, readChain, listFiles } = require('./asset-sources');
+const { chainOf, readChain } = require('./asset-sources');
 const { parseCfg } = require('./rider3d');
+const valid = (value) => typeof value === 'string' && !!value && !/[\\/:\0]|^\.+$/.test(value);
+async function references(bikeDir, bike) {
+  if (!bikeDir) return [];
+  const source = await chainOf([{ dir: bikeDir }]);
+  const gfx = await readChain(source, 'gfx.cfg'), physics = bike && await readChain(source, bike + '.cfg');
+  const visual = gfx && parseCfg(gfx.buf.toString('latin1')).tyres;
+  const data = physics && parseCfg(physics.buf.toString('latin1')).tyres;
+  return [...new Set([visual, typeof data === 'string' ? data : data?.id].filter(valid))];
+}
 async function selected(modsDir, prof, bike, bikeDir) {
   const explicit = prof.sections.tyres?.values[bike] || '';
-  const data = bikeDir && await readChain(await chainOf([{ dir: bikeDir }]), 'gfx.cfg');
-  const base = data ? parseCfg(data.buf.toString('latin1')).tyres : '';
-  return { selected: explicit || (typeof base === 'string' ? base : ''), base: typeof base === 'string' ? base : '' };
+  const available = await references(bikeDir, bike), base = available[0] || '';
+  return { selected: available.includes(explicit) ? explicit : base, base };
 }
-async function options(modsDir, stockRiderPkz) {
+async function options(modsDir, stockRiderPkz, bikeDir, bike) {
   const root = path.join(modsDir, 'tyres');
-  const names = new Set((await fs.readdir(root, { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory() || /\.pkz$/i.test(e.name)).map((e) => e.name.replace(/\.pkz$/i, '')));
   const stock = stockRiderPkz && path.join(path.dirname(stockRiderPkz), 'tyres.pkz');
-  if (stock) for (const file of await listFiles(await chainOf([{ pkz: stock, prefix: 'tyres' }]))) if (file.includes('/')) names.add(file.split('/')[0]);
   const result = [];
-  for (const name of names) {
+  for (const name of await references(bikeDir, bike)) {
     const chain = await chainOf([{ dir: path.join(root, name) }, stock ? { pkz: stock, prefix: `tyres/${name}` } : null]);
     if (await readChain(chain, 'gfx.cfg')) result.push(name);
   }
   return result.sort((a, b) => a.localeCompare(b));
 }
-module.exports = { selected, options };
+module.exports = { selected, options, references };

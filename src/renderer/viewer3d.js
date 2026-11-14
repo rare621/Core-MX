@@ -89,10 +89,10 @@ function glovePreview(model) {
 }
 
 let thumbKit = null;
-function thumb(model, framing = 'full', size = 320) {
+export function renderThumbnail(model, framing = 'full', size = 320) {
   if (framing === 'hands') model = glovePreview(model);
   if (!thumbKit) {
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    const renderer = new THREE.WebGLRenderer({ ...(typeof document === 'undefined' ? { canvas: new OffscreenCanvas(size, size) } : {}), antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
@@ -127,11 +127,30 @@ function thumb(model, framing = 'full', size = 320) {
     camera.position.set(target.x + dist * Math.sin(yaw) * Math.cos(pitch), target.y + dist * Math.sin(pitch), target.z + dist * Math.cos(yaw) * Math.cos(pitch));
     camera.lookAt(target);
     renderer.render(scene, camera);
-    url = renderer.domElement.toDataURL('image/webp', 0.85);
+    url = typeof renderer.domElement.toDataURL === 'function' ? renderer.domElement.toDataURL('image/webp', 0.85) : renderer.domElement.convertToBlob({ type: 'image/webp', quality: 0.85 }).then(async (blob) => {
+      const bytes = new Uint8Array(await blob.arrayBuffer()); let binary = '';
+      for (let at = 0; at < bytes.length; at += 8192) binary += String.fromCharCode(...bytes.subarray(at, at + 8192));
+      return 'data:' + blob.type + ';base64,' + btoa(binary);
+    });
   }
   scene.remove(root);
   for (const o of owned) o.dispose();
   return url;
+}
+
+let thumbnailWorker = null, thumbnailSerial = 0;
+const thumbnailRequests = new Map();
+function thumb(model, framing = 'full', size = 320) {
+  if (!thumbnailWorker) {
+    thumbnailWorker = new Worker(new URL('./thumb-worker.js', import.meta.url), { type: 'module' });
+    thumbnailWorker.onmessage = ({ data }) => { const request = thumbnailRequests.get(data.id); if (!request) return; thumbnailRequests.delete(data.id); clearTimeout(request.timer); if (data.error) request.reject(new Error(data.error)); else request.resolve(data.url); };
+    thumbnailWorker.onerror = () => { for (const request of thumbnailRequests.values()) { clearTimeout(request.timer); request.reject(new Error('Thumbnail preview unavailable')); } thumbnailRequests.clear(); thumbnailWorker.terminate(); thumbnailWorker = null; };
+  }
+  return new Promise((resolve, reject) => {
+    const id = ++thumbnailSerial;
+    const timer = setTimeout(() => { thumbnailRequests.delete(id); reject(new Error('Thumbnail took too long')); }, 30000);
+    thumbnailRequests.set(id, { resolve, reject, timer }); thumbnailWorker.postMessage({ id, model, framing, size });
+  });
 }
 
 function create(el) {
@@ -211,6 +230,8 @@ function create(el) {
   let raf = 0, last = performance.now(), alive = true;
   function frame(now) {
     if (!alive) return;
+    const modal = document.querySelector('.modal-wrap:last-child');
+    if (!el.isConnected || document.hidden || modal && !modal.contains(el)) { last = now; raf = requestAnimationFrame(frame); return; }
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     if (auto && !drag) view.yaw += dt * 0.25;
     place();
@@ -244,5 +265,7 @@ function create(el) {
   return { load, resetView, dispose, info, view, el };
 }
 
-window.RiderViewer = { create, thumb };
-window.dispatchEvent(new Event('riderviewer-ready'));
+if (typeof window !== 'undefined') {
+  window.RiderViewer = { create, thumb };
+  window.dispatchEvent(new Event('riderviewer-ready'));
+}

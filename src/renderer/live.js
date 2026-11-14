@@ -143,7 +143,7 @@ function openLiveServer(s) {
 // "Sharing" card. Adding friends happens in one popup (Steam friends, or a friend code).
 async function renderFriends(c) {
   if (!c) return;
-  if (c.id === 'content') { if (S.friendsPanel?.body) renderFriends(S.friendsPanel.body); return renderSync(c); }
+  if (c.id === 'content') { if (S.friendsPanel?.body) await renderFriends(S.friendsPanel.body); if (S.view === 'online' && S.onlineTab === 'friends') return renderSync(c); return; }
   if (!S.friends) S.friends = await api.invoke('friends:list');
   if (!S.accounts.steam) await refreshAccounts();
   const st = await liveStatus();
@@ -174,7 +174,8 @@ async function renderFriends(c) {
     if (!p || !p.items.length) return '';
     const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
     const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
-    return `<div class="fr-paints">${icon('shirt')}<span>${got} of ${p.items.length} paint${p.items.length === 1 ? '' : 's'} synced${p.bikeName || p.bike ? ` · ${esc(p.bikeName || p.bike)}` : ''}</span>
+    const bike = p.bikeName || (p.bike || '').replace(/^(?:MX\w*|SM\w*|EN\w*)OEM_/i, '').replace(/_/g, ' ');
+    return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} files synced</span></div>
       ${need.map((n) => `<button class="fr-need" data-act="paint-get" data-name="${esc(n.name)}" title="Search Get Mods for it">Needs ${esc({ bike: 'bike', helmet: 'helmet', boots: 'boots', protection: 'protector' }[n.kind] || n.kind)} ${esc(n.name.replace(/_/g, ' '))} ${icon('search')}</button>`).join('')}</div>`;
   };
 
@@ -186,7 +187,7 @@ async function renderFriends(c) {
     return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
       <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}">${esc(s[1])}</div>${paintLine(f)}</div>
       <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
-        <button class="btn btn-sm btn-ghost btn-icon" data-friend-remove="${i}" title="Remove ${esc(f.name)}">${icon('x')}</button></div></div>`;
+        <button class="btn btn-sm btn-ghost btn-icon" data-friend-remove="${i}" title="Remove ${esc(f.name)}" aria-label="Remove friend ${esc(f.name)}">${icon('x')}</button></div></div>`;
   };
 
   const ps = st && st.paintSync;

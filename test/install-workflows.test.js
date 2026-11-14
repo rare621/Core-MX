@@ -52,8 +52,14 @@ test('history retains ten completed jobs and every active job without altering i
 
 test('addon listings separate paints from models, tracks and bundles using the website categories', () => {
   assert.equal(site.isAddonPost({ categories: [127, 33] }), true);
-  assert.equal(site.isAddonPost({ categories: [37] }), true);
-  assert.equal(site.isAddonPost({ categories: [35, 309] }), true);
+  assert.equal(site.isAddonPost({ categories: [37] }), false);
+  assert.equal(site.isAddonPost({ categories: [32] }), false);
+  assert.equal(site.isAddonPost({ categories: [35, 309] }), false);
+  assert.equal(site.isAddonPost({ categories: [35], needsModelNotice: true }), true);
+  assert.equal(site.needsCustomModel('Only for the MXB shops hoodie model.'), true);
+  assert.equal(site.needsCustomModel('Place these paints in rider/riders/default_mx/paints. No additional models are required.'), false);
+  const hoodie = site.listingRequirements('<div id="instructions"><p>Mod Instructions</p><span>YOU MUST HAVE ABDESIGNS HOODIE FOR THIS MOD TO WORK<br></span></div>');
+  assert.equal(hoodie.needsModelNotice, true); assert.ok(hoodie.dependencies.some((d) => d.url.endsWith('/rider-hoodie-abdesigns/')));
   for (const categories of [[22], [45], [313], [313, 127], [365]]) assert.equal(site.isAddonPost({ categories }), false);
 });
 

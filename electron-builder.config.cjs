@@ -7,6 +7,7 @@ module.exports = {
   asar: true,
   npmRebuild: false,
   compression: 'normal',
+  publish: [{ provider: 'github', owner: 'rare621', repo: 'MXB-MANAGER' }],
   directories: { output: 'dist', buildResources: 'build' },
   files: [
     'main.js', 'preload.js', 'src/**/*', 'package.json', 'THIRD_PARTY_NOTICES.md',

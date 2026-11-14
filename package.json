@@ -1,7 +1,7 @@
 {
   "name": "mx-bikes-manager",
   "productName": "MX Bikes Manager",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Manage installed MX Bikes mods and browse/install mods from mxb-mods.com",
   "main": "main.js",
   "private": true,
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "cheerio": "1.2.0",
+    "electron-updater": "6.8.11",
     "three": "^0.170.0",
     "yauzl": "3.4.0"
   },

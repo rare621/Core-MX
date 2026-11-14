@@ -8,7 +8,9 @@ npm test
 npm run build:win
 ```
 
-The shareable setup and its SHA-256 checksum are in `dist/`. Upload the setup EXE and `SHA256SUMS.txt` to a GitHub release. Do not upload `node_modules`, `win-unpacked`, local settings, or temporary build folders. Users install the EXE; they do not need Node.js or this source folder.
+The shareable setup, `latest.yml` update manifest, server ZIP and SHA-256 checksums are in `dist/`. Publish all four files together in a GitHub release; the updater verifies the EXE against the SHA-512 digest in `latest.yml`. Do not upload `node_modules`, `win-unpacked`, local settings, or temporary build folders. Users install the EXE; they do not need Node.js or this source folder.
+
+The updater checks on each installed-app start, downloads in the background, and installs on a normal quit or explicit restart. It uses the GitHub provider configured in `electron-builder.config.cjs`; do not embed GitHub credentials. The current source repository is private. Anonymous updates for friends require an approved public release feed, or each user must have access to the private feed. Changing repository visibility or creating a public distribution repository requires the owner's choice first.
 
 The setup uses an assisted per-user install, offers a destination folder, adds shortcuts, registers `mxbm://` join links, and supports uninstall/reinstall. The app stores settings in the user's AppData folder and locates that user's game folders on first launch.
 

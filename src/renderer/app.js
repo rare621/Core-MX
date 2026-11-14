@@ -113,7 +113,7 @@ function renderRail() {
   const packUpd = S.packsNeed || 0;
   const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
   $('#rail').innerHTML = VIEWS.map((v) => btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
-    + `<div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-act="open-friends" title="Friends & status">${icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
+    + `<div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-act="open-friends" title="Friends & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
 }
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
@@ -668,7 +668,7 @@ function renderGet(c) {
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-src]');
-  if (b && S.view === 'get') { S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'liveries', 'riderkit', 'helmets', 'boots', 'gloves', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
+  if (b && S.view === 'get') { if (S.getSrc === b.dataset.src) return; S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.cursor = null; S.browse.kind = 'all'; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
 });
 
 // ---------- OEM packs ----------
@@ -778,6 +778,7 @@ function renderBrowse(c) {
     </div></div>`;
     $('#brSearch').value = S.browse.query;
     $('#brSearch').addEventListener('input', debounce((e) => {
+      if (!e.target.isConnected) return;
       S.browse.query = e.target.value.trim();
       if (S.browse.query && (S.browse.sort === 'date' || S.browse.sort.startsWith('popular'))) { S.browse.sort = 'relevance'; $('#brSort').value = 'relevance'; }
       browseReset();
@@ -787,7 +788,7 @@ function renderBrowse(c) {
     $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
-  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'liveries', 'riderkit', 'helmets', 'boots', 'gloves', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
+  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
   drawBrowseKind();
   if (!S.browse.posts.length && !S.browse.loading) browseLoad(); else renderBrowseGrid();
 }
@@ -795,7 +796,7 @@ function renderBrowse(c) {
 function drawBrowseKind() {
   const box = $('#brKind'); if (!box) return;
   const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
-  box.hidden = !labels || S.view === 'get' && S.getSrc === 'addons';
+  box.hidden = !labels || S.view === 'get' && ['free', 'addons'].includes(S.getSrc);
   if (!labels) { box.innerHTML = ''; return; }
   const choices = [['all', 'All'], ['models', labels[0]], ['paints', labels[1]], ...(S.browse.tab === 'helmets' ? [['addons', 'Addons']] : [])];
   box.innerHTML = choices.map(([kind, label]) => `<button class="chip ${(S.browse.kind || 'all') === kind ? 'active' : ''}" data-browse-kind="${kind}">${label}</button>`).join('');
@@ -803,24 +804,26 @@ function drawBrowseKind() {
 
 function browseReset() {
   S.browse.loading = false;
+  S.browse.cursor = null;
   S.browse.page = 0; S.browse.posts = []; S.browse.totalPages = 1; S.browse.error = null;
   S.browse.reqId = (S.browse.reqId || 0) + 1;
   $$('#brTabs .chip').forEach((b) => b.classList.toggle('active', b.dataset.tab === S.browse.tab));
+  const scroll = $('#brScroll'); if (scroll) scroll.scrollTop = 0;
   browseLoad();
 }
 
 async function browseLoad() {
   const b = S.browse;
   if (b.loading || b.page >= b.totalPages) return;
-  b.loading = true;
+  b.loading = true; b.error = null;
   const reqId = b.reqId;
   renderBrowseGrid();
   try {
     let timeout;
-    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort });
+    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort, cursor: b.cursor });
     const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
-    b.page = r.page; b.totalPages = r.totalPages; b.total = r.total;
+    b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
     b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
   } catch (e) {
     if (reqId === b.reqId) b.error = e.message;
@@ -848,17 +851,31 @@ function renderBrowseGrid() {
   const b = S.browse;
   $('#brCount').textContent = b.total ? `${b.total.toLocaleString()} mods` : '';
   let html = '';
-  if (b.posts.length) html += `<div class="grid big">${b.posts.map(siteCard).join('')}</div>`;
+  if (b.posts.length) html += `<div class="grid big" data-browse-grid="${b.reqId}">${b.posts.map(siteCard).join('')}</div>`;
   else if (b.loading) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
   else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't reach mxb-mods.com</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
   else html += `<div class="empty"><div>${icon('search')}<h3>No mods found${b.page < b.totalPages ? ' on this page' : ''}</h3><div>Try another search or category.</div>${b.page < b.totalPages ? '<button class="btn" data-act="browse-more">Check next page</button>' : ''}</div></div>`;
-  if (b.page < b.totalPages && b.posts.length) html += `<div class="loadmore" id="brMore">${b.loading ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
+  const moreHtml = `<div class="loadmore" id="brMore">${b.error ? `<span class="muted">${esc(b.error)}</span><button class="btn" data-act="browse-retry">Retry</button>` : b.loading ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
+  if (b.page < b.totalPages && b.posts.length) html += moreHtml;
   const top = sc.scrollTop;
-  sc.innerHTML = html;
+  const existing = sc.querySelector(`[data-browse-grid="${b.reqId}"]`);
+  if (existing && b.posts.length) {
+    const ids = new Set([...existing.querySelectorAll('[data-post]')].map((el) => Number(el.dataset.post)));
+    existing.insertAdjacentHTML('beforeend', b.posts.filter((p) => !ids.has(p.id)).map(siteCard).join(''));
+    for (const card of existing.querySelectorAll('[data-post]')) {
+      const post = b.posts.find((p) => p.id === Number(card.dataset.post));
+      const badge = [...card.querySelectorAll('.badge.ok')].find((el) => el.textContent.includes('Installed'));
+      const installed = post && haveMod({ postId: post.id, title: post.title });
+      if (!installed) badge?.remove();
+      else if (!badge) card.querySelector('.badges')?.insertAdjacentHTML('beforeend', `<span class="badge ok">${icon('check')}Installed</span>`);
+    }
+    $('#brMore', sc)?.remove();
+    if (b.page < b.totalPages) sc.insertAdjacentHTML('beforeend', moreHtml);
+  } else sc.innerHTML = html;
   sc.scrollTop = top;
   if (brObserver) brObserver.disconnect();
   const more = $('#brMore');
-  if (more) {
+  if (more && !b.error && !b.loading) {
     brObserver = new IntersectionObserver((ents) => { if (ents.some((e) => e.isIntersecting)) browseLoad(); }, { root: sc, rootMargin: '700px' });
     brObserver.observe(more);
   }
@@ -990,9 +1007,9 @@ function inlineDownloadHtml(j) {
   const complete = j.status === 'review' || j.status === 'done';
   const hints = {
     queued: 'Waiting to start. Keep this page open or check Downloads.',
-    downloading: 'Please wait. Any install review popup appears after downloading and unpacking.',
+    downloading: 'Download and extraction must finish before installation can continue.',
     browser: 'Complete the download in the browser window. Progress will appear here when the file starts downloading.',
-    extracting: 'Checking and unpacking the files. Please wait for the install review popup if one is needed.',
+    extracting: 'Extracting the files. You will be asked to choose a destination if one cannot be matched automatically.',
     review: 'Ready for review. Confirm the install popup, or click Review & install to reopen it.',
     installing: 'Installing the mod. Please wait until this says Installed.',
     done: 'Installation complete.', error: j.error || 'Download failed. You can try again.',
@@ -1005,7 +1022,13 @@ function refreshInlineDownloads(root = document) {
   for (const row of $$('[data-download-url]', root)) {
     const job = jobs.find((j) => j.url && j.url === row.dataset.downloadUrl);
     const box = $('[data-download-progress]', row);
-    if (!job || !box) continue;
+    if (!box) continue;
+    if (!job || job.filesDeleted || job.status === 'done') {
+      box.hidden = true; box.replaceChildren();
+      const button = $('[data-dl], [data-own-file]', row);
+      if (button && job?.filesDeleted) { button.disabled = false; button.textContent = 'Install'; delete button.dataset.inlineReview; }
+      continue;
+    }
     box.hidden = false; box.innerHTML = inlineDownloadHtml(job);
     const button = $('[data-dl], [data-own-file]', row);
     if (button) {
@@ -1278,6 +1301,7 @@ function prettyValue(slot, v) {
 
 async function renderRider(c) {
   const R = S.rider;
+  const request = R.renderRequest = (R.renderRequest || 0) + 1;
   if (S.riderTab === 'gear') {
     for (const key of ['viewer', 'bikeViewer']) if (R[key]) { R[key].dispose(); R[key] = null; }
     R.modelKey = null; R.bikeModelKey = null; R.modelOk = false;
@@ -1287,15 +1311,18 @@ async function renderRider(c) {
   }
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Rider</h2><span class="sub">Pick your gear for each bike</span></div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
   try {
-    if (!R.profile) { const p = await api.invoke('rider:profiles'); R.profiles = p.profiles; R.profile = p.last; R.activeProfile = p.last; }
+    if (!R.profile) { const p = await api.invoke('rider:profiles'); if (request !== R.renderRequest) return; R.profiles = p.profiles; R.profile = p.last; R.activeProfile = p.last; }
     if (!R.profile) {
       c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('rider')}<h3>No game profile yet</h3><div>Start MX Bikes once to create your rider profile, then come back here.</div></div></div></div>`;
       return;
     }
-    if (!R.bikes) R.bikes = await api.invoke('rider:bikes', R.profile);
+    if (!R.bikes) { const bikes = await api.invoke('rider:bikes', R.profile); if (request !== R.renderRequest) return; R.bikes = bikes; }
     if (!R.bike) R.bike = (R.bikes.find((b) => b.selected) || R.bikes.find((b) => b.installed) || R.bikes[0] || {}).id;
-    R.lo = await api.invoke('rider:loadout', R.profile, R.bike, R.drafts[riderDraftKey()] || {});
+    const loadout = await api.invoke('rider:loadout', R.profile, R.bike, R.drafts[riderDraftKey()] || {});
+    if (request !== R.renderRequest) return;
+    R.lo = loadout;
   } catch (e) {
+    if (request !== R.renderRequest) return;
     c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('alert')}<h3>Couldn't read your profile</h3><div>${esc(e.message)}</div></div></div></div>`;
     return;
   }
@@ -1315,9 +1342,9 @@ function drawBike(c) {
     <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('bike')}</div>${profileControlsHtml()}</div>
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
-      <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
+      <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame && !riderDirty() ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
       <div class="bike-livery-card"><div class="section-title">Appearance</div><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
-      <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
+      <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button><p class="muted" style="font-size:12px">Only tyre sets declared by this bike are listed.${lo.invalidTyres ? ' Your previous choice is incompatible. Apply to reset it to the bike default.' : ''}</p></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
     </div></div></div></div>`;
   mountProfileControls();
   const key = R.profile + '|' + R.bike + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || ''); R.bikeModelKey = key;
@@ -1372,11 +1399,11 @@ function drawRider(c) {
 
 function profileControlsHtml() {
   const R = S.rider;
-  return `<div class="profile-controls"><label>Profile<select id="riderProfile">${R.profiles.map((p) => `<option ${p === R.profile ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label><button class="btn btn-sm" data-act="profile-create">${icon('plus')}Create profile</button><button class="btn btn-icon btn-sm" data-act="profile-delete" title="Delete this profile">${icon('trash')}</button><button class="btn btn-icon btn-sm" data-act="rider-refresh" title="Refresh rider and bike from the game">${icon('refresh')}</button>${R.lo?.profileActive ? `<span class="badge ok">${icon('check')}Active in game</span>` : '<button class="btn btn-sm" data-act="profile-activate">Use in game</button>'}</div>`;
+  return `<div class="profile-controls"><label>Profile<select id="riderProfile">${R.profiles.map((p) => `<option ${p === R.profile ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label><button class="btn btn-sm" data-act="profile-create">${icon('plus')}Create profile</button><button class="btn btn-icon btn-sm" data-act="profile-delete" title="Delete this profile">${icon('trash')}</button><button class="btn btn-icon btn-sm" data-act="rider-refresh" title="Refresh rider and bike from the game">${icon('refresh')}</button>${riderDirty() ? '<span class="badge">Preview changes</span>' : R.lo?.profileActive ? `<span class="badge ok">${icon('check')}Active in game</span>` : '<button class="btn btn-sm" data-act="profile-activate">Use in game</button>'}</div>`;
 }
 function mountProfileControls() {
   const controls = $('.profile-controls');
-  if (controls) controls.insertAdjacentHTML('beforeend', `<span class="rider-save-state">${riderDirty() ? 'Preview changes' : S.rider.saveState || ''}</span><button class="btn btn-sm" data-act="rider-revert" ${riderDirty() ? '' : 'disabled'}>Revert</button><button class="btn btn-primary btn-sm" data-act="rider-apply">Apply</button>`);
+  if (controls) controls.insertAdjacentHTML('beforeend', `<span class="rider-save-state">${riderDirty() ? '' : S.rider.saveState || ''}</span><button class="btn btn-sm" data-act="rider-revert" ${riderDirty() ? '' : 'disabled'}>Revert</button><button class="btn btn-primary btn-sm" data-act="rider-apply">Apply</button>`);
   const select = $('#riderProfile');
   if (select) select.addEventListener('change', async (e) => { S.rider.profile = e.target.value; S.rider.selectionDirty = true; S.rider.bikes = null; S.rider.bike = null; await renderRider($('#content')); });
 }
@@ -1426,7 +1453,7 @@ async function loadRiderModel() {
   R.modelKey = key;
   if (status) { status.hidden = false; status.innerHTML = '<div class="spinner"></div>'; }
   try {
-    const m = await api.invoke('rider:model', R.profile, R.bike);
+    const m = await api.invoke('rider:model', R.profile, R.bike, R.lo.current);
     if (R.modelKey !== key) return; // a newer request is on its way
     R.viewer.load(m);
     R.modelOk = true;
@@ -1561,10 +1588,11 @@ function gearPicker(slot, opts, lo, config = {}) {
       } else {
       try {
         const model = await api.invoke('rider:thumbModel', R.profile, R.bike, slot.id, value, lo.current);
+        if (closed || !m.isConnected) break;
         // Missing, unsupported and protected assets all lack a preview; this
         // alone does not establish that the creator encrypted the file.
         if ((model.unreadable || []).includes(slot.id)) url = { locked: true, pic, reason: (model.warnings || []).find((w) => /requires? .*model|model.*missing/i.test(w)) };
-        else url = window.RiderViewer.thumb(model, GEAR_FRAMING[slot.id] || 'full', 320);
+        else url = await window.RiderViewer.thumb(model, GEAR_FRAMING[slot.id] || 'full', 320);
       } catch { url = null; }
       }
       if (!url && pic) url = { locked: false, pic };
@@ -2081,6 +2109,28 @@ document.addEventListener('click', async (e) => {
 });
 
 // ---------- settings ----------
+S.appUpdate = { phase: 'idle' };
+function appUpdateHtml() {
+  const update = S.appUpdate;
+  const text = { idle: 'Checks GitHub every time you open the app.', checking: 'Checking GitHub…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, ready: `${esc(update.version || '')} is ready. It will install when you close the app.`, error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
+  return `<p>${text || ''}</p>${update.phase === 'downloading' ? `<progress max="100" value="${Number(update.percent) || 0}" style="width:100%"></progress>` : ''}<button class="btn" data-act="app-update-check" ${['checking', 'downloading'].includes(update.phase) ? 'disabled' : ''}>${icon('refresh')}Check now</button>${update.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Restart to update</button>' : ''}`;
+}
+function drawAppUpdate() {
+  const box = $('#appUpdates'); if (box) box.innerHTML = appUpdateHtml();
+  let overlay = $('#appUpdateOverlay');
+  if (!['downloading', 'ready'].includes(S.appUpdate.phase)) { overlay?.remove(); return; }
+  if (!overlay) { overlay = document.createElement('div'); overlay.id = 'appUpdateOverlay'; overlay.className = 'app-update-overlay'; document.body.append(overlay); }
+  overlay.innerHTML = `<b>${icon('download')}App update</b>${S.appUpdate.phase === 'ready' ? `<span>${esc(S.appUpdate.version)} is ready</span><button class="btn btn-sm btn-primary" data-act="app-update-install">Restart to update</button>` : `<span>Downloading ${esc(S.appUpdate.version)} · ${Math.round(S.appUpdate.percent || 0)}%</span><progress max="100" value="${Number(S.appUpdate.percent) || 0}"></progress>`}`;
+}
+api.on('app:update', (state) => { S.appUpdate = state; drawAppUpdate(); });
+document.addEventListener('click', async (e) => {
+  const action = e.target.closest('[data-act]')?.dataset.act;
+  if (action === 'app-update-check') { S.appUpdate = { ...S.appUpdate, phase: 'checking' }; drawAppUpdate(); try { S.appUpdate = await api.invoke('app:checkUpdates'); drawAppUpdate(); } catch (err) { toast(esc(cleanErr(err)), 'err'); } }
+  if (action === 'app-update-install') {
+    if (riderDirty()) { toast('Apply or Revert your Rider preview before restarting to update.', 'info', 6000); return; }
+    try { await api.invoke('app:installUpdate'); } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+  }
+});
 S.settingsTab = 'general';
 function settingsTabs() {
   return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button></div>`;
@@ -2115,6 +2165,7 @@ async function renderSettings(c) {
     <div class="set-card"><h3>Disabled mods</h3><p>Disabling a mod moves it here so the game stops loading it. Enabling moves it back. Nothing is deleted.</p>
       <div class="path-row"><div class="path">${esc(env.disabledDir)}</div><button class="btn btn-icon" data-folder="disabled" title="Open">${icon('folder')}</button></div></div>
     <div class="set-card"><h3>Setup</h3><p>Go through the welcome setup again.</p><button class="btn" data-act="run-setup">${icon('sparkle')}Run setup again</button></div>
+    <div class="set-card"><h3>App updates</h3><div id="appUpdates">${appUpdateHtml()}</div></div>
     <div class="set-card"><h3>About</h3><p>MX Bikes Manager ${esc(env.version)} · Mods are browsed from <a href="#" data-open="https://mxb-mods.com">mxb-mods.com</a>. Please support mod creators — rate and thank them on the site.</p></div>
   </div></div></div></div>`;
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
@@ -2228,7 +2279,7 @@ document.addEventListener('click', async (e) => {
     case 'packs-refresh': renderPacks($('#content'), true); break;
     case 'open-site': api.invoke('open:external', 'https://mxb-mods.com'); break;
     case 'browse-more': browseLoad(); break;
-    case 'browse-retry': browseReset(); break;
+    case 'browse-retry': if (S.browse.posts.length) browseLoad(); else browseReset(); break;
     case 'pick-user': case 'pick-install': S.env = await api.invoke('settings:pickFolder', act === 'pick-user' ? 'user' : 'install'); render(); if (S.env.modsFound) rescan(true); break;
     case 'redetect': S.env = await api.invoke('settings:redetect'); render(); if (S.env.modsFound) rescan(true); toast('Folders re-detected', 'ok', 1800); break;
     case 'clear-jobs': S.jobs = new Map((await api.invoke('jobs:clearHistory')).map((j) => [j.id, j])); renderDownloads($('#content')); renderRail(); toast('Completed history cleared. Installed files were kept.', 'ok'); break;
@@ -2294,9 +2345,35 @@ async function offerEquip(job) {
       await new Promise((resolve) => {
         let choosing = false;
         const choices = j.equipCandidates;
-        const m = modal({ title: 'Installed — use it now?', size: 'sm', body: `<p><b>${esc(j.title)}</b> is installed.</p><p class="muted">Equip it now, preview its paints first, or leave it installed for later. Close MX Bikes before applying profile changes.</p>${choices.length > 1 ? `<div class="field"><label>Item to equip</label><select data-equip-choice>${choices.map((c, i) => `<option value="${i}">${esc(c.label)} · ${esc(c.slot)}</option>`).join('')}</select></div>` : ''}`, foot: '<button class="btn" data-close>Skip</button><button class="btn" data-equip-installed="customize">Customize first</button><button class="btn btn-primary" data-equip-installed="now">Equip now</button>', onClose: () => { if (!choosing) resolve(); } });
+        let selectedIndex = 0, previewRevision = 0;
+        const previews = new Map();
+        const label = (choice) => ({ helmetPaint: 'Helmet paint', gogglesPaint: 'Goggles', suitPaint: 'Rider kit', glovesPaint: 'Gloves', bootsPaint: 'Boot paint', protectionPaint: 'Protector paint', bikePaint: 'Bike livery' }[choice.slot] || 'Gear');
+        const preview = (index) => {
+          if (!previews.has(index)) previews.set(index, (async () => {
+            if (choices[index].slot === 'bikePaint' || !window.RiderViewer) return j.image;
+            const ctx = await api.invoke('jobs:equipContext', j.id, index), paint = ctx.preferred?.[0] || '';
+            const model = await api.invoke('rider:thumbModel', ctx.profile, ctx.bike, ctx.slot, paint, ctx.lo.current);
+            if (model.unreadable?.includes(ctx.slot)) return j.image;
+            return await window.RiderViewer.thumb(model, GEAR_FRAMING[ctx.slot] || 'full', 320);
+          })().catch(() => j.image));
+          return previews.get(index);
+        };
+        const m = modal({ title: 'Installed — use it now?', size: 'sm', body: `<p><b>${esc(j.title)}</b> is installed.</p><p class="muted">Equip it now, customize its paints, or leave it for later. Close MX Bikes before applying.</p><button class="equip-item-btn" data-equip-choice><span class="equip-item-preview"></span><span><b>${esc(choices[0].label)}</b><small>${esc(label(choices[0]))}</small></span>${icon('chevron')}</button>`, foot: '<button class="btn" data-close>Skip</button><button class="btn" data-equip-installed="customize">Customize first</button><button class="btn btn-primary" data-equip-installed="now">Equip now</button>', onClose: () => { if (!choosing) resolve(); } });
+        const drawChoice = async () => {
+          const revision = ++previewRevision, button = $('[data-equip-choice]', m);
+          button.querySelector('b').textContent = choices[selectedIndex].label; button.querySelector('small').textContent = label(choices[selectedIndex]);
+          const url = await preview(selectedIndex);
+          if (m.isConnected && revision === previewRevision) $('.equip-item-preview', m).innerHTML = url ? `<img src="${esc(url)}" alt="Installed item preview">` : icon('shirt');
+        };
+        drawChoice();
+        $('[data-equip-choice]', m).addEventListener('click', () => {
+          if (choices.length === 1) { $('[data-equip-installed="customize"]', m).click(); return; }
+          const picker = modal({ title: 'Choose an installed item', body: `<div class="gear-grid">${choices.map((choice, index) => `<button class="gear-tile" data-equip-index="${index}"><span class="gear-img">${j.image ? `<img src="${esc(j.image)}" alt="">` : icon('shirt')}</span><span class="gear-name">${esc(choice.label)}</span><small>${esc(label(choice))}</small></button>`).join('')}</div>` });
+          choices.forEach(async (_, index) => { const url = await preview(index); if (picker.isConnected && url) $(`[data-equip-index="${index}"] .gear-img`, picker).innerHTML = `<img src="${esc(url)}" alt="">`; });
+          picker.addEventListener('click', (e) => { const item = e.target.closest('[data-equip-index]'); if (item) { selectedIndex = Number(item.dataset.equipIndex); picker.close(); drawChoice(); } });
+        });
         $$('[data-equip-installed]', m).forEach((button) => button.addEventListener('click', async (e) => {
-          const index = Number($('[data-equip-choice]', m)?.value || 0); e.target.disabled = true;
+          const index = selectedIndex; e.target.disabled = true;
           try {
             const ctx = await api.invoke('jobs:equipContext', j.id, index);
             const options = [...new Set(['', ...(ctx.lo.options[ctx.slot] || [])])].map((value) => ({ value, label: prettyValue(ctx.slot, value) }));
@@ -2390,6 +2467,8 @@ function updateFor(postId, modified) {
   S.env = await api.invoke('app:env');
   renderRail();
   render();
+  refreshAccounts().catch(() => {});
+  api.invoke('app:updates').then((state) => { if (state) { S.appUpdate = state; drawAppUpdate(); } }).catch(() => {});
   api.invoke('site:tabs').then((t) => { S.tabs = t; if (isFree()) render(); });
   refreshInstalledIds();
   for (const j of await api.invoke('jobs:list')) S.jobs.set(j.id, j);
