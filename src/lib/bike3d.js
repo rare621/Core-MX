@@ -93,6 +93,23 @@ function mounts(g, wheelRadii = {}) {
   };
 }
 
+function selectNode(nodes, requested, expected) {
+  const names = [...new Set([requested, expected, expected + 'a'].filter(Boolean).map((n) => n.toLowerCase()))];
+  for (const name of names) {
+    const exact = nodes.find((node) => node.name.toLowerCase() === name);
+    if (exact) return exact;
+  }
+  // Some HRC files use a generic role ("steer") while the exporter adds the
+  // bike variant to the EDF node ("steer450f"). Accept a unique role match.
+  for (const name of [...new Set([requested, expected].filter(Boolean).map((n) => n.toLowerCase()))]) {
+    const variants = nodes.filter((node) => node.name.toLowerCase().startsWith(name));
+    if (variants.length === 1) return variants[0];
+  }
+  // A separately exported part may have an arbitrary root name. A combined
+  // scene must never be used wholesale when its requested part is unresolved.
+  return nodes.length === 1 ? nodes[0] : null;
+}
+
 async function build(options) {
   const { modsDir, installDir, bike, paint = '', texMax = 1024 } = options;
   const chain = await bikeSources(options);
@@ -128,9 +145,9 @@ async function build(options) {
     const parsed = await model(source, scene, external);
     if (!parsed) return;
     const nodes = parsed.model.nodes;
-    const chosen = nodeName ? nodes.find((n) => n.name.toLowerCase() === nodeName.toLowerCase())
-      : nodes.find((n) => n.name.toLowerCase() === expected) || nodes.find((n) => n.name.toLowerCase() === expected + 'a') || nodes.find((n) => n.name.toLowerCase().startsWith(expected));
-    const piece = buildPart(slot, parsed, chosen ? (n) => n === chosen.name : null, assembly && assembly[slot], paintTextures, textures, texMax);
+    const chosen = selectNode(nodes, nodeName, expected);
+    if (!chosen) { warnings.push(`The ${slot.replace(/_/g, ' ')} part could not be identified in its model.`); return; }
+    const piece = buildPart(slot, parsed, (n) => n === chosen.name, assembly && assembly[slot], paintTextures, textures, texMax);
     if (piece) {
       // The game procedurally poses its chain and display stand. Their export
       // templates are not static bike parts and otherwise float beside it.
@@ -165,4 +182,4 @@ async function build(options) {
   return { parts, textures, warnings, unreadable, bike, paint, focus: {}, kind: 'bike' };
 }
 
-module.exports = { build, paints, geometry, mounts };
+module.exports = { build, paints, geometry, mounts, selectNode };
