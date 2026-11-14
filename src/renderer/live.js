@@ -10,13 +10,12 @@ async function refreshLiveList(kind, force = false) {
   const requestKey = `${kind}Request`, nextKey = `${kind}Next`, errorKey = `${kind}Err`;
   if (S.live[requestKey]) return S.live[requestKey];
   if (Date.now() < (S.live[nextKey] || 0) && (!force || S.live[errorKey])) return false;
-  if (force && Date.now() - (S.live[`${kind}Last`] || 0) < 1000) return false;
   S.live[`${kind}Last`] = Date.now();
   S.live[requestKey] = (async () => {
     try {
       S.live[kind] = await api.invoke(`online:${kind}`, force);
       S.live[errorKey] = null;
-      S.live[nextKey] = Date.now() + (kind === 'servers' ? 300000 : 15000);
+      S.live[nextKey] = Date.now() + (kind === 'servers' ? 60000 : 15000);
     } catch (e) {
       S.live[errorKey] = cleanErr(e);
       S.live[nextKey] = Date.now() + 30000;
@@ -109,7 +108,7 @@ async function drawLiveServers(refresh) {
   box.innerHTML = `${setup}<div class="filters" style="padding:0 0 12px"><div class="search wide">${icon('search')}<input id="allSrvQ" placeholder="Search by server, track or class…" value="${esc(S.allSrv.q || '')}" spellcheck="false"></div>
       <select class="input" data-server-filter="population" aria-label="Server population">${[['all', 'All servers'], ['populated', 'Not empty'], ['empty', 'Empty'], ['available', 'Hide full'], ['full', 'Full only']].map(([v, label]) => `<option value="${v}" ${filters.population === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="maxPing" aria-label="Maximum network ping">${[['', 'Any ping'], ['50', 'Under 50 ms'], ['100', 'Under 100 ms'], ['150', 'Under 150 ms'], ['250', 'Under 250 ms']].map(([v, label]) => `<option value="${v}" ${filters.maxPing === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="sort" aria-label="Server order"><option value="activity" ${filters.sort === 'activity' ? 'selected' : ''}>Activity</option><option value="ping" ${filters.sort === 'ping' ? 'selected' : ''}>Lowest ping</option></select><span class="count">${xs.length} shown</span>
       <button class="btn btn-icon" data-act="live-refresh" title="Reload">${icon('refresh')}</button></div>
-    <p class="muted" style="font-size:12px">Updates every 5 minutes while Online is open. Ping is network round-trip and may differ from game ping. Full status is unknown when capacity is not reported.</p><div class="srv-list">${xs.map((s, i) => {
+    <p class="muted" style="font-size:12px">Updates every minute while Online is open. Ping is network round-trip and may differ from game ping. Full status is unknown when capacity is not reported.</p><div class="srv-list">${xs.map((s, i) => {
       const have = trackHave(s);
       const tl = trackLabel(s);
       return `<div class="srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-ico">${icon('globe')}</div>
@@ -297,7 +296,15 @@ document.addEventListener('click', async (e) => {
   }
   if (act === 'paint-get') { findMod(a.dataset.name); return; }
   if (act === 'live-disconnect') { if (await confirmBox('Go offline', 'Stop using online features? Friends stop seeing you and paint sync pauses. You can go online again any time.', 'Go offline', true)) busy(async () => { S.live.status = await api.invoke('online:disconnect'); rerender(); })(); return; }
-  if (act === 'live-refresh') { await liveStatus(true); drawYouAreOn(); return drawLiveServers(true); }
+  if (act === 'live-refresh') return busy(async () => {
+    // A manual click always bypasses the one-minute cache.  Redraw after the
+    // request so the player can see the server-list timestamp change.
+    S.live.serversNext = 0;
+    await liveStatus(true); drawYouAreOn();
+    const changed = await refreshLiveList('servers', true);
+    await drawLiveServers();
+    toast(changed ? 'Server list refreshed' : 'Showing the latest server list', 'ok', 1800);
+  })();
   if (act === 'live-friends-refresh') { await refreshLiveList('friends', true); return renderFriends($('#content')); }
   if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
   const j = e.target.closest('[data-live-join]');
