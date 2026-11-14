@@ -33,7 +33,7 @@ let online = null;
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
 function onlineDefaultUrl() {
-  try { const u = String(JSON.parse(fs.readFileSync(path.join(__dirname, 'online.config.json'), 'utf8')).serviceUrl || '').trim().replace(/\/+$/, ''); return /^https?:\/\/[^\s/]+(:\d+)?$/i.test(u) ? u : ''; } catch { return ''; }
+  try { const root = app.isPackaged ? process.resourcesPath : __dirname; const u = String(JSON.parse(fs.readFileSync(path.join(root, 'online.config.json'), 'utf8')).serviceUrl || '').trim().replace(/\/+$/, ''); return /^https?:\/\/[^\s/]+(:\d+)?$/i.test(u) ? u : ''; } catch { return ''; }
 }
 function insideGame(p) {
   const g = store.get('settings').gameInstallDir;
@@ -1015,7 +1015,7 @@ app.whenReady().then(async () => {
   createWindow();
   watchFrostList();
   online = onlineSvc.create({
-    store, appDir: __dirname,
+    store, appDir: app.isPackaged ? process.resourcesPath : __dirname,
     userDir: () => userDir(), installDir: () => store.get('settings').gameInstallDir,
     isGameRunning: () => profile.isGameRunning(),
     steamId: () => { const s = steam.detect(paths.steamRoot()); return s.found ? s.steamId : null; },

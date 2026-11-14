@@ -1,0 +1,10 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { version } = require('../package.json');
+const dir = path.resolve(__dirname, '..', 'dist');
+const files = fs.readdirSync(dir).filter((name) => name.startsWith(`MX-Bikes-Manager-Setup-${version}-`) && name.endsWith('.exe')).sort();
+if (!files.length) throw new Error('No installer was built for this version');
+const lines = files.map((file) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, file))).digest('hex')}  ${file}`);
+fs.writeFileSync(path.join(dir, 'SHA256SUMS.txt'), lines.join('\n') + '\n');
+console.log(`Checksums written for ${files.length} installer(s)`);

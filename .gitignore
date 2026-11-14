@@ -2,6 +2,8 @@
 node_modules/
 dist/
 out/
+build/generated/
+.tmp/
 
 # local-only files
 *.lnk
