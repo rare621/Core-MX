@@ -1,9 +1,9 @@
-## Restore the configured online server
+## Connect to the public online server
 
-The installer now includes the server address from `online.config.json` again: **http://192.168.0.38:60000**.
+The installer now connects to **http://67.84.130.214:60000**, so friends outside the host's home network can reach the port-forwarded online service.
 
-Earlier installers generated an empty server address. This update restores the configured server for live presence, friends, and paint sharing. An explicit `MXB_SERVICE_URL` build override is still supported.
+Existing accounts using the previous LAN address keep their sign-in when updating to this address. The service's account database stays on the same server.
 
-The Husqvarna viewer fix from 1.0.1 is included. Download **MX-Bikes-Manager-Setup-1.0.2-x64.exe** and install it over your current version; manager settings and game mods are preserved.
+The Husqvarna viewer fix is included. Download **MX-Bikes-Manager-Setup-1.0.3-x64.exe** and install it over your current version; manager settings and game mods are preserved.
 
-The configured address is on a local network. The online service must be running and reachable from the PC using the manager.
+For a manual address change, close the app and edit `resources/online.config.json` in its install folder. The default Windows location is `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json`. Keep the online server running and TCP port 60000 forwarded to that server PC.

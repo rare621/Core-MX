@@ -17,7 +17,12 @@ async function prepareResources(context) {
   fs.mkdirSync(target, { recursive: true });
   // Inherit the project's configured server unless the build explicitly overrides it.
   const configured = JSON.parse(fs.readFileSync(path.join(root, 'online.config.json'), 'utf8'));
-  fs.writeFileSync(path.join(target, 'online.config.json'), JSON.stringify({ serviceUrl: releaseServiceUrl(process.env.MXB_SERVICE_URL || configured.serviceUrl || '') }, null, 2) + '\n');
+  const serviceUrl = releaseServiceUrl(process.env.MXB_SERVICE_URL || configured.serviceUrl || '');
+  const bundled = { serviceUrl };
+  if (serviceUrl === releaseServiceUrl(configured.serviceUrl || '') && Array.isArray(configured.previousServiceUrls)) {
+    bundled.previousServiceUrls = configured.previousServiceUrls.map(releaseServiceUrl).filter(Boolean);
+  }
+  fs.writeFileSync(path.join(target, 'online.config.json'), JSON.stringify(bundled, null, 2) + '\n');
   if (!fs.existsSync(path.join(root, 'plugin', 'mxbm_presence.dlo'))) throw new Error('The bundled presence plugin is missing');
 }
 
@@ -33,7 +38,7 @@ async function verifyPackage({ appOutDir, packager }) {
   }
   const bundled = JSON.parse(fs.readFileSync(path.join(appOutDir, 'resources', 'online.config.json'), 'utf8'));
   const expected = JSON.parse(fs.readFileSync(path.join(packager.projectDir, 'build', 'generated', 'online.config.json'), 'utf8'));
-  if (bundled.serviceUrl !== expected.serviceUrl) throw new Error('The installer online-service address does not match its build configuration');
+  if (JSON.stringify(bundled) !== JSON.stringify(expected)) throw new Error('The installer online-service configuration does not match its build configuration');
   console.log(`  verified release contents (${files.length} entries; no game assets or user data)`);
   console.log(`  verified bundled online service: ${bundled.serviceUrl || '(none)'}`);
 }

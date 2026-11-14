@@ -76,6 +76,8 @@ Join or save a server address, use shareable join links, and configure a session
 
 Live presence, friends, and paint sharing use the included presence plugin and a **separately hosted online service**. The server list reflects participating app users; it is not the game's complete public server browser. Installers include the server address configured in `online.config.json`, so these shared features need that service running and reachable from the user's network. Local mod management, previews, profiles, and store browsing work independently.
 
+To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
+
 ## Build from source
 
 Use Node.js 24 or later:
