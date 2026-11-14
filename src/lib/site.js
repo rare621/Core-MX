@@ -12,6 +12,7 @@ const BROWSE_TABS = [
   { id: 'bikes', label: 'New Bikes', cats: [45, 304] },
   { id: 'liveries', label: 'Bike Liveries', cats: [37] },
   { id: 'riderkit', label: 'Rider Kits', cats: [35] },
+  { id: 'riders', label: 'Rider Models', cats: [365] },
   { id: 'helmets', label: 'Helmets', cats: [33] },
   { id: 'boots', label: 'Boots', cats: [31] },
   { id: 'gloves', label: 'Gloves', cats: [32] },
@@ -32,7 +33,7 @@ function browseCategory(tab, kind = 'all') {
   return GEAR_CATEGORIES[tab]?.[kind] ? { ...base, cats: GEAR_CATEGORIES[tab][kind] } : base;
 }
 function gearKind(ids) {
-  const model = ids.some((id) => [313, 343, 344].includes(id));
+  const model = ids.some((id) => [313, 343, 344, 365].includes(id));
   const paint = ids.some((id) => [127, 126, 135].includes(id));
   return model && paint ? 'bundle' : model ? 'model' : paint ? 'paint' : ids.includes(34) ? 'addon' : null;
 }
@@ -254,20 +255,29 @@ async function post(id) {
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
-  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, downloads, dependencies: dependenciesFromHtml(p.content && p.content.rendered || ''), madeFor: betas, downloadCount: dlCount };
+  const needsModelNotice = !summary.categories.includes(365) && /only for|you(?:'|’)ll need|requires? (?:the|a|another)|\bneed\b[\s\S]{0,160}(?:model|paint)|model[\s\S]{0,160}\bneed\b/i.test($c('body').text());
+  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, downloads, needsModelNotice, dependencies: dependenciesFromHtml(p.content && p.content.rendered || ''), madeFor: betas, downloadCount: dlCount };
 }
 
 function dependenciesFromHtml(html) {
   const $ = cheerio.load(html), found = [];
+  const add = (url, label) => {
+    try {
+      const u = new URL(url.replace(/[).,;]+$/, ''));
+      if (!/^https?:$/.test(u.protocol) || !/^(?:www\.)?(?:mxb-mods\.com|mxbikes-shop\.com|shop\.mxb-hub\.com)$/.test(u.hostname) || /\.(webp|png|jpe?g|gif|psd)$/i.test(u.pathname)) return;
+      if (!found.some((x) => x.url === u.href)) found.push({ label: (label || decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || 'Required model').replace(/-/g, ' ')).slice(0, 100), url: u.href });
+    } catch {}
+  };
   $('a[href]').each((_, a) => {
     const url = $(a).attr('href'), label = $(a).text().trim();
     const context = $(a).closest('p,li,div').text();
     if (!label || !/require|need|model|link to|based on|made.*for/i.test(context)) return;
-    try {
-      const u = new URL(url);
-      if (!/^https?:$/.test(u.protocol) || !/^(?:www\.)?(?:mxb-mods\.com|mxbikes-shop\.com|shop\.mxb-hub\.com)$/.test(u.hostname)) return;
-      if (!found.some((x) => x.url === u.href)) found.push({ label: label.slice(0, 100), url: u.href });
-    } catch {}
+    add(url, label);
+  });
+  $('p,li').each((_, el) => {
+    const context = $(el).text();
+    if (!/require|need|model|link to|based on|made.*for/i.test(context)) return;
+    for (const url of context.match(/https?:\/\/[^\s<>"']+/g) || []) add(url);
   });
   return found.slice(0, 8);
 }

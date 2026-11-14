@@ -8,6 +8,7 @@ const pnt = require('./pnt');
 const gear = require('./gear-assets');
 const { chainOf, readChain } = require('./asset-sources');
 const { modelBundle, validateModel, MAX_FILE } = require('./gear-sync');
+const { validateRiderPaint } = require('./paint-compat');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^rider\/riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?\.pkz$/i.test(p));
 const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { return false; } };
@@ -20,6 +21,8 @@ async function outfitFiles(modsDir, prof, bike) {
   const bikeDir = await profile.findBikeDir(modsDir, bike);
   const items = [], unavailable = [];
   const equipped = profile.SLOTS.map((s) => ({ slot: s.id, label: s.label, value: c[s.id] || s.default || '', state: 'default' }));
+  let riderPaintError = null;
+  try { await validateRiderPaint({ modsDir, current: c }); } catch (e) { riderPaintError = e.message; }
   for (const kind of ['rider', 'helmet', 'boots', 'protection']) {
     const name = c[kind] || (kind === 'rider' ? 'default_mx' : kind === 'protection' ? 'chest' : 'default');
     if (defaults(kind, name)) continue;
@@ -34,6 +37,7 @@ async function outfitFiles(modsDir, prof, bike) {
     const name = c[s.id];
     if (!name) continue;
     try {
+      if (s.id === 'suitPaint' && riderPaintError) throw new Error(riderPaintError);
       let data, target;
       if (s.id === 'bikePaint') {
         data = bikeDir && await readChain(await chainOf([{ dir: bikeDir }]), 'paints/' + name + '.pnt');

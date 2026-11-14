@@ -112,11 +112,17 @@ function plan(files, ctx, opts = {}) {
   // Current MX Bikes uses this layout even on a fresh install where the folder
   // has not been created yet. An explicitly requested legacy install can opt out.
   const modern = opts.legacyLayout !== true;
+  const bodyPaintFiles = kind === 'riderKit' ? ctx.bodyPaintFiles || [] : ctx.knownBodyPaintFiles || [];
+  const bodyTextures = ctx.paintTextures && bodyPaintFiles.length ? [...new Set(bodyPaintFiles.flatMap((rel) => ctx.paintTextures[rel] || []))] : ctx.bodyPaintTextures || [];
+  const riderModels = (ctx.riderModels || []).map((m) => ({ ...m, compatible: bodyTextures.every((t) => m.textures.some((n) => n.toLowerCase() === t.toLowerCase())) }));
+  const compatibleRiders = riderModels.filter((m) => m.compatible);
+  const riderTarget = opts.riderTarget || compatibleRiders.find((m) => m.name === 'default_mx')?.name || (compatibleRiders.length === 1 ? compatibleRiders[0].name : null);
+  const needsRiderTarget = bodyTextures.length > 0 && !riderModels.some((m) => m.name === riderTarget && (m.compatible || m.unverified && opts.riderTarget));
   const o = {
     trackType: opts.trackType || guessTrackType(text),
     paintTarget: opts.paintTarget || null,
     customDir: opts.customDir != null ? opts.customDir : '',
-    gear: modern ? 'rider/riders/default_mx' : 'rider',
+    gear: modern ? `rider/riders/${riderTarget || 'default_mx'}` : 'rider', riderTarget,
   };
   const base = K.base(o);
   const paintModelsDir = K.paintModels ? K.paintModels(o) : PAINT_OF[kind] && hasPnt ? base : null;
@@ -216,11 +222,21 @@ function plan(files, ctx, opts = {}) {
       dest = `${o.customDir}/${f.rel}`.replace(/^\/+/, ''); how = 'custom';
     }
 
+    // A body paint cannot become a helmet paint just because a mixed download
+    // carries helmet categories. Its texture IDs take precedence for placement.
+    if (/\.pnt$/i.test(fname) && (bodyPaintFiles.includes(f.rel) || (ctx.paintTextures?.[f.rel] || []).includes('rider'))) {
+      dest = needsRiderTarget ? null : `${modern ? `rider/riders/${riderTarget || 'default_mx'}` : 'rider'}/paints/${fname}`;
+      how = 'paint-content';
+    }
     let status;
     if (dest) {
       dest = dest.replace(/\/+/g, '/').replace(/^\//, '');
-      if (modern && kind !== 'custom') dest = dest.replace(/^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i, 'rider/riders/default_mx/$1/');
-      status = fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new';
+      if (modern && (kind !== 'custom' || autoKind)) dest = dest.replace(/^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i, 'rider/riders/default_mx/$1/');
+      if ((bodyPaintFiles.includes(f.rel) || (ctx.paintTextures?.[f.rel] || []).includes('rider')) && /\/paints\//i.test(dest) && /^rider\//i.test(dest)) {
+        if (needsRiderTarget) { dest = null; how = 'missing-rider'; }
+        else if (riderTarget) dest = dest.replace(/^rider\/riders\/default_mx\//i, `rider/riders/${riderTarget}/`);
+      }
+      status = !dest ? 'unresolved' : fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new';
     } else if (DOC_EXT.test(fname)) status = 'skip';
     else status = 'unresolved';
     entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how });
@@ -234,6 +250,8 @@ function plan(files, ctx, opts = {}) {
   if (needsPaintTarget) warnings.push(`Choose which ${paintModelsDir.split('/').pop().replace(/s$/, '')} these paints are for.`);
   if (counts.unresolved) warnings.push(`${counts.unresolved} file(s) have no destination and will be skipped.`);
   if (counts.overwrite) warnings.push(`${counts.overwrite} file(s) already exist and will be replaced.`);
+  if (ctx.unreadablePaints?.length) warnings.push('Some paints could not be inspected. Check the creator’s required model and target folder before installing.');
+  if (needsRiderTarget) warnings.push(`These are paints for a different rider model (${bodyTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t)).join(', ') || 'custom rider'}). Install the matching model, then choose it below. Paints do not include the model.`);
   const required = new Map();
   for (const entry of entries.filter((e) => e.dest && /\.pnt$/i.test(e.dest))) {
     const match = entry.dest.match(/^(.*?\/(helmets|boots|protections)\/[^/]+)\/(?:paints|goggles)\//i) || entry.dest.match(/^(bikes\/[^/]+)\/paints\//i);
@@ -253,7 +271,7 @@ function plan(files, ctx, opts = {}) {
   // Everything placed by the archive's own folder structure counts as certain even without a known type.
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
   const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title'
-    && !requiredModels.some((m) => !m.installed && !m.included)
+    && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && !ctx.unreadablePaints?.length
     && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
 
@@ -262,7 +280,7 @@ function plan(files, ctx, opts = {}) {
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
     options: o, paintModels, paintModelsBase: paintModelsDir, paintGuess,
-    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, dependencies: ctx.dependencies || [],
+    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels, needsRiderTarget, dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
     trackTypes: TRACK_TYPES,
   };
