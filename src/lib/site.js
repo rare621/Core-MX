@@ -28,11 +28,52 @@ const BROWSE_TABS = [
 
 let categoryMap = null; // id -> {name, parent}
 const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
-const ADDON_CATEGORIES = { liveries: [37, 51, 361], riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], gloves: [32], protection: [135], goggles: [380] };
+const ADDON_CATEGORIES = { riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], protection: [135], goggles: [380] };
+function needsCustomModel(html) {
+  const text = decode(html).replace(/\s+/g, ' ').replace(/\bno (?:other |additional |extra )?(?:mods?|models?)(?: are| is)? (?:required|needed)\b/gi, '');
+  return /\b(?:requires?|needs?|must (?:have|use)|only (?:works?(?: with)?|for)|made for|for use with)\b[^.!?]{0,150}\b(?:model|rider\+|hoodie|helmet|boots?|protector)\b|\b(?:custom model|rider\+|hoodie model)\b[^.!?]{0,100}\b(?:required|needed|not included|sold separately)\b/i.test(text);
+}
+function listingRequirements(html, description = '') {
+  const $ = cheerio.load(html);
+  const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
+  const combined = description + '\n' + instructions;
+  const needsModelNotice = needsCustomModel(combined);
+  const dependencies = dependenciesFromHtml(combined);
+  if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
+  return { needsModelNotice, dependencies, instructions };
+}
+const requirementCache = new Map();
+const requirementRequests = new Map();
+async function enrichListing(post, signal) {
+  if (post.categories.some((id) => [313, 343, 344, 365].includes(id))) return post;
+  if (post.needsModelNotice) return { ...post, gearKind: post.gearKind || 'paint' };
+  if (!post.categories.some((id) => [35, 52, 129, 309, 534].includes(id))) return post;
+  const cached = requirementCache.get(post.id);
+  if (cached && Date.now() - cached.at < 30 * 60 * 1000) return { ...post, ...cached.result };
+  if (!requirementRequests.has(post.id)) requirementRequests.set(post.id, (async () => {
+    try {
+      const response = await net.fetch(post.link, { headers: { 'User-Agent': UA }, signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
+      if (!response.ok) throw new Error('Instructions unavailable');
+      const details = listingRequirements(await response.text());
+      const result = { needsModelNotice: details.needsModelNotice, ...(details.needsModelNotice ? { gearKind: 'paint' } : {}) };
+      requirementCache.set(post.id, { result, at: Date.now() });
+      while (requirementCache.size > 200) requirementCache.delete(requirementCache.keys().next().value);
+      return result;
+    } catch { return { dependencyCheckFailed: true }; }
+    finally { requirementRequests.delete(post.id); }
+  })());
+  return { ...post, ...await requirementRequests.get(post.id) };
+}
+async function enrichListings(posts, signal) {
+  const result = new Array(posts.length); let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, posts.length) }, async () => { while (next < posts.length) { const index = next++; result[index] = await enrichListing(posts[index], signal); } }));
+  return result;
+}
 function isAddonPost(post) {
   const ids = post.categories || [];
+  if (ids.some((id) => [37, 51, 361, 32].includes(id))) return false;
   if (ids.some((id) => [313, 343, 344, 365, 45, 304, 22].includes(id))) return false;
-  return ids.some((id) => Object.values(ADDON_CATEGORIES).flat().includes(id)) || !!post.needsModelNotice || !!post.modelDependencies?.length;
+  return ids.some((id) => [127, 34, 126, 135, 380].includes(id)) || !!post.needsModelNotice || !!post.modelDependencies?.length;
 }
 function scopePosts(posts, scope) { return scope === 'all' ? posts : posts.filter((p) => isAddonPost(p) === (scope === 'addons')); }
 function browseCategory(tab, kind = 'all') {
@@ -45,8 +86,8 @@ function gearKind(ids) {
   return model && paint ? 'bundle' : model ? 'model' : paint ? 'paint' : ids.includes(34) ? 'addon' : null;
 }
 
-async function getJson(url) {
-  const res = await net.fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+async function getJson(url, signal) {
+  const res = await net.fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`mxb-mods.com returned HTTP ${res.status}`);
   return { json: await res.json(), headers: res.headers };
 }
@@ -81,6 +122,7 @@ function summarizePost(p, cats) {
     modified: p.modified,
     categories: p.categories || [],
     gearKind: gearKind(p.categories || []),
+    needsModelNotice: needsCustomModel(p.content?.rendered || p.excerpt?.rendered || ''),
     categoryNames: catNames,
     paid: (p.categories || []).some((c) => c === 359 || (cats[c] && cats[c].parent === 359)),
     image: pickImage(media, ['medium_large', 'medium', 'large', 'full']),
@@ -91,7 +133,7 @@ function summarizePost(p, cats) {
 // mxb-mods.com's "Popular" pages (ranked by views). Parsed, then resolved to full posts by slug.
 const POPULAR = { today: 'popular-today', week: 'popular-last-7-days', month: 'popular-last-30-days', all: 'popular-all-time' };
 const popularCache = new Map();
-async function popular(range) {
+async function fetchPopular(range) {
   const hit = popularCache.get(range);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.posts;
   const cats = await categories();
@@ -107,7 +149,7 @@ async function popular(range) {
   const bySlug = new Map();
   for (let i = 0; i < ranked.length; i += 50) {
     const slugs = ranked.slice(i, i + 50).map((r) => r.slug).join(',');
-    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,_links,_embedded' });
+    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,_links,_embedded' });
     const { json: posts } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
     for (const p of posts) bySlug.set(p.slug, summarizePost(p, cats));
   }
@@ -115,9 +157,46 @@ async function popular(range) {
   popularCache.set(range, { at: Date.now(), posts });
   return posts;
 }
+const popularPending = new Map();
+function popular(range) {
+  if (!popularPending.has(range)) popularPending.set(range, fetchPopular(range).finally(() => popularPending.delete(range)));
+  return popularPending.get(range);
+}
 
-async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', page = 1, perPage = 24, orderby = 'date' } = {}) {
+async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats) {
+  const deadline = AbortSignal.timeout(20000);
+  const t = browseCategory(tab, kind), scoped = scope === 'addons' ? { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() } : t;
+  const matches = (p) => (!scoped.cats || p.categories.some((id) => scoped.cats.includes(id) || scoped.cats.includes(cats[id]?.parent))) && (!scoped.exclude || !p.categories.some((id) => scoped.exclude.includes(id))) && (!query || p.title.toLowerCase().includes(query.toLowerCase()));
+  const sort = orderby === 'relevance' && !query ? 'popular-month' : orderby;
+  const featured = sort.startsWith('popular') ? scopePosts(await enrichListings((await popular(sort.split('-')[1] || 'month')).filter(matches), deadline), scope) : [];
+  let offset = Math.max(0, Number(cursor?.offset) || 0), featuredOffset = Math.max(0, Number(cursor?.featuredOffset) || 0), total = Infinity;
+  const posts = featured.slice(featuredOffset, featuredOffset + perPage); featuredOffset += posts.length;
+  // Inspect listing descriptions in the same request, never download archives or
+  // fetch each card separately. Carry the raw cursor so filtering cannot skip/repeat pages.
+  for (let batch = 0; posts.length < perPage && offset < total && batch < 3; batch++) {
+    const params = new URLSearchParams({ per_page: String(Math.min(100, Math.max(30, perPage))), offset: String(offset), _embed: 'wp:featuredmedia', _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,content,_links,_embedded', orderby: sort === 'title' ? 'title' : sort === 'modified' ? 'modified' : sort === 'relevance' && query ? 'relevance' : 'date' });
+    if (sort === 'title') params.set('order', 'asc');
+    if (query) params.set('search', query);
+    if (scoped.cats) params.set('categories', scoped.cats.join(','));
+    if (scoped.exclude) params.set('categories_exclude', scoped.exclude.join(','));
+    if (featured.length) params.set('exclude', featured.slice(0, 100).map((p) => p.id).join(','));
+    const response = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`, deadline);
+    total = Number(response.headers.get('x-wp-total') || 0);
+    if (!response.json.length) { offset = total; break; }
+    const enriched = await enrichListings(response.json.map((raw) => summarizePost(raw, cats)), deadline);
+    for (const p of enriched) {
+      offset++;
+      if (isAddonPost(p) === (scope === 'addons')) posts.push(p);
+      if (posts.length >= perPage) break;
+    }
+  }
+  const more = featuredOffset < featured.length || offset < total;
+  return { posts, total: 0, page, totalPages: more ? page + 1 : page, nextCursor: { offset, featuredOffset } };
+}
+
+async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', page = 1, perPage = 24, orderby = 'date', cursor = null } = {}) {
   const cats = await categories();
+  if (scope === 'free' || scope === 'addons') return scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats);
   let t = browseCategory(tab, kind);
   if (scope === 'addons') t = { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() };
   // "Best match" without a search reads as popular-first, like the popular sorts.
@@ -264,8 +343,9 @@ async function post(id) {
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
-  const needsModelNotice = !summary.categories.includes(365) && /only for|you(?:'|’)ll need|requires? (?:the|a|another)|\bneed\b[\s\S]{0,160}(?:model|paint)|model[\s\S]{0,160}\bneed\b/i.test($c('body').text());
-  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, downloads, needsModelNotice, dependencies: dependenciesFromHtml(p.content && p.content.rendered || ''), madeFor: betas, downloadCount: dlCount };
+  const details = listingRequirements(html, p.content && p.content.rendered || '');
+  const needsModelNotice = !summary.categories.includes(365) && details.needsModelNotice;
+  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description: description + (details.instructions ? '<h3>Mod instructions</h3>' + sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : ''), downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
 }
 
 function dependenciesFromHtml(html) {
@@ -296,4 +376,4 @@ async function postBySlug(slug) {
   return json[0] ? post(json[0].id) : null;
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES };
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements };

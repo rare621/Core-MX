@@ -4,6 +4,20 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
+const { filesMatch } = require('./file-verify');
+
+async function moveAcrossDevices(from, to, rename = fsp.rename) {
+  try { await rename(from, to); }
+  catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    let copied = false;
+    try {
+      await fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL); copied = true;
+      if (!await filesMatch([{ abs: from, dest: path.basename(to), size: (await fsp.stat(from)).size }], path.dirname(to))) throw new Error('Graphics file copy could not be verified');
+      await fsp.unlink(from);
+    } catch (e) { if (copied) await fsp.unlink(to).catch(() => {}); throw e; }
+  }
+}
 
 const isGraphics = (rec) => (rec?.files || []).some((f) => f.startsWith('game:'));
 function inside(root, relative) {
@@ -19,7 +33,7 @@ function inside(root, relative) {
 }
 const exists = (p) => fsp.stat(p).then((s) => s.isFile()).catch(() => false);
 
-function create({ gameDir, cacheDir, records, save, trash, isGameRunning }) {
+function create({ gameDir, cacheDir, records, save, trash, isGameRunning, transfer = moveAcrossDevices }) {
   let queue = Promise.resolve();
   const locked = (fn) => { const next = queue.catch(() => {}).then(async () => { if (await isGameRunning()) throw new Error('Close MX Bikes before changing graphics mods'); return fn(); }); queue = next; return next; };
   const cache = (key) => path.join(cacheDir(), crypto.createHash('sha256').update(key).digest('hex'));
@@ -33,8 +47,8 @@ function create({ gameDir, cacheDir, records, save, trash, isGameRunning }) {
   async function move(from, to, undo) {
     await fsp.mkdir(path.dirname(to), { recursive: true });
     if (await exists(to)) throw new Error('A graphics file already exists at the destination');
-    await fsp.rename(from, to);
-    undo.push(async () => { await fsp.mkdir(path.dirname(from), { recursive: true }); await fsp.rename(to, from); });
+    await transfer(from, to);
+    undo.push(async () => { await fsp.mkdir(path.dirname(from), { recursive: true }); await transfer(to, from); });
   }
   async function transaction(fn) {
     const undo = [];
@@ -128,4 +142,4 @@ function create({ gameDir, cacheDir, records, save, trash, isGameRunning }) {
     }),
   };
 }
-module.exports = { create, isGraphics };
+module.exports = { create, isGraphics, moveAcrossDevices };

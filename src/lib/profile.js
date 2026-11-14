@@ -122,7 +122,7 @@ async function loadout(modsDir, prof, bike, stockPkz) {
 
   const opts = {
     bikePaint: bikeDir ? await names(path.join(bikeDir, 'paints'), 'pnt') : [],
-    tyres: ['', ...await require('./tyres').options(modsDir, stockPkz)],
+    tyres: ['', ...await require('./tyres').options(modsDir, stockPkz, bikeDir, bike)],
     rider: await names(path.join(modsDir, 'rider', 'riders')),
     helmet: ['default', ...(await names(path.join(gd, 'helmets')))],
     helmetPaint: helmet ? await names(path.join(gd, 'helmets', helmet, 'paints'), 'pnt') : [],
@@ -135,12 +135,14 @@ async function loadout(modsDir, prof, bike, stockPkz) {
     bootsPaint: boots ? await names(path.join(gd, 'boots', boots, 'paints'), 'pnt') : await names(path.join(gd, 'boots'), 'pnt'),
   };
   Object.assign(opts, await gearAssets.catalog({ modsDir, rider: cur.rider, stockPkz }, cur));
+  const invalidTyres = cur.tyres && !opts.tyres.includes(cur.tyres) ? cur.tyres : null;
+  if (invalidTyres) cur.tyres = '';
   // Keep a current value that isn't a file on disk (built-in paints live inside the bike/gear .pkz).
   for (const s of SLOTS) {
     const v = cur[s.id];
     if (v && !opts[s.id].includes(v)) opts[s.id] = [v, ...opts[s.id]];
   }
-  return { bike, slots: SLOTS, current: cur, options: opts, protectionModel: protModel, selectedInGame: currentBike(prof) === bike, gearDir: gd };
+  return { bike, slots: SLOTS, current: cur, options: opts, invalidTyres, protectionModel: protModel, selectedInGame: currentBike(prof) === bike, gearDir: gd };
 }
 
 function isGameRunning() {

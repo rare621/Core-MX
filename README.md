@@ -17,6 +17,8 @@ MX Bikes Manager is a Windows desktop app for organizing your MX Bikes mods, fin
 
 You need 64-bit Windows and your own copy of MX Bikes. The installed app includes its runtime, so you do **not** need Node.js, npm, or the source code. Game and mod assets shown in the screenshots are installed separately.
 
+The app checks its configured GitHub release feed at startup, downloads an available update in the background, and installs it when you close the app or choose **Restart to update**. **Settings → General → App updates** also has Check now. A release feed must be reachable by the user; private GitHub repositories require access. Updates preserve the manager's settings and installed mods.
+
 This first release is unsigned, so Windows may show an unknown-publisher warning. Each release includes `SHA256SUMS.txt` for checking the installer download. Uninstalling the manager keeps your game mods and manager settings.
 
 ## Keep your mods organized
@@ -56,7 +58,7 @@ Preview support depends on the installed asset format. Some creator-specific, ac
 ![Mod browser showing free content and supported store tabs](docs/screenshots/get-mods.png)
 
 - Open listings to see their description, pictures, and download choices.
-- **MXB Mods** and **Addons** use the same live website listings. Addons filters for paints and dependent content, with relevant categories; browsing does not download mod archives.
+- **MXB Mods** and **Addons** use the same live website listings. Bike liveries, gloves and standard rider kits stay in MXB Mods. Addons contains gear paints and kits that require another model. Separate Mod Instructions are checked for rider-model requirements; browsing does not download mod archives or build a disk index.
 - Sign in on a supported shop's own page to access **your purchases**.
 - Install downloaded archives or drag files into the app.
 - Review the destination when a download needs help finding the right model.

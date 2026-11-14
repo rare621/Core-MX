@@ -38,9 +38,12 @@ const riderPaints = require('./src/lib/rider-paints');
 const installSummary = require('./src/lib/install-summary');
 const { mergeMove } = require('./src/lib/merge-move');
 const riderLayout = require('./src/lib/rider-layout');
+const appUpdates = require('./src/lib/app-updates');
+const modelWorkers = require('./src/lib/model-workers').create();
 const paintCompat = require('./src/lib/paint-compat');
 const { chainOf, readChain } = require('./src/lib/asset-sources');
 let online = null;
+let updates = null;
 let riderWatch = null;
 function watchRiderProfiles() {
   if (riderWatch) return;
@@ -573,6 +576,12 @@ function handle(ch, fn) { ipcMain.handle(ch, async (_e, ...args) => fn(...args))
 
 function registerIpc() {
   handle('app:env', () => environment());
+  handle('app:updates', () => updates?.status() || { phase: 'idle', current: app.getVersion() });
+  handle('app:checkUpdates', () => updates?.check());
+  handle('app:installUpdate', () => {
+    if ([...jobs.values()].some((j) => !['done', 'error'].includes(j.status))) throw new Error('Finish or cancel your mod downloads and installs before restarting to update.');
+    store.flush(); updates?.install();
+  });
   handle('settings:set', (patch) => {
     store.update('settings', (s) => ({ ...s, ...patch }));
     return environment();
@@ -1052,7 +1061,7 @@ function registerIpc() {
     let category = game.classFor(bike);
     if (!category && model) {
       const data = await readChain(await chainOf([{ dir: model }]), bike + '.ini');
-      category = data?.buf.toString('latin1').match(/^\s*category\s*=\s*([^\r\n;]+)/mi)?.[1].trim() || scanner.detectClass(bike);
+      category = data?.buf.toString('latin1').match(/^\s*(?:category|cat)\s*=\s*([^\r\n;]+)/mi)?.[1].trim() || scanner.detectClass(bike);
     }
     return category;
   }
@@ -1092,9 +1101,11 @@ function registerIpc() {
     if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
     const prof = await profile.readProfile(profUserDir(), name), preview = draftProfile(prof, bike, changes);
     const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
+    if (changes.tyres && !next.options.tyres.includes(changes.tyres)) throw new Error('That tyre set is not available for this bike. Choose one from its tyre list.');
     if (next.current.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next.current });
     const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
     const category = await installedBikeCategory(bike) || prof.sections.info?.values.class;
+    values.push(['tyres', bike, next.current.tyres || '']);
     values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);
     await profile.writeValues(profUserDir(), name, values); await profile.activateProfile(profUserDir(), name);
     const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
@@ -1112,7 +1123,8 @@ function registerIpc() {
     const selected = active && await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), active), bike, stockRiderPkz());
     const tyre = Object.hasOwn(previewCurrent, 'tyres') ? previewCurrent.tyres : selected?.current.tyres;
     if (tyre && !gearAssets.validName(tyre)) throw new Error('Invalid tyre selection');
-    return bike3d.build({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, tyresOverride: tyre,
+    if (tyre && !selected?.options.tyres.includes(tyre)) throw new Error('That tyre set is not available for this bike');
+    return modelWorkers.build('bike', { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, tyresOverride: tyre,
       bikeDir: await profile.findBikeDir(modsDir(), bike), paint, texMax: Math.min(1024, Math.max(128, Number(texMax) || 1024)) });
   });
   handle('rider:deleteModel', async (model) => {
@@ -1139,13 +1151,13 @@ function registerIpc() {
   handle('rider:previewModel', async (model) => {
     if (typeof model !== 'string' || /[\\/]|^\.+$/.test(model)) throw new Error('Invalid rider model');
     const inst = store.get('settings').gameInstallDir;
-    return rider3d.build({ modsDir: modsDir(), gd: profile.gearDir(modsDir(), model), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: { rider: model, helmet: 'default', boots: 'default' }, texMax: 512 });
+    return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), model), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: { rider: model, helmet: 'default', boots: 'default' }, texMax: 512 });
   });
   // 3D preview of a bike's outfit. `override` previews values without saving them.
   handle('rider:model', async (name, bike, override) => {
     const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
     const inst = store.get('settings').gameInstallDir;
-    return rider3d.build({ modsDir: modsDir(), gd: lo.gearDir, stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: { ...lo.current, ...(override || {}) } });
+    return modelWorkers.build('rider', { modsDir: modsDir(), gd: lo.gearDir, stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: { ...lo.current, ...(override || {}) } });
   });
   // Thumbnail model for one option of one slot: only the gear that slot changes, small textures.
   const SLOT_PARTS = { helmet: ['helmet'], helmetPaint: ['helmet'], gogglesPaint: ['helmet'], suitPaint: ['body'], glovesPaint: ['body'], rider: ['body'], boots: ['boots'], bootsPaint: ['boots'], protection: ['protection'], protectionPaint: ['protection'] };
@@ -1160,14 +1172,14 @@ function registerIpc() {
     if (slot === 'rider') { cur.suitPaint = ''; cur.glovesPaint = ''; }
     if (slot === 'boots') cur.bootsPaint = '';
     if (slot === 'protection') cur.protectionPaint = '';
-    return rider3d.build({ modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, only, texMax: 256 });
+    return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, only, texMax: 256 }, true);
   });
   handle('rider:copyToAll', async (name, fromBike) => {
     const prof = await profile.readProfile(profUserDir(), name);
     const lo = await profile.loadout(modsDir(), prof, fromBike);
     const bikes = (await profile.listBikes(modsDir(), prof)).filter((b) => b.installed && b.id !== fromBike);
     const outfit = {};
-    for (const s of profile.SLOTS) if (s.id !== 'bikePaint' && lo.current[s.id] != null) outfit[s.id] = lo.current[s.id];
+    for (const s of profile.SLOTS) if (s.group !== 'Bike' && lo.current[s.id] != null) outfit[s.id] = lo.current[s.id];
     const changes = Object.fromEntries(bikes.map((b) => [b.id, outfit]));
     await profile.saveLoadouts(profUserDir(), name, changes);
     return { count: bikes.length };
@@ -1208,13 +1220,16 @@ function registerIpc() {
   handle('installs:uninstall', async (key) => {
     const rec = store.get('installs')[key];
     if (!rec) return;
-    if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); send('library:changed', {}); return; }
+    const resetJobs = () => { for (const j of jobs.values()) if (j.status === 'done' && (String(j.postId) === key || j.installed?.some((f) => rec.files.includes(f)))) { j.filesDeleted = true; j.installed = []; j.status = 'error'; j.error = null; j.note = 'Installed files removed'; emitJob(j); } };
+    if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); resetJobs(); send('library:changed', {}); return; }
     for (const f of rec.files) {
       const abs = f.startsWith('game:') ? path.join(store.get('settings').gameInstallDir, f.slice(5)) : path.join(modsDir(), f);
-      if (fs.existsSync(abs) && (insideRoots(abs) || insideGame(abs))) await shell.trashItem(abs).catch(() => {});
+      if (fs.existsSync(abs) && (insideRoots(abs) || insideGame(abs))) await shell.trashItem(abs);
     }
     store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; });
+    resetJobs();
     await scan();
+    send('library:changed', {});
   });
 
   handle('game:launch', async (opts = {}) => {
@@ -1321,6 +1336,8 @@ app.whenReady().then(async () => {
   thumbs = new Thumbs(path.join(app.getPath('userData'), 'thumbs'), () => Object.values(store.get('images')));
   await thumbs.prune().catch(() => {});
   initSettings();
+  updates = appUpdates.create({ updater: require('electron-updater').autoUpdater, packaged: app.isPackaged && !process.env.MXB_DEBUG_SHOT, version: app.getVersion(), notify: (state) => send('app:update', state) });
+  setTimeout(() => updates.start(), 2500).unref();
   // Repair this manager's previous accessory routing before online sync can use it.
   if (!await profile.isGameRunning()) await repairGearFolders().catch((e) => console.warn('Gear folder repair:', e.message));
   setupDownloadsSession();
@@ -1361,3 +1378,4 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => { if (online) online.stop(); store && store.flush(); app.quit(); });
+app.on('will-quit', () => modelWorkers.dispose());
