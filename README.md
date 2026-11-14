@@ -10,7 +10,7 @@ MX Bikes Manager is a Windows desktop app for organizing your MX Bikes mods, fin
 
 ## Install and get started
 
-1. Open [Releases](https://github.com/rare621/MXB-MANAGER/releases/latest) and download **MX-Bikes-Manager-Setup-1.0.0-x64.exe**.
+1. Open [Releases](https://github.com/rare621/MXB-MANAGER/releases/latest) and download the latest **MX-Bikes-Manager-Setup-…-x64.exe**.
 2. Run the setup and choose where to install it. The setup adds desktop and Start menu shortcuts.
 3. Open **MX Bikes Manager**. It looks for your Steam game install and your `Documents\PiBoSo\MX Bikes` folder. You can choose the folders yourself if needed.
 4. Browse **My Mods**, build an outfit under **Rider**, or find something new in **Get Mods**.
