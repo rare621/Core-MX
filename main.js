@@ -1174,6 +1174,20 @@ function registerIpc() {
     if (slot === 'protection') cur.protectionPaint = '';
     return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, only, texMax: 256 }, true);
   });
+  // A full, interactive preview for an option in the Rider picker.  It uses the
+  // draft loadout supplied by the renderer, but never writes it to the game.
+  handle('rider:previewSlot', async (name, bike, slot, value, previewCurrent = {}) => {
+    if (!profile.SLOTS.some((s) => s.id === slot) || typeof value !== 'string' || value.length > 200 || /[\\/]|^\.+$/.test(value)) throw new Error('Invalid rider preview');
+    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
+    const overrides = Object.fromEntries(Object.entries(previewCurrent).filter(([key, v]) => profile.SLOTS.some((s) => s.id === key) && typeof v === 'string' && v.length < 200 && !/[\\/]|^\.+$/.test(v)));
+    const cur = { ...lo.current, ...overrides, [slot]: value };
+    if (slot === 'helmet') { cur.helmetPaint = ''; cur.gogglesPaint = ''; }
+    if (slot === 'rider') { cur.suitPaint = ''; cur.glovesPaint = ''; }
+    if (slot === 'boots') cur.bootsPaint = '';
+    if (slot === 'protection') cur.protectionPaint = '';
+    const inst = store.get('settings').gameInstallDir;
+    return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, texMax: 1024 });
+  });
   handle('rider:copyToAll', async (name, fromBike) => {
     const prof = await profile.readProfile(profUserDir(), name);
     const lo = await profile.loadout(modsDir(), prof, fromBike);
@@ -1361,7 +1375,12 @@ app.whenReady().then(async () => {
       if (!list.last) return null;
       const prof = await profile.readProfile(profUserDir(), list.last);
       const bike = profile.currentBike(prof);
-      return bike ? { prof, bike, bikeName: bike } : null;
+      // A purchase from a shop is personal to that account.  Keep those paths
+      // out of peer sync even when the file itself is readable locally.
+      const protectedPaths = Object.values(store.get('installs'))
+        .filter((r) => r.shopKey || /mxbikes-shop|mxb-hub/i.test(String(r.link || '')))
+        .flatMap((r) => r.files || []);
+      return bike ? { prof, bike, bikeName: bike, protectedPaths } : null;
     },
     // Whether a model a friend's paint needs is installed (bike / helmet / boots / protection).
     haveMod: async (n) => {

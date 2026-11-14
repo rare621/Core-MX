@@ -113,7 +113,7 @@ function renderRail() {
   const packUpd = S.packsNeed || 0;
   const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
   $('#rail').innerHTML = VIEWS.map((v) => btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
-    + `<div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-act="open-friends" title="Friends & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
+    + `<button class="rail-btn rail-friends ${S.view === 'friends' ? 'active' : ''}" data-view="friends">${icon('user')}<span>Friends</span></button><div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-view="friends" title="Friends, sync & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends, sync & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
 }
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
@@ -142,6 +142,7 @@ function render() {
   else if (S.view === 'get') renderGet(c);
   else if (S.view === 'packs') renderPacks(c);
   else if (S.view === 'online') renderOnline(c);
+  else if (S.view === 'friends') renderFriends(c);
   else if (S.view === 'graphics') renderGraphics(c);
   else if (S.view === 'game') renderGame(c);
   else if (S.view === 'downloads') (S.dlTab === 'updates' ? renderInstalled(c) : renderDownloads(c));
@@ -161,6 +162,43 @@ function renderSetup(c) {
 function gearName(i) { return i.sub.split('/').pop(); }
 function isOldGear(i) { return i.group === 'rider' && i.sub.startsWith('legacy/'); }
 const GEAR_MAIN = ['helmets', 'paints', 'gloves', 'boots', 'boots paints', 'protections', 'goggles', 'riders'];
+// A number of older downloads put every colourway beside the model as a loose
+// .pnt file.  My Gear presents those as one item, then lets the player open
+// the colourways on demand instead of filling the library with near-identical
+// cards.  We only combine an unmistakable colour/edition suffix and only when
+// there are two or more matching files, so ordinary single-file gear remains
+// exactly as installed.
+const PAINT_VARIANT_WORDS = new Set('black white red blue green yellow orange purple pink grey gray silver gold aqua teal cyan lime maroon navy brown tan sand chrome carbon camo monster fire glow mirror matte gloss bright dark light classic factory stock default edition team'.split(' '));
+function gearFamilyBase(it) {
+  if (it.group !== 'rider' || it.kind !== 'pnt' || !['helmets', 'paints', 'gloves', 'boots', 'boots paints', 'protections', 'goggles'].includes(gearName(it))) return '';
+  const words = it.title.replace(/\.[^.]+$/, '').trim().split(/\s+/);
+  let cut = 0;
+  while (words.length - cut > 2 && PAINT_VARIANT_WORDS.has(words[words.length - 1 - cut].toLowerCase())) cut++;
+  return cut ? words.slice(0, -cut).join(' ') : '';
+}
+function compactGearItems(items) {
+  if (S.lib.scope !== 'rider') return items;
+  const families = new Map();
+  for (const it of items) {
+    const base = gearFamilyBase(it);
+    if (!base) continue;
+    const key = `${it.sub}|${base.toLowerCase()}`;
+    if (!families.has(key)) families.set(key, { base, items: [] });
+    families.get(key).items.push(it);
+  }
+  const replace = new Map();
+  for (const [key, f] of families) if (f.items.length > 1) {
+    const preferred = f.items.find((i) => /\b(default|stock|black|white)\b/i.test(i.title)) || f.items[0];
+    replace.set(key, { ...preferred, id: `family:${key}`, name: f.base, title: f.base, family: f.items, variantCount: f.items.length, paints: f.items.length });
+  }
+  const result = [], used = new Set();
+  for (const it of items) {
+    const base = gearFamilyBase(it), key = base && `${it.sub}|${base.toLowerCase()}`;
+    if (!key || !replace.has(key)) { result.push(it); continue; }
+    if (!used.has(key)) { result.push(replace.get(key)); used.add(key); }
+  }
+  return result;
+}
 const LIB_TABS = {
   mods: [
     { id: 'bikes', label: 'Bikes', icon: 'bike', match: (i) => i.group === 'bikes' },
@@ -214,7 +252,7 @@ for (const category of ['helmets', 'paints', 'gloves', 'boots', 'protections', '
   FACETS[category] = [{ key: 'brand', label: 'Brand', get: (i) => gearBrand(`${i.name} ${i.title}`), fmt: (v) => v }];
 }
 
-function filterItems() {
+function filterItemsRaw() {
   let xs = tabItems();
   const q = S.lib.quick;
   if (q === 'fav') xs = xs.filter((i) => i.favorite);
@@ -235,6 +273,9 @@ function filterItems() {
     size: (a, b) => b.size - a.size,
   }[S.lib.sort] || ((a, b) => a.title.localeCompare(b.title));
   return [...xs].sort(cmp);
+}
+function filterItems() {
+  return compactGearItems(filterItemsRaw());
 }
 
 function renderLibrary(c) {
@@ -259,7 +300,7 @@ function renderLibrary(c) {
 function drawLibTabs() {
   const all = libItems();
   $('#libTabs').innerHTML = LIB_TABS[S.lib.scope || 'mods'].map((t) => {
-    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length : '') : all.filter(t.match).length;
+    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length : '') : compactGearItems(all.filter(t.match)).length;
     if (!n && t.id === 'more') return '';
     return `<button class="bigtab ${t.id === currentTab().id ? 'active' : ''}" data-libtab="${t.id}">${icon(t.icon)}<span>${t.label}</span><span class="n">${n}</span></button>`;
   }).join('');
@@ -287,7 +328,7 @@ const SORTS = [['name', 'Name'], ['newest', 'Newest'], ['size', 'Size']];
 const FACET_ALL = { brand: 'All brands', cc: 'All sizes', cls: 'All classes', type: 'All types' };
 
 function drawLibFilters(count) {
-  const base = tabItems();
+  const base = compactGearItems(tabItems());
   const pills = [];
   S.lib.facetOpts = {};
   for (const fc of FACETS[currentTab().id] || []) {
@@ -332,7 +373,7 @@ function cardMeta(it) {
   if (it.group === 'bikePaints') return [esc(it.bikeTitle || bikeTitle(it.bike)), it.cc && `${esc(it.cc)}cc`].filter(Boolean).join('<span class="dot"></span>');
   if (it.group === 'bikes') { if (it.cc) bits.push(it.cc === 'Electric' ? 'Electric' : `${it.cc}cc`); if (it.bikeClass) bits.push(it.bikeClass); if (it.paints) bits.push(`${it.paints} paint${it.paints > 1 ? 's' : ''}`); }
   else if (it.group === 'tracks') bits.push(esc((it.info && it.info.author) || it.label));
-  else { bits.push(esc(it.label.replace(' · old layout', ''))); if (it.paints) bits.push(`${it.paints} paints`); }
+  else { bits.push(esc(it.label.replace(' · old layout', ''))); if (it.variantCount) bits.push(`${it.variantCount} colourways`); else if (it.paints) bits.push(`${it.paints} paints`); }
   return bits.join('<span class="dot"></span>');
 }
 
@@ -418,11 +459,31 @@ document.addEventListener('click', (e) => {
   const card = e.target.closest('[data-item]');
   if (!card || !card.closest('#libScroll')) return;
   const id = card.dataset.item;
+  const family = id.startsWith('family:') ? filterItems().find((i) => i.id === id && i.family) : null;
+  if (family) {
+    if (e.target.closest('[data-check]') || e.ctrlKey || e.shiftKey || S.selected.size > 0) {
+      for (const it of family.family) S.selected.has(it.id) ? S.selected.delete(it.id) : S.selected.add(it.id);
+      renderLibItems();
+    } else openGearFamily(family);
+    return;
+  }
   const clickedItem = S.items.find((i) => i.id === id);
   if (clickedItem && clickedItem.stock) { openItem(id); return; } // built-in tracks can't be selected for bulk actions
   if (e.target.closest('[data-check]') || e.ctrlKey || e.shiftKey || S.selected.size > 0) toggleSelect(id);
   else openItem(id);
 });
+
+function openGearFamily(family) {
+  const m = modal({
+    title: esc(family.title), size: 'md',
+    body: `<p class="muted" style="margin-top:0">${family.variantCount} installed colourways. Choose one to view its files, image, or delete it.</p><div class="gear-family-grid">${family.family.map((it) => `<button class="gear-family-choice" data-family-item="${esc(it.id)}"><span class="gear-family-thumb">${thumbHtml(it)}</span><span><b>${esc(it.title)}</b><small>${esc(it.label)}</small></span>${icon('chevron')}</button>`).join('')}</div>`,
+  });
+  $('.modal-body', m).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-family-item]');
+    if (!b) return;
+    m.close(); openItem(b.dataset.familyItem);
+  });
+}
 
 async function rescan(quiet) {
   const r = await api.invoke('library:scan');
@@ -555,6 +616,25 @@ function confirmBox(title, html, okLabel = 'Confirm', danger = false) {
       onClose: () => { if (!done) resolve(false); },
     });
     $('[data-ok]', m).addEventListener('click', () => { done = true; m.close(); resolve(true); });
+  });
+}
+
+// Removing a row from Downloads is deliberately separate from removing the
+// mod.  This prevents an accidental X from uninstalling something the player
+// has just added, while still giving them a one-click way to clean it up.
+function dismissDownloadPrompt(job) {
+  return new Promise((resolve) => {
+    let answer = null;
+    const hasFiles = !job.filesDeleted;
+    const m = modal({
+      title: 'Remove from Downloads', size: 'sm',
+      body: `<div style="color:var(--text-2)">Remove <b>${esc(job.title)}</b> from this list?${hasFiles ? '<p class="muted" style="margin:10px 0 0">Keeping files only removes the completed-download history. Deleting files moves installed or downloaded files to the Recycle Bin.</p>' : ''}</div>`,
+      foot: `<button class="btn" data-close>Cancel</button><button class="btn" data-dismiss-keep>Keep files</button>${hasFiles ? '<button class="btn btn-danger" data-dismiss-delete>Delete files</button>' : ''}`,
+      onClose: () => resolve(answer),
+    });
+    $('[data-dismiss-keep]', m).addEventListener('click', () => { answer = 'keep'; m.close(); });
+    const remove = $('[data-dismiss-delete]', m);
+    if (remove) remove.addEventListener('click', () => { answer = 'delete'; m.close(); });
   });
 }
 
@@ -1120,7 +1200,17 @@ document.addEventListener('click', async (e) => {
   else if (act === 'browser') api.invoke('jobs:openBrowser', id);
   else if (act === 'cancel') api.invoke('jobs:cancel', id);
   else if (act === 'library') { S.lib.quick = 'app'; go('library'); }
-  else if (act === 'dismiss') { await api.invoke('jobs:dismiss', id); S.jobs.delete(id); renderDownloads($('#content')); renderRail(); }
+  else if (act === 'dismiss') {
+    const job = S.jobs.get(id);
+    const choice = await dismissDownloadPrompt(job);
+    if (!choice) return;
+    try {
+      if (choice === 'delete' && !job.filesDeleted) await api.invoke('jobs:deleteFiles', id);
+      await api.invoke('jobs:dismiss', id);
+      S.jobs.delete(id); renderDownloads($('#content')); renderRail();
+      toast(choice === 'delete' ? 'Files moved to the Recycle Bin' : 'Removed from Downloads. Files were kept.', 'ok');
+    } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+  }
 });
 
 // ---------- install review ----------
@@ -1614,7 +1704,7 @@ function gearPicker(slot, opts, lo, config = {}) {
       const key = gearThumbKey(slot.id, o.value, lo);
       return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" data-v="${esc(o.value)}" data-key="${esc(key)}">
         <span class="gear-img">${tileImg(key)}</span>${o.value === current ? `<span class="badge ok gear-sel">${icon('check')}Wearing</span>` : ''}
-        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button>${!config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
+        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button><button class="gear-view btn btn-icon" data-view-gear="${esc(o.value)}" title="View ${esc(o.label)} in 3D" aria-label="View ${esc(o.label)} in 3D">${icon('eye')}</button>${!config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
     }).join('') : `<div class="empty"><div>${icon('search')}<h3>No matches</h3></div></div>`;
     $$('.gear-tile', m).forEach((t) => io.observe(t));
   };
@@ -1629,6 +1719,12 @@ function gearPicker(slot, opts, lo, config = {}) {
     catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
   });
   $('#gpGrid', m).addEventListener('click', async (e) => {
+    const view = e.target.closest('[data-view-gear]');
+    if (view) {
+      const option = opts.find((o) => o.value === view.dataset.viewGear);
+      openGearPreview({ slot, value: view.dataset.viewGear, label: option?.label || prettyValue(slot.id, view.dataset.viewGear), lo, context: R });
+      return;
+    }
     const remove = e.target.closest('[data-delete-paint]');
     if (remove) {
       const value = remove.dataset.deletePaint;
@@ -1645,6 +1741,34 @@ function gearPicker(slot, opts, lo, config = {}) {
   });
   draw();
   setTimeout(() => $('#gpQ', m).focus(), 50);
+}
+
+// Opens a larger, rotatable render without changing the draft outfit.  The
+// option's parent picker stays open behind it, so View is safe to use while
+// comparing colours or models.
+async function openGearPreview({ slot, value, label, lo, context }) {
+  const R = context || S.rider;
+  const m = modal({
+    title: `View — ${esc(label)}`, size: 'gear-preview-modal',
+    body: `<div class="gear-preview-stage" data-gear-preview><div class="loadmore"><div class="spinner"></div><span>Loading 3D preview…</span></div></div><p class="muted gear-preview-help">Drag to turn · scroll to zoom · double-click to reset. This is only a preview.</p>`,
+  });
+  let viewer = null;
+  try {
+    const model = slot.id === 'bikePaint'
+      ? await api.invoke('bike:model', R.profile, R.bike, value, 1024, lo.current)
+      : await api.invoke('rider:previewSlot', R.profile, R.bike, slot.id, value, lo.current);
+    const host = $('[data-gear-preview]', m);
+    if (!host || !m.isConnected) return;
+    host.replaceChildren();
+    if (!window.RiderViewer) throw new Error('3D viewer is still loading');
+    viewer = window.RiderViewer.create(host);
+    viewer.load(model);
+  } catch (e) {
+    const host = $('[data-gear-preview]', m);
+    if (host && m.isConnected) host.innerHTML = `<div class="stage-err">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`;
+  }
+  const oldClose = m.close;
+  m.close = () => { viewer?.dispose(); oldClose(); };
 }
 
 // ---------- accounts (Steam + shops) ----------

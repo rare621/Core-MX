@@ -38,9 +38,10 @@ api.on('online:status', (st) => {
   const key = (s) => JSON.stringify([s?.service, s?.plugin, s?.paintSync?.enabled, s?.paintSync?.error, s?.paintSync?.at, s?.paintSync?.friends]);
   if (S.friendsPanel?.body && key(previous) !== key(st)) renderFriends(S.friendsPanel.body);
   const overlay = $('#friendsSyncOverlay'); if (overlay) overlay.innerHTML = friendProgressHtml();
-  if (S.view !== 'online') return;
+  if (S.view !== 'online' && S.view !== 'friends') return;
+  if (S.view === 'friends') { if (key(previous) !== key(st)) renderFriends($('#content')); return; }
   if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(); }
-  if (S.onlineTab === 'friends') {
+  if (S.onlineTab === 'friends' || S.view === 'friends') {
     if (key(previous) !== key(st)) renderFriends($('#content'));
     else { const overlay = $('#friendsSyncOverlay'); if (overlay) overlay.innerHTML = friendProgressHtml(); }
   }
@@ -143,7 +144,7 @@ function openLiveServer(s) {
 // "Sharing" card. Adding friends happens in one popup (Steam friends, or a friend code).
 async function renderFriends(c) {
   if (!c) return;
-  if (c.id === 'content') { if (S.friendsPanel?.body) await renderFriends(S.friendsPanel.body); if (S.view === 'online' && S.onlineTab === 'friends') return renderSync(c); return; }
+  if (c.id === 'content' && S.view !== 'friends') { if (S.friendsPanel?.body) await renderFriends(S.friendsPanel.body); if (S.view === 'online' && S.onlineTab === 'friends') return renderSync(c); return; }
   if (!S.friends) S.friends = await api.invoke('friends:list');
   if (!S.accounts.steam) await refreshAccounts();
   const st = await liveStatus();
@@ -171,11 +172,13 @@ async function renderFriends(c) {
   const joinable = (f) => { const l = live.get(f.code); return l && l.status === 'ok' && l.online && l.server && l.address ? l : null; };
   const paintLine = (f) => {
     const p = paints.get(f.code);
-    if (!p || !p.items.length) return '';
+    if (!p || (!p.items.length && !(p.unavailable || []).length)) return '';
     const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
     const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
     const bike = p.bikeName || (p.bike || '').replace(/^(?:MX\w*|SM\w*|EN\w*)OEM_/i, '').replace(/_/g, ' ');
-    return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} files synced</span></div>
+    const protectedItems = (p.unavailable || []).filter((it) => /paid|store-protected/i.test(it.error || ''));
+    return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}${p.items.length ? `<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} free files synced</span></div>` : ''}
+      ${protectedItems.map((it) => `<div class="fr-paid" title="Paid content is never transferred through Sync">${icon('cart')}<span>${esc(it.label)} · paid / store item — get it from the creator's store</span></div>`).join('')}
       ${need.map((n) => `<button class="fr-need" data-act="paint-get" data-name="${esc(n.name)}" title="Search Get Mods for it">Needs ${esc({ bike: 'bike', helmet: 'helmet', boots: 'boots', protection: 'protector' }[n.kind] || n.kind)} ${esc(n.name.replace(/_/g, ' '))} ${icon('search')}</button>`).join('')}</div>`;
   };
 
@@ -214,6 +217,7 @@ async function renderFriends(c) {
         : `<div class="fr-empty"><div class="fr-empty-ico">${icon('user')}</div><h3>Ride with your friends</h3>
             <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
+      ${S.view === 'friends' ? friendSettingsHtml(st) : ''}
     </div></div></div></div>`;
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
@@ -234,6 +238,11 @@ async function renderSync(c) {
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Online</h2>${onlineTabs()}</div><div class="scroller"><div class="fr-page"><div class="section-title">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Only currently equipped gear and the selected bike paint are shared.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div><p class="muted">Open friends and their gear from your Steam account at the bottom left.</p><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>`;
   $('#paintSync', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:paintSync', e.target.checked); renderSync(c); });
   $('#liveShare', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:share', e.target.checked); renderSync(c); });
+}
+
+function friendSettingsHtml(st) {
+  const ps = st?.paintSync || {}, connected = !!st?.service.connected;
+  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
 }
 
 async function toggleFriendsPanel() {
@@ -263,9 +272,9 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('click', async (e) => {
   const a = e.target.closest('[data-act]');
   const act = a && a.dataset.act;
-  if (act === 'open-friends') { toggleFriendsPanel(); return; }
+  if (act === 'open-friends') { go('friends'); return; }
   const busy = (fn) => async () => { const old = a.innerHTML; a.disabled = true; a.innerHTML = '<div class="spinner" style="width:14px;height:14px"></div>'; try { await fn(); } catch (err) { toast(esc(cleanErr(err)), 'err', 7000); } a.disabled = false; a.innerHTML = old; };
-  const rerender = () => { S.live.servers = null; S.live.friends = null; renderOnline($('#content')); };
+  const rerender = () => { S.live.servers = null; S.live.friends = null; S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content')); };
   if (act === 'live-plugin-install') return busy(async () => { S.live.status = await api.invoke('online:pluginInstall'); toast('Plugin installed — it starts next time you open MX Bikes', 'ok', 4000); rerender(); })();
   if (act === 'live-plugin-remove') { if (await confirmBox('Remove plugin', 'Remove the MX Bikes Manager plugin from your game\'s plugins folder?', 'Remove', true)) busy(async () => { S.live.status = await api.invoke('online:pluginRemove'); rerender(); })(); return; }
   if (act === 'live-connect') return busy(async () => { S.live.status = await api.invoke('online:connect'); toast('Online', 'ok'); rerender(); })();

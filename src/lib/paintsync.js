@@ -17,7 +17,9 @@ const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { re
 const modelOf = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
 const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(full|neck)$/i.test(name) : name === 'default';
 
-async function outfitFiles(modsDir, prof, bike) {
+async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
+  const protectedSet = new Set(protectedPaths.map((p) => String(p).replace(/^game:/, '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()));
+  const protectedItem = (target) => protectedSet.has(String(target).replace(/\\/g, '/').toLowerCase());
   const lo = await profile.loadout(modsDir, prof, bike);
   const c = lo.current, rider = c.rider || 'default_mx', prefix = 'rider/riders/' + rider;
   const bikeDir = await profile.findBikeDir(modsDir, bike);
@@ -33,7 +35,8 @@ async function outfitFiles(modsDir, prof, bike) {
       const buf = await modelBundle({ modsDir, rider, kind, name });
       if (!buf) throw new Error('Model files are missing or unreadable');
       const target = kind === 'rider' ? 'rider/riders/' + name + '.pkz' : 'rider/' + { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind] + '/' + name + '.pkz';
-      items.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, value: name, rider, modelKind: kind, path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
+      if (protectedItem(target)) unavailable.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, error: 'Paid or store-protected item — friends must get it from its official store' });
+      else items.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, value: name, rider, modelKind: kind, path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
     } catch (e) { unavailable.push({ slot: kind, label: name, error: e.message }); }
   }
   for (const s of profile.SLOTS.filter((s) => /Paint$/.test(s.id))) {
@@ -54,7 +57,8 @@ async function outfitFiles(modsDir, prof, bike) {
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
       if (modelOf[s.id] && c[modelOf[s.id]] && !defaults(modelOf[s.id], c[modelOf[s.id]])) needs.push({ kind: modelOf[s.id], name: c[modelOf[s.id]], rider });
       if (['suitPaint', 'glovesPaint'].includes(s.id) && !defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
-      items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
+      if (protectedItem(target)) unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: 'Paid or store-protected item — friends must get it from its official store' });
+      else items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
     } catch (e) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: e.message }); }
   }
   const tyre = await tyres.selected(modsDir, prof, bike, bikeDir);
@@ -67,7 +71,9 @@ async function outfitFiles(modsDir, prof, bike) {
     if (!exists) continue; // Built-in game tyres are already available on both PCs.
     try {
       const buf = await modelBundle({ modsDir, kind: 'tyres', name }); if (!buf) throw new Error('Tyre model is unavailable');
-      items.push({ slot, label: 'Tyres: ' + name, value: name, modelKind: 'tyres', path: 'tyres/' + name + '.pkz', sha256: sha256(buf), size: buf.length, buf, needs: [] });
+      const target = 'tyres/' + name + '.pkz';
+      if (protectedItem(target)) unavailable.push({ slot, label: 'Tyres: ' + name, error: 'Paid or store-protected item — friends must get it from its official store' });
+      else items.push({ slot, label: 'Tyres: ' + name, value: name, modelKind: 'tyres', path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
     } catch (e) { unavailable.push({ slot, label: name, error: e.message }); }
   }
   for (const e of equipped) {
@@ -77,8 +83,8 @@ async function outfitFiles(modsDir, prof, bike) {
   return { bike, items, unavailable, equipped };
 }
 
-async function share({ call, upload, modsDir, prof, bike, bikeName, onProgress = () => {} }) {
-  const outfit = await outfitFiles(modsDir, prof, bike);
+async function share({ call, upload, modsDir, prof, bike, bikeName, protectedPaths = [], onProgress = () => {} }) {
+  const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
   const r = await call('POST', '/v1/loadout', payload);

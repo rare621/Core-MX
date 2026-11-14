@@ -7,7 +7,7 @@ S.friends = null;
 
 function onlineTabs() {
   const t = (id, ic, l) => `<button class="${S.onlineTab === id ? 'active' : ''}" data-online-tab="${id}">${icon(ic)}${l}</button>`;
-  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('ranked', 'star', 'Ranked')}${t('host', 'play', 'Host')}${t('friends', 'refresh', 'Sync')}</div>`;
+  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('ranked', 'star', 'Ranked')}${t('host', 'play', 'Host')}</div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-online-tab]');
@@ -15,6 +15,7 @@ document.addEventListener('click', (e) => {
 });
 
 async function renderOnline(c) {
+  if (S.onlineTab === 'friends') S.onlineTab = 'servers';
   if (S.onlineTab === 'ranked') return renderRanked(c);
   if (S.onlineTab === 'friends') return renderFriends(c);
   if (S.onlineTab === 'host') { await renderHost(c); if (S.host.status && S.host.status.running) pollHost(); return; }
