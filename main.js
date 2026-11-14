@@ -60,6 +60,46 @@ function watchRiderProfiles() {
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
 function stockRiderPkz() { const inst = store.get('settings').gameInstallDir; return inst ? path.join(inst, 'rider.pkz') : null; }
+function dependencyKey(url) { try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.toLowerCase() || ''; } catch { return ''; } }
+function dependencyModelKind(dependency) {
+  const text = `${dependency.label || ''} ${dependency.url || ''}`.toLowerCase();
+  if (/\b(?:boot|boots|instinct)\b/.test(text)) return 'boots';
+  if (/\b(?:helmet|helmets|lid)\b/.test(text)) return 'helmets';
+  if (/\b(?:protect(?:ion|or)?|chest|neck\s*brace)\b/.test(text)) return 'protections';
+  return null;
+}
+function modelTerms(value) {
+  const ignored = new Set(['free', 'model', 'mod', 'mods', 'paint', 'paints', 'boot', 'boots', 'helmet', 'helmets', 'rider', 'required', 'base', 'the', 'and', 'for', 'with', 'pack']);
+  return [...new Set(String(value || '').toLowerCase().replace(/([a-z])([0-9])/g, '$1 $2').replace(/([0-9])([a-z])/g, '$1 $2').split(/[^a-z0-9]+/).filter((term) => (term.length >= 3 || /^\d+$/.test(term)) && !ignored.has(term)))];
+}
+function matchingModel(names, dependency) {
+  const wanted = modelTerms(`${dependency.label || ''} ${dependency.url || ''}`);
+  if (wanted.length < 2) return null;
+  return names.find((name) => {
+    const candidate = new Set(modelTerms(name));
+    const hits = wanted.filter((term) => candidate.has(term));
+    const wordHits = hits.filter((term) => !/^\d+$/.test(term));
+    // Matching a brand plus a version number is too loose (many unrelated
+    // models share numbers). Prefer two descriptive words such as fox +
+    // instinct, while still allowing an exact two-term model name.
+    return wordHits.length >= 2 || (wanted.length === 2 && hits.length === wanted.length);
+  }) || null;
+}
+function dependencySearchScore(candidate, dependency) {
+  const wanted = modelTerms(dependency.label);
+  const available = new Set(modelTerms(candidate.title));
+  const hits = wanted.filter((term) => available.has(term)).length;
+  return hits * 10 - Math.max(0, available.size - hits);
+}
+async function dependencyStatus(dependency, records, catalog) {
+  const key = dependencyKey(dependency.url);
+  const recorded = key && records.some((record) => dependencyKey(record.link) === key && record.files.some((file) => /\.(pkz|edf)$/i.test(file) && !file.startsWith('game:') && fs.existsSync(path.join(modsDir(), file))));
+  const kind = dependencyModelKind(dependency);
+  if (recorded) return { installed: true, kind };
+  if (!kind || !catalog) return { installed: null, kind };
+  const name = matchingModel(catalog[kind] || [], dependency);
+  return { installed: name ? true : false, kind, matchedName: name || '' };
+}
 function onlineConfig() {
   try {
     const root = app.isPackaged ? process.resourcesPath : __dirname;
@@ -681,6 +721,20 @@ function registerIpc() {
 
   handle('site:tabs', () => site.BROWSE_TABS.map(({ id, label }) => ({ id, label })));
   handle('site:search', (q) => site.search(q));
+  handle('site:findDependency', async (dependency) => {
+    const label = String(dependency?.label || '').trim().slice(0, 120);
+    if (!label) return [];
+    const kind = dependencyModelKind(dependency);
+    const tab = ({ boots: 'boots', helmets: 'helmets', protections: 'protection' })[kind] || 'all';
+    const requests = [
+      site.search({ query: label, tab, perPage: 12, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' })).catch(() => [])),
+      shops.search(ses, { shop: 'hub', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'hub' })).catch(() => [])),
+      shops.search(ses, { shop: 'mxbs', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'mxbs' })).catch(() => [])),
+    ];
+    const sets = await Promise.all(requests);
+    return sets.flat().map((item) => ({ ...item, dependencyScore: dependencySearchScore(item, dependency) }))
+      .filter((item) => item.dependencyScore > 0).sort((a, b) => b.dependencyScore - a.dependencyScore).slice(0, 6);
+  });
   handle('library:imageCandidates', async ({ query, tab = 'all', source = 'all' }) => {
     query = String(query || '').trim().slice(0, 200);
     if (!query) return { posts: [] };
@@ -720,13 +774,13 @@ function registerIpc() {
         post.dependencies = [...post.dependencies, ...info.dependencies];
       }
     }
-    const dependencyKey = (url) => { try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.toLowerCase(); } catch { return null; } };
     const records = Object.values(store.get('installs'));
     const paintListing = post.categories.some((c) => [127, 126, 135, 35, 309].includes(c)) && !post.categories.some((c) => [313, 343, 344, 365].includes(c));
-    if (paintListing) post.modelDependencies = post.dependencies.filter((d) => /model|helmet|boot|hoodie|protection|rider/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url)).map((d) => {
-      const installed = records.some((r) => dependencyKey(r.link) === dependencyKey(d.url) && r.files.some((f) => /\.(pkz|edf)$/i.test(f) && !f.startsWith('game:') && fs.existsSync(path.join(modsDir(), f))));
-      return { ...d, installed: installed ? true : null };
-    });
+    const dependencyCandidates = post.dependencies.filter((d) => /model|helmet|boot|hoodie|protection|rider|instinct/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url));
+    if (paintListing || post.needsModelNotice || dependencyCandidates.some((d) => d.inferred)) {
+      const catalog = await gearAssets.catalog({ modsDir: modsDir(), rider: 'default_mx', stockPkz: stockRiderPkz() }, {}).catch(() => null);
+      post.modelDependencies = await Promise.all(dependencyCandidates.map(async (d) => ({ ...d, ...await dependencyStatus(d, records, catalog) })));
+    }
     const hoodie = post.dependencies.find((d) => /\/rider-hoodie-abdesigns\/?(?:[?#].*)?$/.test(d.url));
     if (hoodie) {
       const models = await paintCompat.riderModels(modsDir(), stockRiderPkz());
