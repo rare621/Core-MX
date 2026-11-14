@@ -251,7 +251,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       progress({ phase: 'checking', label: 'Checking equipped files', completed: 0, total: 0, friendId });
       const health = await call('GET', '/v1/health');
-      if (health.version < 4) throw new Error('Update the online server using the new mxbm-online-service.zip (version 4) to enable gear and tyre sync');
+      if (health.version < 5) throw new Error('Update the online server using the new mxbm-online-service.zip (version 5) to enable accurate live-server status, gear and tyre sync');
       await syncFriends();
       const o = await currentOutfit();
       if (o) {

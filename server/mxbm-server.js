@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 4;
+const VERSION = 5;
 
 const SERVER_TTL = 20 * 60 * 1000;   // a server drops off the list 20 min after anyone last saw it
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
@@ -125,6 +125,18 @@ const routes = {
       inGame: !!s.inGame, inEvent: !!s.inEvent, server: str(s.server, 64) || null, serverAddress: isAddress(s.serverAddress) ? s.serverAddress : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
     };
+    // The game plugin reports a fresh non-event state as soon as MX Bikes
+    // closes or the rider leaves a server.  Remove that reporter from the
+    // old server immediately instead of leaving a "just now" ghost entry
+    // until the normal 20-minute server TTL expires.
+    const previous = presence.get(me.id)?.state;
+    if (previous?.server && (!state.inEvent || previous.server !== state.server)) {
+      const oldKey = serverKey(previous.server), old = db.servers[oldKey];
+      if (old) {
+        old.seenBy = (old.seenBy || []).filter((id) => id !== me.id);
+        if (!old.seenBy.length) delete db.servers[oldKey];
+      }
+    }
     me.user.name = str(body.name, 40) || me.user.name;
     me.user.lastSeen = Date.now();
     presence.set(me.id, { at: Date.now(), share: body.share !== false, state });
