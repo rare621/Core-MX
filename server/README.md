@@ -18,7 +18,7 @@ Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <f
 
 Stop the server window, then copy **mxbm-server.js** from the new release ZIP over the old script in your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json** and **mxbm-files** where they are: those contain the accounts and shared files. No account reset or port-forwarding change is needed.
 
-The health page reports `"version":4` for tyre packages, the rate-limit fix and equipped gear sync. Both riders also need the updated manager (1.0.7 or later).
+The health page reports `"version":5` for accurate leave/offline status, tyre packages, the rate-limit fix and equipped gear sync. Both riders also need the updated manager (1.0.8 or later).
 
 Signed-in riders have separate request allowances, including when they share one public IP. A busy service returns a `Retry-After` delay; the manager pauses requests and retries later instead of repeatedly refreshing. Anonymous requests remain limited by address.
 

@@ -317,10 +317,7 @@ document.addEventListener('click', async (e) => {
   if (fj) {
     const fr = S.friends[Number(fj.dataset.friendJoin)];
     const l = (S.live.friends || []).find((x) => x.id === fr.code);
-    if (l && l.address) {
-      if ((l.trackName || l.trackId) && !trackInstalled(l.trackName || l.trackId)) findFriendTrack(fr, l, true);
-      else joinServer(l.address, { name: l.server, address: l.address, track: l.trackName || l.trackId });
-    }
+    if (l && l.address) syncAndJoinFriend(fr, l).catch((err) => toast(esc(cleanErr(err)), 'err', 6500));
   }
 });
 
@@ -391,8 +388,7 @@ async function openFriendDetails(friend) {
     if (e.target.closest('[data-friend-track]')) { m.close(); findFriendTrack(friend, l); }
     if (e.target.closest('[data-friend-modal-join]') && l) {
       m.close();
-      if ((l.trackName || l.trackId) && !trackInstalled(l.trackName || l.trackId)) findFriendTrack(friend, l, true);
-      else joinServer(l.address, { name: l.server, track: l.trackName || l.trackId });
+      syncAndJoinFriend(friend, l).catch((err) => toast(esc(cleanErr(err)), 'err', 6500));
     }
   });
   draw(); await refresh();
@@ -416,6 +412,24 @@ async function findFriendTrack(friend, session, joinAfter = false) {
       else { S.shop.id = p.source === 'MX Bikes Shop' ? 'mxbs' : 'hub'; openProduct(p); }
     });
   } catch (e) { if (m.isConnected) $('.modal-body', m).textContent = cleanErr(e); }
+}
+
+// Joining a friend is deliberately a small preflight, not just a direct
+// connect: their current free gear, livery and tyre files are checked first,
+// then their current track is handled before MX Bikes launches.
+async function syncAndJoinFriend(friend, session) {
+  if (!session?.address) throw new Error('This server address is not known yet. Join it once from the game server list, or save the matching address.');
+  toast(`Checking ${esc(friend.name)}'s current gear…`, 'info', 2200);
+  S.live.status = await api.invoke('online:paintSyncNow', friend.code);
+  const sync = S.live.status.paintSync || {};
+  if (sync.error) throw new Error(sync.error);
+  const report = (sync.friends || []).find((entry) => entry.id === friend.code);
+  const problems = report?.items?.filter((item) => ['failed', 'name-taken', 'skipped'].includes(item.state)).length || 0;
+  if (problems) toast(`${problems} of ${friend.name}'s files need attention — open Gear & sync for details`, 'info', 5000);
+  else toast(`Checked ${friend.name}'s current free gear and tyres`, 'ok', 1800);
+  const track = session.trackName || session.trackId;
+  if (track && !trackInstalled(track)) return findFriendTrack(friend, session, true);
+  return joinServer(session.address, { name: session.server, address: session.address, track });
 }
 
 async function checkFriendTrackJoin() {

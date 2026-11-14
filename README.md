@@ -87,7 +87,7 @@ Use the bottom-left Steam account's **Friends & status** button to search friend
 
 Servers refresh every five minutes while the Online page is open, with a manual Refresh button. Population and network-ping filters are available. Capacity remains unknown when the service has no maximum-player count; network ping can be unavailable if a host blocks ICMP.
 
-Online hosts updating to 1.0.7 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip** (health version 4). Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
+Online hosts updating to 1.0.8 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip** (health version 5). Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
 
 To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
 

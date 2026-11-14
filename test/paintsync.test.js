@@ -133,7 +133,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
   await ac('POST', '/v1/friends', { ids: [a.id, b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 4);
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 5);
   const shared = await sync.share({ call: ac, upload: async (hash, bytes) => {
     const res = await fetch(url + '/v1/files/' + hash, { method: 'PUT', headers: { authorization: `Bearer ${a.token}` }, body: bytes });
     assert.ok(res.ok, (await res.json()).error);
@@ -150,6 +150,8 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const riding = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(riding.inEvent, true); assert.equal(riding.server, 'Fixture server'); assert.equal(riding.trackName, 'Fixture track');
   assert.equal((await ac('GET', '/v1/friends')).friends.find((f) => f.id === a.id).server, 'Fixture server');
+  await ac('POST', '/v1/presence', { state: { inGame: false, inEvent: false } });
+  assert.equal((await ac('GET', '/v1/servers')).servers.length, 0, 'leaving a server removes the stale live row immediately');
   // One client cannot exhaust another rider's allowance behind the same NAT.
   let limited;
   for (let i = 0; i < 301; i++) {
