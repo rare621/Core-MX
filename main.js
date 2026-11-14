@@ -99,6 +99,37 @@ function userDir() { return store.get('settings').gameUserDir; }
 function profUserDir() { return process.env.MXB_PROFILES_ROOT || userDir(); }
 function modsDir() { return path.join(userDir(), 'mods'); }
 function disabledDir() { return path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
+const serverNameKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+// The official game plugin does not receive an IP:port. Enrich live server
+// names from addresses the player saved or FrostMod saw, never by guessing.
+async function knownServerAddresses() {
+  const known = [...(store.get('servers') || [])];
+  let latest = null;
+  for (const file of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
+    try {
+      if ((await fsp.stat(file)).size > 512 * 1024) continue;
+      const parsed = frostmod.parse(await fsp.readFile(file, 'utf8'));
+      if (parsed && (!latest || parsed.at > latest.at)) latest = parsed;
+    } catch {}
+  }
+  if (latest && Date.now() - latest.at < 6 * 3600 * 1000) known.push(...latest.servers);
+  const out = new Map();
+  for (const server of known) {
+    const key = serverNameKey(server.name), address = String(server.address || '');
+    if (!key || !game.validAddress(address)) continue;
+    if (!out.has(key)) out.set(key, new Set());
+    out.get(key).add(address);
+  }
+  return out;
+}
+async function addKnownServerAddresses(rows) {
+  const addresses = await knownServerAddresses();
+  return rows.map((row) => {
+    if (row.address || !row.name) return row;
+    const matches = [...(addresses.get(serverNameKey(row.name)) || [])];
+    return matches.length === 1 ? { ...row, address: matches[0] } : row;
+  });
+}
 function rootFor(disabled) { return disabled ? disabledDir() : modsDir(); }
 function insideRoots(p) {
   const n = path.resolve(p).toLowerCase();
@@ -797,6 +828,7 @@ function registerIpc() {
   handle('jobs:equip', async (id, index, paint = '') => {
     const ctx = await equipContext(id, index);
     if (paint !== '' && !(ctx.lo.options[ctx.choice.slot] || []).includes(paint)) throw new Error('Choose an installed paint for this item');
+    if (paint !== '' && ctx.choice.paints?.length && !ctx.choice.paints.includes(paint)) throw new Error('Choose a paint from this download');
     const changes = equipInstalled.changesFor(ctx.choice, ctx.current, paint);
     const next = { ...ctx.current, ...changes };
     if (changes.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next });
@@ -943,23 +975,14 @@ function registerIpc() {
   handle('online:connect', (url, name) => online.connect(url, name));
   handle('online:disconnect', () => online.disconnect());
   handle('online:share', (on) => online.setShare(on));
-  handle('online:servers', async (force = false) => { const result = await online.servers(); return { ...result, servers: await serverPing.measure(result.servers, undefined, !!force) }; });
+  handle('online:servers', async (force = false) => { const result = await online.servers(); const servers = await addKnownServerAddresses(result.servers); return { ...result, servers: await serverPing.measure(servers, undefined, !!force) }; });
   handle('online:friends', async () => {
     const friends = await online.syncFriends();
     if (!friends.some((f) => f.online && f.server && !f.address)) return friends;
-    const known = [...(store.get('servers') || [])];
-    let latest = null;
-    for (const file of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
-      try {
-        if ((await fsp.stat(file)).size > 512 * 1024) continue;
-        const parsed = frostmod.parse(await fsp.readFile(file, 'utf8'));
-        if (parsed && (!latest || parsed.at > latest.at)) latest = parsed;
-      } catch {}
-    }
-    if (latest && Date.now() - latest.at < 6 * 3600 * 1000) known.push(...latest.servers);
+    const addresses = await knownServerAddresses();
     return friends.map((f) => {
       if (!f.online || !f.server || f.address) return f;
-      const matches = [...new Set(known.filter((s) => s.name.trim().toLowerCase() === f.server.trim().toLowerCase()).map((s) => s.address).filter(Boolean))];
+      const matches = [...(addresses.get(serverNameKey(f.server)) || [])];
       return matches.length === 1 ? { ...f, address: matches[0] } : f;
     });
   });
