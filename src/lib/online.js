@@ -230,7 +230,13 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   async function servers() {
     const r = await call('GET', '/v1/servers');
     const known = cfg().addresses || {};
-    return { at: r.at, servers: (r.servers || []).map((s) => ({ ...s, address: s.address || known[s.name] || null })) };
+    // Services before v5 retained server rows for twenty minutes. Treat a row
+    // as live only while a manager heartbeat could still be active, so an old
+    // server copy cannot make departed test sessions look real.
+    const freshAfter = Date.now() - 2 * 60 * 1000;
+    const servers = (r.servers || []).filter((s) => !s.lastSeen || Number(s.lastSeen) >= freshAfter)
+      .map((s) => ({ ...s, address: s.address || known[s.name] || null }));
+    return { at: r.at, servers };
   }
   async function syncFriends() {
     const ids = (store.get('friends') || []).map((f) => f.code).filter(Boolean);
