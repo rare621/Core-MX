@@ -4,78 +4,14 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { openArchive, decodeBlob } = require('./assetread');
+const { decodeBlob } = require('./assetread');
 const edf = require('./edf');
 const pnt = require('./pnt');
 
 const MAX_TEX = 1024; // textures are shrunk to this for the preview
 
-// ---------- file sources: a folder on disk or a folder inside a .pkz ----------
-const zips = new Map(); // pkz path -> Promise<{ zip, entries: Map(lowerPath -> entry) }>
-function openZip(file) {
-  let stamp;
-  try { const st = fs.statSync(file); stamp = `${st.mtimeMs}|${st.size}`; } catch (e) { zips.delete(file); return Promise.reject(e); }
-  if (zips.get(file)?.stamp !== stamp) zips.delete(file);
-  if (!zips.has(file)) {
-    const promise = openArchive(file).then((archive) => {
-      const entries = new Map(archive.entries.map((e) => [e.fileName.replace(/\\/g, '/').toLowerCase(), e]));
-      return { archive, entries };
-    }).catch((e) => { zips.delete(file); throw e; });
-    promise.stamp = stamp;
-    zips.set(file, promise);
-    while (zips.size > 24) zips.delete(zips.keys().next().value);
-  }
-  return zips.get(file);
-}
-async function zipRead(file, entry) {
-  const { archive } = await openZip(file);
-  return archive.read(entry);
-}
-
-// A folder: { dir } or { pkz, prefix }. Returns null when it doesn't exist.
-async function folder(spec) {
-  if (!spec) return null;
-  if (spec.dir) {
-    if (fs.existsSync(spec.dir) && fs.statSync(spec.dir).isDirectory()) return { kind: 'dir', dir: spec.dir, key: spec.dir };
-    return null;
-  }
-  try {
-    const { entries } = await openZip(spec.pkz);
-    let prefix = spec.prefix;
-    if (prefix == null) { // a mod .pkz: the folder holding its gfx.cfg / .edf, shallowest first
-      const hits = [...entries.keys()].filter((k) => /(^|\/)(gfx\.cfg|[^/]+\.edf|[^/]+\.pnt)$/.test(k)).sort((a, b) => a.split('/').length - b.split('/').length);
-      if (!hits.length) return null;
-      prefix = hits[0].includes('/') ? hits[0].slice(0, hits[0].lastIndexOf('/') + 1) : '';
-    } else {
-      prefix = prefix.toLowerCase().replace(/\/?$/, '/');
-      if (![...entries.keys()].some((k) => k.startsWith(prefix))) return null;
-    }
-    return { kind: 'pkz', pkz: spec.pkz, prefix, entries, key: spec.pkz + '|' + prefix };
-  } catch { return null; }
-}
-async function readIn(f, rel) {
-  if (!f) return null;
-  if (f.kind === 'dir') {
-    const p = path.join(f.dir, ...rel.split('/'));
-    try { const st = await fsp.stat(p); if (st.isFile()) return { buf: await fsp.readFile(p), key: p + '@' + st.mtimeMs }; } catch {}
-    return null;
-  }
-  const e = f.entries.get(f.prefix + rel.toLowerCase());
-  return e ? { buf: await zipRead(f.pkz, e), key: f.key + rel + '@' + e.crc32 } : null;
-}
-// First folder in a chain that has the file.
-async function readChain(chain, rel) {
-  for (const f of chain) { const r = await readIn(f, rel); if (r) return r; }
-  return null;
-}
-async function chainOf(specs) {
-  // Loose paints/config overrides and the packaged model coexist. A paint-only
-  // directory must not hide its sibling .pkz (the usual helmet/boots layout).
-  const sources = specs.flatMap((s) => s && s.dir
-    ? [s, fs.existsSync(s.dir + '.pkz') ? { pkz: s.dir + '.pkz', prefix: null } : null]
-    : [s]);
-  return (await Promise.all(sources.map(folder))).filter(Boolean);
-}
+const { chainOf, readChain } = require('./asset-sources');
+const gearAssets = require('./gear-assets');
 
 // ---------- tiny parsers for gfx.cfg / .hrc ----------
 function parseCfg(text) {
@@ -198,7 +134,9 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   const parts = [];
 
   // --- body + skeleton ---
-  const bodyChain = await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, stock(`rider/riders/${riderName}`), stock('rider/riders/default_mx')]);
+  const bodyChain = await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, { dir: path.join(modsDir, 'rider') }, stock(`rider/riders/${riderName}`), stock('rider/riders/default_mx')]);
+  const gear = { modsDir, rider: riderName, stockPkz };
+  const gearRoots = await gearAssets.roots(gear);
   const gfxR = await readChain(bodyChain, 'gfx.cfg');
   const gfx = gfxR ? parseCfg(gfxR.buf.toString('latin1')) : {};
   let bodyFile = 'rider.edf';
@@ -217,8 +155,8 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
     return bones[p] || null;
   };
   if (want('body')) {
-  const suitPaint = await loadPaint(await chainOf([{ dir: path.join(gd, 'paints') }]), cur.suitPaint ? cur.suitPaint + '.pnt' : null);
-  const glovePaint = await loadPaint(await chainOf([{ dir: path.join(gd, 'gloves') }]), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
+  const suitPaint = await loadPaint(await gearAssets.subchain(gearRoots, 'paints'), cur.suitPaint ? cur.suitPaint + '.pnt' : null);
+  const glovePaint = await loadPaint(await gearAssets.subchain(gearRoots, 'gloves'), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
     .then(async (p) => (p.length || !cur.glovesPaint ? p : loadPaint(bodyChain, `gloves/${cur.glovesPaint}.pnt`)));
   const suit2 = suitPaint.length || !cur.suitPaint ? suitPaint : await loadPaint(bodyChain, `paints/${cur.suitPaint}.pnt`);
   if (cur.suitPaint && !suit2.length) unreadable.push('suitPaint');
@@ -229,7 +167,7 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
 
   // --- helmet ---
   const helmetName = cur.helmet && cur.helmet !== 'default' ? cur.helmet : null;
-  const helmetChain = await chainOf(helmetName ? [{ dir: path.join(gd, 'helmets', helmetName) }] : [stock('rider/helmets/default')]);
+  const helmetChain = await gearAssets.modelSources(gear, 'helmets', helmetName || 'default');
   if (want('helmet')) {
     const hg = await readChain(helmetChain, 'gfx.cfg');
     const hcfg = hg ? parseCfg(hg.buf.toString('latin1')) : {};
@@ -239,22 +177,23 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
     const m = await loadModel(helmetChain, (l && l.scene) || 'helmet.edf', true);
     const paint = await loadPaint(helmetChain, cur.helmetPaint ? `paints/${cur.helmetPaint}.pnt` : null);
     let goggles = await loadPaint(helmetChain, cur.gogglesPaint ? `goggles/${cur.gogglesPaint}.pnt` : null);
-    if (!goggles.length && cur.gogglesPaint) goggles = await loadPaint(await chainOf([{ dir: path.join(gd, 'goggles') }]), cur.gogglesPaint + '.pnt');
+    if (!goggles.length && cur.gogglesPaint) goggles = await loadPaint(await gearAssets.subchain(gearRoots, 'goggles'), cur.gogglesPaint + '.pnt');
     if (cur.gogglesPaint && !goggles.length) unreadable.push('gogglesPaint');
     if (cur.helmetPaint && !paint.length) unreadable.push('helmetPaint');
     if (cur.helmetPaint && !paint.length) warnings.push('The helmet paint couldn\'t be read (it may be protected).');
     if (m) { const p = buildPart('helmet', m, null, boneMat(gfx.helmetlinkobj || 'riderRIG_Head'), [...paint, ...goggles], textures, texMax); if (p) parts.push(p); }
-    else { unreadable.push('helmet'); warnings.push('The helmet model couldn\'t be read (it may be protected).'); }
+    else { unreadable.push('helmet'); warnings.push('The helmet model is missing or could not be read. A helmet paint needs its matching helmet model installed.'); }
   }
 
   // --- boots ---
   const bootsName = cur.boots && cur.boots !== 'default' ? cur.boots : null;
-  const bootsChain = await chainOf(bootsName ? [{ dir: path.join(gd, 'boots', bootsName) }] : [stock('rider/boots/default')]);
+  const bootsChain = await gearAssets.modelSources(gear, 'boots', bootsName || 'default');
   if (want('boots')) {
     const bg = await readChain(bootsChain, 'gfx.cfg');
     const bcfg = bg ? parseCfg(bg.buf.toString('latin1')) : {};
     let paint = await loadPaint(bootsChain, cur.bootsPaint ? `paints/${cur.bootsPaint}.pnt` : null);
-    if (!paint.length && cur.bootsPaint) paint = await loadPaint(await chainOf([{ dir: path.join(gd, 'boots') }, { dir: path.join(gd, 'boots paints') }]), cur.bootsPaint + '.pnt');
+    if (!paint.length && cur.bootsPaint) paint = await loadPaint(await gearAssets.subchain(gearRoots, 'boots'), cur.bootsPaint + '.pnt');
+    if (!paint.length && cur.bootsPaint) paint = await loadPaint(await gearAssets.subchain(gearRoots, 'boots paints'), cur.bootsPaint + '.pnt');
     if (cur.bootsPaint && !paint.length) unreadable.push('bootsPaint');
     for (const side of ['left', 'right']) {
       const sc = bcfg[side] || {};
@@ -276,7 +215,7 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
 
   // --- chest protector / neck brace ---
   const protName = cur.protection || 'chest';
-  const protChain = await chainOf([{ dir: path.join(gd, 'protections', protName) }, stock(`rider/protections/${protName}`)]);
+  const protChain = await gearAssets.modelSources(gear, 'protections', protName);
   if (protChain.length && want('protection')) {
     const pg = await readChain(protChain, 'gfx.cfg');
     const pcfg = pg ? parseCfg(pg.buf.toString('latin1')) : {};

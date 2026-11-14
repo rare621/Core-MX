@@ -14,6 +14,12 @@ Powers **Live servers** (every server an app user rides on, with its track and r
 State is saved next to the script (`mxbm-data.json`, plus paint files in `mxbm-files\`), so it survives restarts.
 Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the paint storage cap (default 4096 MB).
 
+## Update an existing server
+
+Stop the server window, then copy **mxbm-server.js** from the new release ZIP over the old script in your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json** and **mxbm-files** where they are: those contain the accounts and shared files. No account reset or port-forwarding change is needed.
+
+The health page reports `"version":2` for equipped gear sync. Both riders also need the updated manager.
+
 ## Connecting the app
 
 In the app's `online.config.json` put `{ "serviceUrl": "http://<server PC public IP>:60000" }` — every copy of the app
@@ -34,3 +40,5 @@ put it behind HTTPS (for example a Cloudflare Tunnel or a reverse proxy) and giv
   hides you from friends but still updates the server's track.
 - Accounts are Steam IDs claimed first-come. If someone needs a reset, stop the service and delete their
   entry under `users` in `mxbm-data.json`.
+- The manager sends a heartbeat while it is open, including when MX Bikes is closed. Presence distinguishes an active manager from a running game and a riding session.
+- Only the active outfit is shared: the selected gear models, their selected paints, and the current bike livery. Model packages omit unused paint variants. Original paint files remain intact. Each file is content-checked, and recipients keep different existing files instead of silently replacing them.

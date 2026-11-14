@@ -26,6 +26,16 @@ const BROWSE_TABS = [
 ];
 
 let categoryMap = null; // id -> {name, parent}
+const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
+function browseCategory(tab, kind = 'all') {
+  const base = BROWSE_TABS.find((x) => x.id === tab) || BROWSE_TABS[0];
+  return GEAR_CATEGORIES[tab]?.[kind] ? { ...base, cats: GEAR_CATEGORIES[tab][kind] } : base;
+}
+function gearKind(ids) {
+  const model = ids.some((id) => [313, 343, 344].includes(id));
+  const paint = ids.some((id) => [127, 126, 135].includes(id));
+  return model && paint ? 'bundle' : model ? 'model' : paint ? 'paint' : ids.includes(34) ? 'addon' : null;
+}
 
 async function getJson(url) {
   const res = await net.fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
@@ -62,6 +72,7 @@ function summarizePost(p, cats) {
     date: p.date,
     modified: p.modified,
     categories: p.categories || [],
+    gearKind: gearKind(p.categories || []),
     categoryNames: catNames,
     paid: (p.categories || []).some((c) => c === 359 || (cats[c] && cats[c].parent === 359)),
     image: pickImage(media, ['medium_large', 'medium', 'large', 'full']),
@@ -97,9 +108,9 @@ async function popular(range) {
   return posts;
 }
 
-async function search({ query = '', tab = 'all', page = 1, perPage = 24, orderby = 'date' } = {}) {
+async function search({ query = '', tab = 'all', kind = 'all', page = 1, perPage = 24, orderby = 'date' } = {}) {
   const cats = await categories();
-  const t = BROWSE_TABS.find((x) => x.id === tab) || BROWSE_TABS[0];
+  const t = browseCategory(tab, kind);
   // "Best match" without a search reads as popular-first, like the popular sorts.
   if (orderby === 'relevance' && !query) orderby = 'popular-month';
   if (orderby.startsWith('popular')) {
@@ -243,7 +254,22 @@ async function post(id) {
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
-  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, downloads, madeFor: betas, downloadCount: dlCount };
+  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, downloads, dependencies: dependenciesFromHtml(p.content && p.content.rendered || ''), madeFor: betas, downloadCount: dlCount };
+}
+
+function dependenciesFromHtml(html) {
+  const $ = cheerio.load(html), found = [];
+  $('a[href]').each((_, a) => {
+    const url = $(a).attr('href'), label = $(a).text().trim();
+    const context = $(a).closest('p,li,div').text();
+    if (!label || !/require|need|model|link to|based on|made.*for/i.test(context)) return;
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol) || !/^(?:www\.)?(?:mxb-mods\.com|mxbikes-shop\.com|shop\.mxb-hub\.com)$/.test(u.hostname)) return;
+      if (!found.some((x) => x.url === u.href)) found.push({ label: label.slice(0, 100), url: u.href });
+    } catch {}
+  });
+  return found.slice(0, 8);
 }
 
 async function postBySlug(slug) {
@@ -251,4 +277,4 @@ async function postBySlug(slug) {
   return json[0] ? post(json[0].id) : null;
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf };
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind };

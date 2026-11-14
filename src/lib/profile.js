@@ -3,6 +3,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const { execFile } = require('child_process');
+const gearAssets = require('./gear-assets');
 
 // Loadout slots: profile.ini section, and how to list the options for it.
 // key 'bike' = value stored under the bike id; 'protectionModel' = stored under the chosen protection model.
@@ -106,7 +107,7 @@ async function listBikes(modsDir, prof) {
 }
 
 // Current values for one bike + the available choices for each slot.
-async function loadout(modsDir, prof, bike) {
+async function loadout(modsDir, prof, bike, stockPkz) {
   const val = (sec, key) => (prof.sections[sec] && prof.sections[sec].values[key] !== undefined ? prof.sections[sec].values[key] : null);
   const cur = {};
   for (const s of SLOTS.filter((x) => x.key === 'bike')) cur[s.id] = val(s.section, bike);
@@ -132,6 +133,7 @@ async function loadout(modsDir, prof, bike) {
     boots: ['default', ...(await names(path.join(gd, 'boots')))],
     bootsPaint: boots ? await names(path.join(gd, 'boots', boots, 'paints'), 'pnt') : await names(path.join(gd, 'boots'), 'pnt'),
   };
+  Object.assign(opts, await gearAssets.catalog({ modsDir, rider: cur.rider, stockPkz }, cur));
   // Keep a current value that isn't a file on disk (built-in paints live inside the bike/gear .pkz).
   for (const s of SLOTS) {
     const v = cur[s.id];
@@ -143,7 +145,7 @@ async function loadout(modsDir, prof, bike) {
 function isGameRunning() {
   return new Promise((resolve) => {
     execFile('tasklist', ['/FI', 'IMAGENAME eq mxbikes*', '/FO', 'CSV', '/NH'], { windowsHide: true }, (err, out) => {
-      resolve(!err && /mxbikes/i.test(out || ''));
+      resolve(!err && /^"mxbikes(?:64)?\.exe",/im.test(out || ''));
     });
   });
 }

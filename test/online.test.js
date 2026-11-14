@@ -62,3 +62,20 @@ test('a different service registers a new account without sending the previous t
   assert.equal(f.config().token, 'new-fixture-token');
   assert.equal(f.config().id, 'new-account');
 });
+
+test('the manager sends heartbeats while MX Bikes is closed, so active app users stay online', async (t) => {
+  let now = 100000;
+  t.mock.method(Date, 'now', () => now);
+  const presence = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/v1/presence')) presence.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({}) };
+  });
+  const f = fixture();
+  await f.client.refresh();
+  now += 31000; await f.client.refresh();
+  now += 31000; await f.client.refresh();
+  assert.equal(presence.length, 3);
+  assert.ok(presence.every((p) => p.state.inGame === false));
+  assert.ok(presence.every((p) => p.state.inEvent === false));
+});

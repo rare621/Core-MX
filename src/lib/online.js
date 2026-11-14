@@ -4,14 +4,15 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const paintsync = require('./paintsync');
+const { MAX_FILE } = require('./gear-sync');
 
 const PLUGIN = 'mxbm_presence.dlo';
 const STATE_FILE = 'mxbm_presence.json';
 const REPORT_EVERY = 30 * 1000;
-const PAINT_EVERY = 3 * 60 * 1000;
+const PAINT_EVERY = 60 * 1000;
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, defaultUrl, previousServiceUrls = [], onChange }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false;
   let lastSent = '';
@@ -20,7 +21,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let timer = null;
   let paintTimer = null;
   let retryTimer = null;
-  const paint = { busy: false, error: null, shared: null, report: null, at: null };
+  const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null };
+  let progressAt = 0;
+  const progress = (value) => { paint.progress = value; if (Date.now() - progressAt > 150 || value.loaded === 0) { progressAt = Date.now(); onChange(status()); } };
 
   const cfg = () => store.get('online') || {};
   const setCfg = (patch) => store.set('online', { ...cfg(), ...patch });
@@ -48,10 +51,16 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const res = await fetch(`${cfg().url}/v1/files/${sha}`, { method: 'PUT', headers: { authorization: `Bearer ${cfg().token}`, 'content-type': 'application/octet-stream' }, body: buf, signal: AbortSignal.timeout(120000) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Upload failed (${res.status})`); }
   }
-  async function download(sha) {
+  async function download(sha, onProgress = () => {}) {
     const res = await fetch(`${cfg().url}/v1/files/${sha}`, { headers: { authorization: `Bearer ${cfg().token}` }, signal: AbortSignal.timeout(120000) });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
-    return Buffer.from(await res.arrayBuffer());
+    const chunks = []; let size = 0;
+    for await (const chunk of res.body) {
+      size += chunk.length;
+      if (size > MAX_FILE) throw new Error('Shared file exceeds the sync size limit');
+      chunks.push(chunk); onProgress(size);
+    }
+    return Buffer.concat(chunks);
   }
 
   // ---------- plugin state ----------
@@ -74,7 +83,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
     if (changed) onChange(status());
-    report().catch(() => {});
+    await report();
   }
 
   function stateForReport() {
@@ -92,9 +101,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!c.url || !c.token) return;
     const state = stateForReport();
     const key = JSON.stringify(state);
-    // Send on change, and every 30 s while the game is open (so friends see you as online).
-    if (!force && key === lastSent && (!gameRunning || Date.now() - lastSentAt < REPORT_EVERY)) return;
-    if (!force && !gameRunning && lastSent && JSON.parse(lastSent).inGame === false) return;
+    // The manager stays online even with MX Bikes closed. Keep its heartbeat alive.
+    if (!force && key === lastSent && Date.now() - lastSentAt < REPORT_EVERY) return;
     try {
       await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
       lastSent = key; lastSentAt = Date.now(); lastError = null;
@@ -126,7 +134,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       game: { running: gameRunning },
       presence: current,
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError },
-      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
+      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
     };
   }
 
@@ -186,26 +194,42 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   }
   // Share your outfit's paints, then fetch mutual friends' paints you don't have.
   let paintRun = null;
-  function syncPaints() {
-    if (paintRun) return paintRun; // already syncing: wait for that one
-    paintRun = doSyncPaints().finally(() => { paintRun = null; });
+  function syncPaints(friendId) {
+    if (friendId && !(store.get('friends') || []).some((f) => f.code === friendId)) return Promise.reject(new Error('Add this rider as a friend first'));
+    if (paintRun) return friendId ? paintRun.then(() => syncPaints(friendId)) : paintRun;
+    paintRun = doSyncPaints(friendId).finally(() => { paintRun = null; });
     return paintRun;
   }
-  async function doSyncPaints() {
+  async function doSyncPaints(friendId) {
     const c = cfg();
-    if (!c.token || c.paintSync === false) return status();
+    if (!c.token || c.paintSync === false && !friendId) return status();
     paint.busy = true; onChange(status());
     try {
+      progress({ phase: 'checking', label: 'Checking equipped files', completed: 0, total: 0, friendId });
+      const health = await call('GET', '/v1/health');
+      if (health.version < 2) throw new Error('Update the online server using the new mxbm-online-service.zip to enable gear sync');
+      await syncFriends();
       const o = await currentOutfit();
-      if (o) paint.shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName });
+      if (o) {
+        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, onProgress: progress });
+        paint.shared = shared.items; paint.unavailable = shared.unavailable;
+      }
       const received = { ...(cfg().received || {}) };
-      paint.report = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod });
+      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
+      paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       setCfg({ received });
+      if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
       paint.error = null; paint.at = Date.now();
     } catch (e) { paint.error = e.message; }
-    paint.busy = false;
+    paint.busy = false; paint.progress = null;
     onChange(status());
     return status();
+  }
+  async function friendLoadout(friendId) {
+    if (!(store.get('friends') || []).some((f) => f.code === friendId)) throw new Error('Add this rider as a friend first');
+    await syncFriends();
+    const results = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, friendId });
+    return results[0] || null;
   }
   async function setPaintSync(on) {
     setCfg({ paintSync: !!on });
@@ -222,7 +246,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   function noteJoin(address) { setCfg({ lastJoin: { address, at: Date.now() } }); }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, noteJoin, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }) };
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }) };
 }
 
 module.exports = { create, PLUGIN, STATE_FILE };

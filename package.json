@@ -1,7 +1,7 @@
 {
   "name": "mx-bikes-manager",
   "productName": "MX Bikes Manager",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Manage installed MX Bikes mods and browse/install mods from mxb-mods.com",
   "main": "main.js",
   "private": true,
@@ -15,7 +15,8 @@
     "start": "electron .",
     "test": "node --test test/*.test.js",
     "build:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File build/generate-icon.ps1",
-    "build:win": "npm run build:assets && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never && node scripts/release-checksums.js",
+    "build:win": "npm run build:assets && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never && npm run build:server && node scripts/release-checksums.js",
+    "build:server": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-server.ps1",
     "pack:win": "npm run build:assets && electron-builder --config electron-builder.config.cjs --win --x64 --dir --publish never"
   },
   "dependencies": {

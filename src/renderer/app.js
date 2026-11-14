@@ -773,6 +773,7 @@ function renderBrowse(c) {
         <button class="btn btn-icon" data-act="open-site" title="Open mxb-mods.com">${icon('external')}</button>
       </div>
       <div class="chips" id="brTabs"></div>
+      <div class="chips browse-kind" id="brKind"></div>
       <div class="scroller" id="brScroll"></div>
     </div></div>`;
     $('#brSearch').value = S.browse.query;
@@ -782,11 +783,22 @@ function renderBrowse(c) {
       browseReset();
     }, 380));
     $('#brSort').addEventListener('change', (e) => { S.browse.sort = e.target.value; browseReset(); });
-    $('#brTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { S.browse.tab = b.dataset.tab; browseReset(); } });
+    $('#brTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { S.browse.tab = b.dataset.tab; S.browse.kind = 'all'; drawBrowseKind(); browseReset(); } });
+    $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
   $('#brTabs').innerHTML = S.tabs.map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
+  drawBrowseKind();
   if (!S.browse.posts.length && !S.browse.loading) browseLoad(); else renderBrowseGrid();
+}
+
+function drawBrowseKind() {
+  const box = $('#brKind'); if (!box) return;
+  const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
+  box.hidden = !labels;
+  if (!labels) { box.innerHTML = ''; return; }
+  const choices = [['all', 'All'], ['models', labels[0]], ['paints', labels[1]], ...(S.browse.tab === 'helmets' ? [['addons', 'Addons']] : [])];
+  box.innerHTML = choices.map(([kind, label]) => `<button class="chip ${(S.browse.kind || 'all') === kind ? 'active' : ''}" data-browse-kind="${kind}">${label}</button>`).join('');
 }
 
 function browseReset() {
@@ -803,7 +815,7 @@ async function browseLoad() {
   const reqId = b.reqId;
   renderBrowseGrid();
   try {
-    const r = await api.invoke('site:search', { query: b.query, tab: b.tab, page: b.page + 1, perPage: 30, orderby: b.sort });
+    const r = await api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', page: b.page + 1, perPage: 30, orderby: b.sort });
     if (reqId !== b.reqId) return;
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total;
     b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
@@ -822,7 +834,7 @@ function siteCard(p) {
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
-    <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>
+    <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${p.gearKind ? `<div class="mod-content-kind">${{ paint: 'Paint only · model required', model: 'Includes model', bundle: 'Model & paints', addon: 'Helmet addon' }[p.gearKind]}</div>` : ''}
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
 
@@ -911,7 +923,7 @@ async function openPost(summary) {
 async function startDownload(p, dl) {
   await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
-    categories: p.categories, categoryNames: p.categoryNames,
+    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies,
   });
   toast(`Downloading <b>${esc(p.title)}</b>…`, 'info', 2500);
 }
@@ -925,6 +937,8 @@ function jobHtml(j) {
   const prog = running ? `<div class="progress ${!j.total || j.status !== 'downloading' ? 'indet' : ''}"><div style="width:${pct}%"></div></div>` : '';
   const sizeTxt = j.status === 'downloading' ? `${fmtSize(j.received)}${j.total ? ' / ' + fmtSize(j.total) : ''}` : j.fileName ? esc(j.fileName) : '';
   const acts = [];
+  if (j.status !== 'queued' && j.status !== 'browser') acts.push(`<button class="btn btn-sm btn-ghost btn-icon" data-job-act="reveal" title="Show in folder" aria-label="Show in folder">${icon('folder')}</button>`);
+  if (['done', 'error', 'review'].includes(j.status) && !j.filesDeleted) acts.push(`<button class="btn btn-sm btn-ghost btn-icon" data-job-act="delete-files" title="${j.status === 'done' ? 'Delete installed files' : 'Delete downloaded file'}" aria-label="Delete files">${icon('trash')}</button>`);
   if (j.status === 'review') acts.push(`<button class="btn btn-primary btn-sm" data-job-act="review">${icon('check')}Review & install</button>`);
   if (j.status === 'error' && j.url) acts.push(`<button class="btn btn-sm" data-job-act="retry">${icon('refresh')}Retry</button><button class="btn btn-sm" data-job-act="browser">${icon('globe')}Use browser</button>`);
   if (j.status === 'done') acts.push(`<button class="btn btn-sm" data-job-act="library">${icon('library')}View in library</button>`);
@@ -960,6 +974,18 @@ function updateJobInPlace(j) {
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-job-act]');
   if (!b) return;
+  if (b.dataset.jobAct === 'delete-files') {
+    const id = b.closest('[data-job]').dataset.job, j = S.jobs.get(id);
+    if (!(await confirmBox('Delete files', j.status === 'done' ? `Move the files installed by <b>${esc(j.title)}</b> to the Recycle Bin?` : `Move the downloaded file for <b>${esc(j.title)}</b> to the Recycle Bin?`, 'Delete files', true))) return;
+    try { await api.invoke('jobs:deleteFiles', id); toast('Files deleted', 'ok'); }
+    catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
+    return;
+  }
+  if (b.dataset.jobAct === 'reveal') {
+    try { await api.invoke('jobs:reveal', b.closest('[data-job]').dataset.job); }
+    catch (e) { toast(esc(cleanErr(e)), 'err', 4500); }
+    return;
+  }
   const id = b.closest('[data-job]').dataset.job;
   const act = b.dataset.jobAct;
   if (act === 'review') openReview(id);
@@ -1022,7 +1048,7 @@ function openReview(id) {
     const ctl = [];
     ctl.push(`<div class="field"><label>Mod type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`);
     if (p.kind === 'track') ctl.push(`<div class="field"><label>Track type</label><select data-opt="trackType">${p.trackTypes.map((t) => `<option ${t === p.options.trackType ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`);
-    if (p.paintModelsBase) {
+    if (p.paintModelsBase && (p.needsPaintTarget || p.paintGuess === 'title')) {
       const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
       const candidates = p.paintModels.filter((n) => !bikeTarget || targetMatches(n));
       if (bikeTarget) {
@@ -1035,14 +1061,16 @@ function openReview(id) {
       ctl.push(`<div class="field"><label>Install paints onto${bikeTarget ? ` (${candidates.length})` : ''}</label><select data-opt="paintTarget"><option value="">— choose —</option>${candidates.map((n) => `<option value="${esc(n)}" ${n === p.options.paintTarget ? 'selected' : ''}>${esc(bikeTarget ? bikeTitle(n) : n)}</option>`).join('')}</select></div>`);
     }
     if (p.kind === 'custom') ctl.push(`<div class="field"><label>Folder inside mods/</label><input class="input" data-opt="customDir" list="dirsList" placeholder="e.g. bikes/MY_BIKE/paints" value="${esc(p.options.customDir || '')}"><datalist id="dirsList">${['bikes', 'tracks/motocross', 'tracks/supercross', 'rider/paints', 'rider/helmets', 'rider/boots', 'rider/gloves', 'rider/protections', 'tyres', 'misc'].map((d) => `<option value="${d}">`).join('')}</datalist></div>`);
-    const warn = p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('');
+    const missingModels = (p.requiredModels || []).filter((r) => !r.installed && !r.included);
+    const dependencyHelp = missingModels.map((r) => `<button class="btn btn-sm" data-act="paint-get" data-name="${esc(r.name)}">${icon('search')}Find ${esc(r.name)} model</button>`).join('') + (p.dependencies || []).map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('');
+    const warn = p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
     const detected = p.kindHint && p.kind === p.kindHint ? `<div class="notice ok">${icon('check')}<div>Detected a <b>${esc(p.kindLabel)}</b> from the files inside. Change the type above if that's wrong.</div></div>` : '';
     const guess = detected + (p.paintGuess === 'title' ? `<div class="notice info">${icon('info')}<div>Guessed <b>${esc(p.options.paintTarget)}</b> from the mod name — check it's the right one.</div></div>` : '');
     const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || '')}">${e.dest ? 'mods/' + esc(e.dest) : '<span class="muted">—</span>'}</div><span class="pill ${e.status}">${e.status}</span></div>`).join('');
     $('#rv', m).innerHTML = `<div class="plan-controls">${ctl.join('')}</div>${warn}${guess}
       <div class="section-title">Files <span class="muted">(${p.totalEntries})</span></div><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<div class="muted" style="margin-top:6px">…and ${p.totalEntries - p.entries.length} more</div>` : ''}`;
     $('#rvSummary', m).textContent = `${p.installable} file(s) will be installed`;
-    $('#rvInstall', m).disabled = !p.installable || (p.paintModelsBase === 'bikes' && (!p.options.paintTarget || !targetMatches(p.options.paintTarget)));
+    $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
   };
   draw(j);
   $('#rv', m).addEventListener('click', async (e) => {
@@ -1354,7 +1382,7 @@ function gearPicker(slot, opts, lo) {
   const m = modal({
     title: esc(slot.label), size: 'lg',
     body: `<div class="search wide" style="margin-bottom:14px">${icon('search')}<input id="gpQ" placeholder="Search ${opts.length} options…" spellcheck="false"></div><div class="picker-filters"><label><span>Brand</span><select id="gpBrand"><option value="">All brands</option>${brands.map((b) => `<option>${esc(b)}</option>`).join('')}</select></label></div><div class="picker-count" id="gearCount"></div><div id="gpGrid" class="gear-grid"></div>`,
-    foot: slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : '',
+    foot: slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
     onClose: () => { closed = true; if (io) io.disconnect(); },
   });
   const tileImg = (key) => {
@@ -1413,9 +1441,9 @@ function gearPicker(slot, opts, lo) {
     $('#gearCount', m).textContent = `${xs.length} of ${opts.length}`;
     $('#gpGrid', m).innerHTML = xs.length ? xs.slice(0, 400).map((o) => {
       const key = gearThumbKey(slot.id, o.value, lo);
-      return `<button class="gear-tile ${o.value === current ? 'selected' : ''}" data-v="${esc(o.value)}" data-key="${esc(key)}">
+      return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" data-v="${esc(o.value)}" data-key="${esc(key)}">
         <span class="gear-img">${tileImg(key)}</span>${o.value === current ? `<span class="badge ok gear-sel">${icon('check')}Wearing</span>` : ''}
-        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button>`;
+        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button>${PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
     }).join('') : `<div class="empty"><div>${icon('search')}<h3>No matches</h3></div></div>`;
     $$('.gear-tile', m).forEach((t) => io.observe(t));
   };
@@ -1429,7 +1457,18 @@ function gearPicker(slot, opts, lo) {
     try { await api.invoke('rider:deleteModel', current); m.close(); S.gearThumbs.clear(); R.bikes = null; await rescan(true); renderRider($('#content')); }
     catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
   });
-  $('#gpGrid', m).addEventListener('click', (e) => { const t = e.target.closest('[data-v]'); if (t) { m.close(); saveSlot(slot.id, t.dataset.v); } });
+  $('#gpGrid', m).addEventListener('click', async (e) => {
+    const remove = e.target.closest('[data-delete-paint]');
+    if (remove) {
+      const value = remove.dataset.deletePaint;
+      if (!(await confirmBox('Delete paint', `Delete <b>${esc(prettyValue(slot.id, value))}</b>? Loose files go to the Recycle Bin. For packaged paints, the original package goes to the Recycle Bin and the other paints are kept. If equipped here, this paint resets to Default.`, 'Delete paint', true))) return;
+      remove.disabled = true;
+      try { await api.invoke('rider:deletePaint', R.profile, R.bike, slot.id, value); S.gearThumbs.clear(); m.close(); await renderRider($('#content')); toast('Paint deleted', 'ok'); }
+      catch (e) { remove.disabled = false; toast(esc(cleanErr(e)), 'err', 6000); }
+      return;
+    }
+    const t = e.target.closest('[data-v]'); if (t) { m.close(); saveSlot(slot.id, t.dataset.v); }
+  });
   draw();
   setTimeout(() => $('#gpQ', m).focus(), 50);
 }
@@ -2086,6 +2125,8 @@ api.on('jobs:review', (id) => {
 const onLibraryChanged = debounce(async () => {
   S.gearThumbs.clear();
   await refreshInstalledIds(); await rescan(true);
+  if (typeof checkFriendTrackJoin === 'function') checkFriendTrackJoin().catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
+  if (S.view === 'rider') { S.rider.bikes = null; renderRider($('#content')); }
   S.packs = null;
   if (isFree()) renderBrowseGrid();
   if (isShop()) drawShops();
