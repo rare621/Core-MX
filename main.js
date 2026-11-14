@@ -1197,8 +1197,9 @@ function registerIpc() {
     if (slot === 'protection') cur.protectionPaint = '';
     return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, only, texMax: 256 }, true);
   });
-  // A full, interactive preview for an option in the Rider picker.  It uses the
-  // draft loadout supplied by the renderer, but never writes it to the game.
+  // A full-quality, interactive preview for an option in the Rider picker.
+  // It deliberately builds only the relevant gear part (not the entire rider)
+  // while still using the draft loadout's paint/model context.
   handle('rider:previewSlot', async (name, bike, slot, value, previewCurrent = {}) => {
     if (!profile.SLOTS.some((s) => s.id === slot) || typeof value !== 'string' || value.length > 200 || /[\\/]|^\.+$/.test(value)) throw new Error('Invalid rider preview');
     const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
@@ -1209,7 +1210,9 @@ function registerIpc() {
     if (slot === 'boots') cur.bootsPaint = '';
     if (slot === 'protection') cur.protectionPaint = '';
     const inst = store.get('settings').gameInstallDir;
-    return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, texMax: 1024 });
+    const only = SLOT_PARTS[slot];
+    if (!only) throw new Error('No isolated 3D preview for this item');
+    return modelWorkers.build('rider', { modsDir: modsDir(), gd: profile.gearDir(modsDir(), cur.rider), stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: cur, only, texMax: 1024 });
   });
   handle('rider:copyToAll', async (name, fromBike) => {
     const prof = await profile.readProfile(profUserDir(), name);

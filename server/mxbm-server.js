@@ -21,7 +21,7 @@ const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint 
 fs.mkdirSync(FILES, { recursive: true });
 const VERSION = 5;
 
-const SERVER_TTL = 20 * 60 * 1000;   // a server drops off the list 20 min after anyone last saw it
+const SERVER_TTL = 2 * 60 * 1000;    // live rows only: the manager reports every 30 seconds
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
