@@ -1,12 +1,12 @@
 /* global S, $, $$, esc, icon, toast, modal, confirmBox, cleanErr, debounce, api, go, fmtSize, thumbHtml, listPicker, bikePicker, bikeItem, bikeTitle, openItem */
 'use strict';
-// ---------- Game: Ride (quick start), Settings (profile.ini), Fix & clean ----------
+// ---------- Game: Ride and game settings; maintenance lives in app Settings ----------
 S.gameTab = 'ride';
 S.ride = { bike: null, track: null };
 
 function gameTabs() {
   const t = (id, ic, l) => `<button class="${S.gameTab === id ? 'active' : ''}" data-game-tab="${id}">${icon(ic)}${l}</button>`;
-  return `<div class="seg-tabs">${t('ride', 'play', 'Ride')}${t('settings', 'settings', 'Settings')}${t('health', 'sparkle', 'Fix & clean')}</div>`;
+  return `<div class="seg-tabs">${t('ride', 'play', 'Ride')}${t('settings', 'settings', 'Settings')}</div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-game-tab]');
@@ -15,7 +15,6 @@ document.addEventListener('click', (e) => {
 
 function renderGame(c) {
   if (S.gameTab === 'settings') return renderGameSettings(c);
-  if (S.gameTab === 'health') return renderHealth(c);
   return renderRide(c);
 }
 
@@ -215,7 +214,7 @@ async function renderGameSettings(c) {
 
 // ---- Fix & clean ----
 async function renderHealth(c) {
-  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Game</h2>${gameTabs()}<div class="grow"></div><button class="btn" data-act="health-rescan">${icon('refresh')}Check again</button></div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}<div class="grow"></div><button class="btn" data-act="health-rescan">${icon('refresh')}Check again</button></div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
   let r;
   try { r = await api.invoke('health:scan'); } catch (e) { $('.scroller', c).innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
   S.health = r;
@@ -244,6 +243,8 @@ async function fixIssue(issue) {
   try {
     const r = await api.invoke('health:fix', issue);
     if (r && r.job) { toast('Installing…', 'info', 2000); return; }
+    if (r?.conflicts?.length) toast(`Moved ${r.repaired} files. Kept ${r.conflicts.length} differing copies in their original folders for review.`, 'info', 9000);
+    else if (r?.repaired != null) toast(`Repaired ${r.repaired} gear files`, 'ok');
   } catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
 }
 
@@ -260,5 +261,5 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const oi = e.target.closest('[data-open-item]');
-  if (oi && S.view === 'game') openItem(oi.dataset.openItem);
+  if (oi && S.view === 'settings' && S.settingsTab === 'health') openItem(oi.dataset.openItem);
 });

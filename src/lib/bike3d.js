@@ -111,7 +111,7 @@ function selectNode(nodes, requested, expected) {
 }
 
 async function build(options) {
-  const { modsDir, installDir, bike, paint = '', texMax = 1024 } = options;
+  const { modsDir, installDir, bike, paint = '', tyresOverride, texMax = 1024 } = options;
   const chain = await bikeSources(options);
   const names = await relativeNames(chain);
   const configData = await readChain(chain, 'gfx.cfg');
@@ -159,8 +159,9 @@ async function build(options) {
   for (const [slot, expected] of [['chassis', 'chassis'], ['steer', 'steer'], ['front_susp', 'fsusp'], ['rear_susp', 'rsusp']]) await addPiece(slot, cfg[slot], chain, expected);
   if (!parts.length) throw new Error('No readable bike geometry was found');
   if (!assembly) warnings.push('This bike’s mounting geometry is unavailable; some parts may be misplaced.');
-  if (assembly && typeof cfg.tyres === 'string') {
-    const tyreChain = await chainOf([{ dir: path.join(modsDir, 'tyres', cfg.tyres) }, installDir ? { pkz: path.join(installDir, 'tyres.pkz'), prefix: `tyres/${cfg.tyres}` } : null]);
+  const tyreName = tyresOverride || cfg.tyres;
+  if (assembly && typeof tyreName === 'string') {
+    const tyreChain = await chainOf([{ dir: path.join(modsDir, 'tyres', tyreName) }, installDir ? { pkz: path.join(installDir, 'tyres.pkz'), prefix: `tyres/${tyreName}` } : null]);
     const tyreCfgData = await readChain(tyreChain, 'gfx.cfg');
     if (tyreCfgData) {
       const tyreCfg = parseCfg(tyreCfgData.buf.toString('latin1'));

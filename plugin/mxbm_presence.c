@@ -87,7 +87,7 @@ static void writeState(void) {
   if (!g_path[0]) return;
   GetSystemTimeAsFileTime(&ft);
   t.LowPart = ft.dwLowDateTime; t.HighPart = ft.dwHighDateTime;
-  at += (size_t)sprintf(o, "{\"v\":1,\"pid\":%lu,\"updated\":%llu", GetCurrentProcessId(), (t.QuadPart - 116444736000000000ULL) / 10000ULL);
+  at += (size_t)sprintf(o, "{\"v\":2,\"pid\":%lu,\"updated\":%llu", GetCurrentProcessId(), (t.QuadPart - 116444736000000000ULL) / 10000ULL);
   PUTI("inEvent", S.inEvent);
   if (S.inEvent) {
     PUTI("type", S.type);
@@ -136,7 +136,9 @@ EXPORT char *GetModID(void) { return "mxbikes"; }
 EXPORT int GetModDataVersion(void) { return 8; }
 EXPORT int GetInterfaceVersion(void) { return 9; }
 
-/* _szSavePath is the game's user folder (Documents\PiBoSo\MX Bikes\). -1 = no telemetry needed. */
+/* _szSavePath is the game's user folder (Documents\PiBoSo\MX Bikes\).
+ * Startup -1 disables the plugin, including event delivery. Request the lowest
+ * supported rate (3 = 10 Hz); RunTelemetry intentionally ignores the payload. */
 EXPORT int Startup(char *_szSavePath) {
   size_t n;
   InitializeCriticalSection(&g_lock); g_lockReady = 1;
@@ -147,7 +149,11 @@ EXPORT int Startup(char *_szSavePath) {
   strcat(g_path, "mxbm_presence.json");
   memset(&S, 0, sizeof S);
   writeState();
-  return -1;
+  return 3;
+}
+
+EXPORT void RunTelemetry(void *_pData, int _iDataSize, float _fTime, float _fPos) {
+  (void)_pData; (void)_iDataSize; (void)_fTime; (void)_fPos;
 }
 
 EXPORT void Shutdown(void) {
@@ -167,12 +173,15 @@ EXPORT void EventInit(void *_pData, int _iDataSize) {
   copy(S.trackId, e->m_szTrackID, sizeof S.trackId);
   copy(S.trackName, e->m_szTrackName, sizeof S.trackName);
   S.type = e->m_iType;
-  S.haveServer = _iDataSize >= (int)(offsetof(BikeEvent, m_szGUID) + sizeof e->m_szGUID);
+  S.haveServer = _iDataSize >= (int)(offsetof(BikeEvent, m_szServerName) + sizeof e->m_szServerName);
+  S.server[0] = 0; S.guid[0] = 0; S.serverType = 0;
   if (S.haveServer) {
     copy(S.server, e->m_szServerName, sizeof S.server);
-    copy(S.guid, e->m_szGUID, sizeof S.guid);
+  }
+  if (_iDataSize >= (int)(offsetof(BikeEvent, m_iServerType) + sizeof e->m_iServerType)) {
     S.serverType = e->m_iServerType;
   }
+  if (_iDataSize >= (int)(offsetof(BikeEvent, m_szGUID) + sizeof e->m_szGUID)) copy(S.guid, e->m_szGUID, sizeof S.guid);
   writeState();
   unlock();
 }
@@ -183,13 +192,17 @@ EXPORT void RaceEvent(void *_pData, int _iDataSize) {
   const RaceEventData *e = (const RaceEventData *)_pData;
   if (!e || _iDataSize < (int)sizeof(RaceEventData) - (int)sizeof(float)) return;
   lock();
+  /* RaceEvent arrives in the pits/spectator view too, before a local bike run.
+   * Loaded replays are not live sessions and must not advertise an old server. */
+  if (e->m_iType == -1) memset(&S, 0, sizeof S);
+  else { S.inEvent = 1; S.type = e->m_iType; }
   copy(S.eventName, e->m_szName, sizeof S.eventName);
   if (!S.trackName[0]) copy(S.trackName, e->m_szTrackName, sizeof S.trackName);
   writeState();
   unlock();
 }
 
-EXPORT void RaceDeinit(void) { lock(); memset(S.riders, 0, sizeof S.riders); S.eventName[0] = 0; writeState(); unlock(); }
+EXPORT void RaceDeinit(void) { lock(); memset(&S, 0, sizeof S); writeState(); unlock(); }
 
 EXPORT void RaceAddEntry(void *_pData, int _iDataSize) {
   const RaceEntry *e = (const RaceEntry *)_pData;

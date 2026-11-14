@@ -37,11 +37,13 @@ Choose your helmet, goggles, kit, gloves, boots, and protection with searchable,
 
 Save a different outfit for each bike, copy an outfit across your bikes, or create multiple **game profiles** for different gear setups. **My gear** also lets you manage rider models and individual bike paints, including brand and cc filtering for bike paints.
 
-Close MX Bikes before changing game profiles or outfits. The manager keeps profile backups so the game does not overwrite your changes when it exits.
+Choices are previews until you press **Apply** on the Outfit or Bike tab. Close MX Bikes, choose your setup, press Apply, then launch the game. Apply saves and activates the selected game profile and bike, and checks the saved values. **Revert** discards the current preview; **Refresh** reads the game files again. Profiles can be created or deleted, and profile changes made in the game are detected by the manager. Profile backups are kept beside the originals.
+
+Helmets, boots, protection, and their paints belong in the shared `mods/rider/` accessory folders. Rider bodies go in `mods/rider/riders/`; kit paints and glove paints go inside the selected body's `paints/` and `gloves/` folders. The installer, previews and sync use this layout. **Settings → Fix & clean** repairs misplaced gear without replacing different existing files; identical extra copies go to the Recycle Bin.
 
 ## Preview your bike and livery
 
-The **Bike** tab shows the installed model with your selected paint applied. Turn it around, zoom in, and use the picture-grid picker to change bikes. Livery choices use their recorded download-page images.
+The **Bike** tab shows the installed model with your selected paint and tyres. Turn it around, zoom in, and use the picture-grid picker to change bikes. Livery choices use their recorded download-page images. Press **Apply** to save the previewed setup to the game.
 
 ![Interactive bike preview with the selected livery](docs/screenshots/bike.png)
 
@@ -54,9 +56,12 @@ Preview support depends on the installed asset format. Some creator-specific, ac
 ![Mod browser showing free content and supported store tabs](docs/screenshots/get-mods.png)
 
 - Open listings to see their description, pictures, and download choices.
+- **MXB Mods** and **Addons** use the same live website listings. Addons filters for paints and dependent content, with relevant categories; browsing does not download mod archives.
 - Sign in on a supported shop's own page to access **your purchases**.
 - Install downloaded archives or drag files into the app.
 - Review the destination when a download needs help finding the right model.
+- Follow download progress directly on a listing. Cancelling an unfinished install rolls back its written files and restores overwritten files.
+- **Downloads → Recent installs** lists the last ten installs and reopens their previous location choices so files can be moved without downloading again. Completed download history keeps ten items; clearing it leaves installed files intact.
 - Filter target bikes by **brand and cc** when installing paints.
 - Use **OEM Packs** to compare supported packs with what you already have and install missing or changed files.
 
@@ -64,7 +69,7 @@ Paid content still requires a purchase and your own store account. Some download
 
 ## Get ready to ride
 
-**Game** lets you choose a bike and track, launch MX Bikes, and edit supported game settings. **Fix & clean** checks for common folder problems, duplicate downloads, and archives left zipped in your mods folder, and shows a storage breakdown.
+**Game** lets you choose a bike and track, launch MX Bikes, and edit supported game settings. **Settings → Fix & clean** checks for common folder problems, misplaced gear, duplicate downloads, and archives left zipped in your mods folder, and shows a storage breakdown.
 
 Install jobs clean up temporary staging files after completion, failure, or cancellation. Generated thumbnails are pruned over time, while images you've assigned to mods are preserved.
 
@@ -76,9 +81,11 @@ Join or save a server address, use shareable join links, and configure a session
 
 Live presence, friends, and paint sharing use the included presence plugin and a **separately hosted online service**. The server list reflects participating app users; it is not the game's complete public server browser. Installers include the server address configured in `online.config.json`, so these shared features need that service running and reachable from the user's network. Local mod management, previews, profiles, and store browsing work independently.
 
-Click a friend to see their equipped gear, selected paints, bike livery, server and track. **Sync equipped gear** shows progress and installs only missing files; identical files already in your mods folder or model packages are skipped. Your own outfit stays selected. **Get track & join** searches the creator's download pages and waits for the matching track to be installed before joining. A server address must be available through shared presence, a saved server, or a recent FrostMod server list.
+Use the bottom-left Steam account's **Friends & status** button to search friends, see their status, and open their equipped gear, selected paints, bike livery, tyres, server and track. Five friends are shown initially, with Show all for the rest. **Online → Sync** contains sharing settings. Automatic equipped-file sync checks for changes each minute and skips identical files already installed. Progress floats over the page. Your own outfit stays selected. **Get track & join** searches the creator's download pages and waits for the matching track to be installed before joining. A server address must be available through shared presence, a saved server, or a recent FrostMod server list.
 
-Online hosts updating from 1.0.3 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip**. Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
+Servers refresh every five minutes while the Online page is open, with a manual Refresh button. Population and network-ping filters are available. Capacity remains unknown when the service has no maximum-player count; network ping can be unavailable if a host blocks ICMP.
+
+Online hosts updating to 1.0.7 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip** (health version 4). Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
 
 To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
 

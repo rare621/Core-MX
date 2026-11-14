@@ -23,11 +23,11 @@ function classFor(bikeId) {
 }
 
 // Point the profile at a bike (and optionally a track) so the game opens with them selected.
-async function quickStart(userDir, name, { bike, track }) {
+async function quickStart(userDir, name, { bike, bikeClass, track }) {
   const values = [];
   if (bike) {
     values.push(['info', 'bikeid', bike]);
-    const cls = classFor(bike);
+    const cls = classFor(bike) || bikeClass;
     if (cls) { values.push(['info', 'class', cls]); values.push(['category', cls, bike]); }
   }
   if (track) { values.push(['ui', 'race_track', track]); values.push(['ui', 'testing_track', track]); }

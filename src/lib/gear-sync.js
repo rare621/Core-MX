@@ -7,7 +7,7 @@ const yauzl = require('yauzl');
 const { decodeBlob } = require('./assetread');
 
 const MAX_FILE = 128 * 1024 * 1024;
-const modelFile = (name) => typeof name === 'string' && !/^[\\/]|[\\:\0]/.test(name) && !name.split('/').some((n) => !n || n === '.' || n === '..') && /\.(edf|hrc|cfg|ini|anm|tga|dds|png|jpe?g|bmp)$/i.test(name) && !/(^|\/)(paints|goggles)\//i.test(name);
+const modelFile = (name, kind) => typeof name === 'string' && !/^[\\/]|[\\:\0]/.test(name) && !name.split('/').some((n) => !n || n === '.' || n === '..') && (/\.(edf|hrc|cfg|ini|anm|tga|dds|png|jpe?g|bmp)$/i.test(name) || kind === 'tyres' && /\.tyre$/i.test(name)) && !/(^|\/)(paints|goggles)\//i.test(name);
 
 function zip(files) {
   const local = [], central = []; let offset = 0;
@@ -28,11 +28,11 @@ function zip(files) {
 }
 
 async function modelBundle({ modsDir, rider = 'default_mx', kind, name }) {
-  if (!gear.validName(rider) || !gear.validName(name) || !['rider', 'helmet', 'boots', 'protection'].includes(kind)) return null;
-  const source = kind === 'rider' ? await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', name) }])
+  if (!gear.validName(rider) || !gear.validName(name) || !['rider', 'helmet', 'boots', 'protection', 'tyres'].includes(kind)) return null;
+  const source = kind === 'tyres' ? await chainOf([{ dir: path.join(modsDir, 'tyres', name) }]) : kind === 'rider' ? await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', name) }])
     : await gear.modelSources({ modsDir, rider }, { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind], name);
   const files = []; let total = 0;
-  for (const rel of (await listFiles(source)).filter(modelFile)) {
+  for (const rel of (await listFiles(source)).filter((rel) => modelFile(rel, kind))) {
     if (kind === 'rider' && /^(helmets|boots|protections|gloves|goggles|paints)\//i.test(rel)) continue;
     const item = await readChain(source, rel);
     if (!item) continue;
@@ -44,7 +44,7 @@ async function modelBundle({ modsDir, rider = 'default_mx', kind, name }) {
   return files.some(([name]) => /\.edf$/i.test(name)) ? zip(files) : null;
 }
 
-function validateModel(buf) {
+function validateModel(buf, kind) {
   if (buf.length > MAX_FILE) return Promise.resolve(false);
   return new Promise((resolve) => {
     yauzl.fromBuffer(buf, { lazyEntries: true, strictFileNames: true }, (error, archive) => {
@@ -54,7 +54,7 @@ function validateModel(buf) {
       archive.on('error', fail);
       archive.on('entry', (entry) => {
         size += entry.uncompressedSize;
-        if (++count > 500 || size > MAX_FILE || !modelFile(entry.fileName) || entry.generalPurposeBitFlag & 1) return fail();
+        if (++count > 500 || size > MAX_FILE || !modelFile(entry.fileName, kind) || entry.generalPurposeBitFlag & 1) return fail();
         if (/\.edf$/i.test(entry.fileName)) mesh = true;
         archive.readEntry();
       });

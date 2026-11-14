@@ -2,29 +2,30 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const os = require('os');
 const { isBodyPaint } = require('./paint-compat');
+const layout = require('./rider-layout');
 
 const TRACK_TYPES = ['motocross', 'supercross', 'enduro', 'supermoto'];
 const TOP = new Set(['bikes', 'tracks', 'rider', 'tyres', 'misc']);
 const RIDER_SUBS = new Set(['helmets', 'boots', 'gloves', 'paints', 'protections', 'goggles', 'riders', 'animations', 'helmetcams', 'fonts']);
 const DOC_EXT = /\.(txt|md|pdf|url|html?|jpe?g|png|webp|gif|bmp|mp4|mov|docx?|rtf|psd|lnk|exe)$/i;
 
-// Rider gear lives in rider/riders/<model>/<type> on current MX Bikes, rider/<type> on old installs.
-// o.gear is that prefix, chosen in plan().
+// Only kit/glove paints use o.gear (the body). Accessories are shared under rider/.
 const KINDS = {
   track:           { label: 'Track', base: (o) => `tracks/${o.trackType || 'motocross'}` },
   bike:            { label: 'Bike', base: () => 'bikes' },
   bikePaint:       { label: 'Bike livery (paint)', base: () => 'bikes', paintModels: () => 'bikes' },
   riderKit:        { label: 'Rider kit (jersey & pants)', base: (o) => `${o.gear}/paints`, loosePnt: (o) => `${o.gear}/paints` },
   gloves:          { label: 'Gloves', base: (o) => `${o.gear}/gloves`, loosePnt: (o) => `${o.gear}/gloves` },
-  boots:           { label: 'Boots', base: (o) => `${o.gear}/boots` },
-  bootPaint:       { label: 'Boot paint', base: (o) => `${o.gear}/boots`, paintModels: (o) => `${o.gear}/boots` },
-  helmet:          { label: 'Helmet', base: (o) => `${o.gear}/helmets` },
-  helmetPaint:     { label: 'Helmet paint', base: (o) => `${o.gear}/helmets`, paintModels: (o) => `${o.gear}/helmets` },
-  goggles:         { label: 'Goggles', base: (o) => `${o.gear}/goggles`, loosePnt: (o) => `${o.gear}/goggles` },
-  protection:      { label: 'Chest protector / neck brace', base: (o) => `${o.gear}/protections` },
-  protectionPaint: { label: 'Chest protector paint', base: (o) => `${o.gear}/protections`, paintModels: (o) => `${o.gear}/protections` },
-  helmetcam:       { label: 'Helmet camera', base: (o) => `${o.gear}/helmetcams` },
+  boots:           { label: 'Boots', base: () => 'rider/boots' },
+  bootPaint:       { label: 'Boot paint', base: () => 'rider/boots', paintModels: () => 'rider/boots' },
+  helmet:          { label: 'Helmet', base: () => 'rider/helmets' },
+  helmetPaint:     { label: 'Helmet paint', base: () => 'rider/helmets', paintModels: () => 'rider/helmets' },
+  goggles:         { label: 'Goggles', base: () => 'rider/goggles', loosePnt: () => 'rider/goggles' },
+  protection:      { label: 'Chest protector / neck brace', base: () => 'rider/protections' },
+  protectionPaint: { label: 'Chest protector paint', base: () => 'rider/protections', paintModels: () => 'rider/protections' },
+  helmetcam:       { label: 'Helmet camera', base: () => 'rider/helmetcams' },
   riderModel:      { label: 'Rider model', base: () => 'rider/riders' },
   animation:       { label: 'Rider animation', base: () => 'rider/animations' },
   tyre:            { label: 'Tyres', base: () => 'tyres' },
@@ -110,9 +111,8 @@ function plan(files, ctx, opts = {}) {
     else if (MODEL_OF[kind] && hasPkz && !hasPnt) kind = MODEL_OF[kind];
   }
   const K = KINDS[kind] || KINDS.custom;
-  // Current MX Bikes uses this layout even on a fresh install where the folder
-  // has not been created yet. An explicitly requested legacy install can opt out.
-  const modern = opts.legacyLayout !== true;
+  // Do not infer layout from existing folders: earlier versions could create them incorrectly.
+  const modern = true;
   const bodyPaintFiles = ctx.paintTextures ? Object.keys(ctx.paintTextures).filter((rel) => isBodyPaint(rel, ctx.paintTextures[rel], kind)) : kind === 'riderKit' ? ctx.bodyPaintFiles || [] : ctx.knownBodyPaintFiles || [];
   const bodyTextures = ctx.paintTextures ? [...new Set(bodyPaintFiles.flatMap((rel) => ctx.paintTextures[rel] || []))] : ctx.bodyPaintTextures || [];
   const riderModels = (ctx.riderModels || []).map((m) => ({ ...m, compatible: bodyTextures.every((t) => m.textures.some((n) => n.toLowerCase() === t.toLowerCase())) }));
@@ -171,6 +171,12 @@ function plan(files, ctx, opts = {}) {
     const lsegs = segs.map((s) => s.toLowerCase());
     const fname = segs[segs.length - 1];
     let dest = null, how = '';
+    if (ctx.relocate && /\.pnt$/i.test(fname)) {
+      if (paintModelsDir && o.paintTarget) dest = `${paintModelsDir}/${o.paintTarget}/${kind === 'goggles' ? 'goggles' : 'paints'}/${fname}`;
+      else if (loosePntDir && !needsRiderTarget) dest = `${loosePntDir}/${fname}`;
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status: !dest ? 'unresolved' : fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new', how: 'relocate' });
+      continue;
+    }
 
     // 1) Archive already contains the mods/ structure
     const mi = lsegs.lastIndexOf('mods');
@@ -233,7 +239,7 @@ function plan(files, ctx, opts = {}) {
     let status;
     if (dest) {
       dest = dest.replace(/\/+/g, '/').replace(/^\//, '');
-      if (modern && (kind !== 'custom' || autoKind)) dest = dest.replace(/^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i, 'rider/riders/default_mx/$1/');
+      if (modern) dest = layout.canonical(dest, riderTarget || 'default_mx');
       if (bodyPaintFiles.includes(f.rel) && /\/paints\//i.test(dest) && /^rider\//i.test(dest)) {
         if (needsRiderTarget) { dest = null; how = 'missing-rider'; }
         else if (riderTarget) dest = dest.replace(/^rider\/riders\/default_mx\//i, `rider/riders/${riderTarget}/`);
@@ -248,24 +254,24 @@ function plan(files, ctx, opts = {}) {
   const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => /\.pnt$/i.test(e.rel) && !e.dest);
   const installable = entries.filter((e) => e.dest).length;
   const warnings = [];
-  if (!installable) warnings.push('Nothing in this download could be matched to a mods folder. Choose a type or folder below.');
-  if (needsPaintTarget) warnings.push(`Choose which ${paintModelsDir.split('/').pop().replace(/s$/, '')} these paints are for.`);
-  if (counts.unresolved) warnings.push(`${counts.unresolved} file(s) have no destination and will be skipped.`);
+  const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
+  if (!installable && !awaitingTarget) warnings.push('Choose the content type or destination folder to continue.');
+  if ((counts.unresolved || 0) > awaitingTarget) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
   if (counts.overwrite) warnings.push(`${counts.overwrite} file(s) already exist and will be replaced.`);
-  if (ctx.unreadablePaints?.length) warnings.push('Some paints could not be inspected. Check the creator’s required model and target folder before installing.');
+  if (kind !== 'bikePaint' && ctx.unreadablePaints?.length) warnings.push('Some paints could not be inspected. Check the creator’s required model and target folder before installing.');
   if (needsRiderTarget) warnings.push(`These are paints for a different rider model (${bodyTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t)).join(', ') || 'custom rider'}). Install the matching model, then choose it below. Paints do not include the model.`);
   const required = new Map();
   for (const entry of entries.filter((e) => e.dest && /\.pnt$/i.test(e.dest))) {
     const match = entry.dest.match(/^(.*?\/(helmets|boots|protections)\/[^/]+)\/(?:paints|goggles)\//i) || entry.dest.match(/^(bikes\/[^/]+)\/paints\//i);
     if (!match) continue;
     const dir = match[1], name = dir.split('/').pop();
-    const builtin = /^(default|chest|full)$/i.test(name);
+    const builtin = /^(default|full|neck)$/i.test(name);
     const included = entries.some((e) => e.dest === dir + '.pkz' || e.dest?.startsWith(dir + '/') && /\.(edf|hrc|engn|geom)$/i.test(e.dest));
     const installed = builtin || modelExists(path.join(modsDir, dir));
     required.set(dir, { name, kind: match[2] || 'bike', installed, included });
   }
   const requiredModels = [...required.values()];
-  for (const m of requiredModels.filter((m) => !m.installed && !m.included)) warnings.push(`These paints need the ${m.name} model. Install that model too before equipping the paints.`);
+  for (const m of requiredModels.filter((m) => m.kind !== 'bike' && !m.installed && !m.included)) warnings.push(`These paints need the ${m.name} model. Install that model too before equipping the paints.`);
   if (gameRoot && !ctx.installDir) warnings.push('Set your game install folder in Settings first — graphics mods go there.');
   if (gameRoot) warnings.push('This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
   else if (/^tools|^plugins|reshade/i.test(ctx.categoryNames ? ctx.categoryNames.join(' ') : '')) warnings.push('Tools, plugins and ReShade presets usually go in the game install folder, not mods/. Check the mod description.');
@@ -273,7 +279,7 @@ function plan(files, ctx, opts = {}) {
   // Everything placed by the archive's own folder structure counts as certain even without a known type.
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
   const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title'
-    && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && !ctx.unreadablePaints?.length
+    && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && (kind === 'bikePaint' || !ctx.unreadablePaints?.length)
     && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
 
@@ -283,27 +289,53 @@ function plan(files, ctx, opts = {}) {
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
     options: o, paintModels, paintModelsBase: paintModelsDir, paintGuess,
     entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
-    requiresModelWarning: requiredModels.some((r) => !r.included) || needsPaintTarget || showRiderTarget, dependencies: ctx.dependencies || [],
+    requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included) || needsPaintTarget || showRiderTarget), dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
     trackTypes: TRACK_TYPES,
   };
 }
 
-async function apply(p, rootDir) {
-  const written = [];
+async function apply(p, rootDir, { signal, rollbackDir } = {}) {
+  const written = [], journal = [];
+  let temporary = null, keepRecovery = false;
+  const check = () => { if (signal?.aborted) throw new Error('Cancelled'); };
+  try {
   for (const e of p.entries) {
+    check();
     if (!e.dest) continue;
     const to = path.join(rootDir, e.dest);
     if (!path.resolve(to).toLowerCase().startsWith(path.resolve(rootDir).toLowerCase() + path.sep)) continue; // never write outside the target folder
     await fsp.mkdir(path.dirname(to), { recursive: true });
+    let previous = null;
+    if (fs.existsSync(to)) {
+      if (!temporary) { const parent = rollbackDir || os.tmpdir(); await fsp.mkdir(parent, { recursive: true }); temporary = await fsp.mkdtemp(path.join(parent, 'mxbm-install-')); }
+      previous = path.join(temporary, String(journal.length)); await fsp.copyFile(to, previous);
+    }
+    const createdBackup = p.root === 'game' && fs.existsSync(to) && !fs.existsSync(to + '.mxbm-bak');
+    journal.push({ to, previous, createdBackup });
     // In the game folder, keep the original file before replacing it
     if (p.root === 'game' && fs.existsSync(to) && !fs.existsSync(to + '.mxbm-bak')) await fsp.copyFile(to, to + '.mxbm-bak');
     await fsp.copyFile(e.abs, to);
+    check();
     const now = new Date();
     await fsp.utimes(to, now, now).catch(() => {}); // Windows copy keeps the archive's old dates
     written.push(e.dest);
   }
   return written;
+  } catch (error) {
+    const failures = [];
+    for (const entry of journal.reverse()) {
+      try {
+        if (entry.previous) await fsp.copyFile(entry.previous, entry.to);
+        else await fsp.unlink(entry.to).catch((e) => { if (e.code !== 'ENOENT') throw e; });
+        if (entry.createdBackup) await fsp.unlink(entry.to + '.mxbm-bak').catch((e) => { if (e.code !== 'ENOENT') throw e; });
+      } catch (e) { failures.push(e); }
+    }
+    if (failures.length) { keepRecovery = true; const e = new Error(`${error.message}. Some files could not be restored; recovery copies were kept in ${temporary || rollbackDir}.`); e.rollbackFailed = true; throw e; }
+    throw error;
+  } finally {
+    if (temporary && !keepRecovery) await fsp.rm(temporary, { recursive: true, force: true });
+  }
 }
 
 module.exports = { plan, apply, KINDS, kindFromCategories, guessTrackType, guessModel, listModels };

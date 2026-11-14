@@ -24,8 +24,8 @@ async function fixture(t) {
   await fs.mkdir(receiver);
   const helmetPaint = sealed(paint('helmet', 150));
   await write(source, 'rider/helmets/Helmet.pkz', zip({ 'Helmet/gfx.cfg': 'model = helmet.hrc', 'Helmet/helmet.edf': model('helmet'), 'Helmet/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}', 'Helmet/paints/Active.pnt': helmetPaint, 'Helmet/paints/Unused.pnt': paint('helmet', 240) }));
-  await write(source, 'rider/paints/Kit.pnt', paint('rider'));
-  await write(source, 'rider/paints/Unused.pnt', paint('rider', 200));
+  await write(source, 'rider/riders/default_mx/paints/Kit.pnt', paint('rider'));
+  await write(source, 'rider/riders/default_mx/paints/Unused.pnt', paint('rider', 200));
   await write(source, 'bikes/Fixture/paints/Livery.pnt', paint('bike'));
   const sections = {};
   for (const [section, value] of Object.entries({ helmet: 'Helmet', helmet_paint: 'Active', suit_paint: 'Kit', paint: 'Livery' })) sections[section] = { values: { Fixture: value } };
@@ -50,7 +50,7 @@ test('equipped sync includes the helmet model and chosen paints, excludes unused
 test('sync previews before download, skips identical loose and packaged files, and skips every download on a repeat sync', async (t) => {
   const f = await fixture(t);
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
-  await f.write(f.receiver, 'rider/paints/Kit.pnt', paint('rider'));
+  await f.write(f.receiver, 'rider/riders/default_mx/paints/Kit.pnt', paint('rider'));
   const lo = { id: 'friend', name: 'Fixture', bike: 'Fixture', items: outfit.items.map(({ buf, ...it }) => it), equipped: outfit.equipped };
   let downloads = 0;
   const received = {}, changes = [];
@@ -75,19 +75,36 @@ test('sync previews before download, skips identical loose and packaged files, a
   assert.equal(sha(before), sha(after));
 });
 
+test('only the selected bike tyre dependency syncs, includes physics files, and skips an identical installed package', async (t) => {
+  const f = await fixture(t);
+  await f.write(f.source, 'bikes/Fixture/gfx.cfg', 'tyres = FixtureTyres');
+  const packageBytes = zip({ 'gfx.cfg': 'front_wheel\n{\nmodel = front.hrc\n}', 'model.edf': model('wheel'), 'front.tyre': 'fixture physics', 'unused.pnt': paint('wheel') });
+  await f.write(f.source, 'tyres/FixtureTyres.pkz', packageBytes);
+  await f.write(f.source, 'tyres/Unused.pkz', packageBytes);
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
+  const tyre = outfit.items.find((it) => it.modelKind === 'tyres');
+  assert.equal(tyre.path, 'tyres/FixtureTyres.pkz');
+  assert.equal(await validateModel(tyre.buf, 'tyres'), true);
+  assert.ok(!outfit.items.some((it) => /Unused/.test(it.path)));
+  await f.write(f.receiver, 'tyres/FixtureTyres.pkz', packageBytes);
+  const report = await sync.listFriends({ call: async () => ({ loadouts: [{ id: 'friend', items: [tyre] }] }), modsDir: f.receiver });
+  assert.equal(report[0].items[0].state, 'have');
+});
+
 test('different existing paints are kept, and corrupt or unsafe downloads cannot be installed', async (t) => {
   const f = await fixture(t);
-  await f.write(f.receiver, 'rider/paints/Kit.pnt', paint('rider', 1));
+  await f.write(f.receiver, 'rider/riders/default_mx/paints/Kit.pnt', paint('rider', 1));
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
   const item = outfit.items.find((it) => it.slot === 'suitPaint');
   const received = {};
   const options = { call: async () => ({ loadouts: [{ id: 'friend', items: [item] }] }), modsDir: f.receiver, received, have: () => true,
     download: async () => { throw new Error('Should not download a conflicting paint'); } };
   assert.equal((await sync.fetchFriends(options))[0].items[0].state, 'name-taken');
-  assert.deepEqual(await fs.readFile(path.join(f.receiver, 'rider/paints/Kit.pnt')), paint('rider', 1));
+  assert.deepEqual(await fs.readFile(path.join(f.receiver, 'rider/riders/default_mx/paints/Kit.pnt')), paint('rider', 1));
   assert.equal(sync.safeRel('rider/../../outside.pnt'), false);
   assert.equal(sync.safeRel('bikes/Fixture/executable.pkz'), false);
-  assert.equal(sync.safeRel('rider/riders/default_mx/helmets/Helmet.pkz'), true);
+  assert.equal(sync.safeRel('rider/helmets/Helmet.pkz'), true);
+  assert.equal(sync.safeRel('rider/riders/default_mx/helmets/Helmet.pkz'), false);
   assert.equal(await validateModel(zip({ 'run.exe': 'unsafe', 'helmet.edf': model('helmet') })), false);
 });
 
@@ -108,8 +125,8 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const a = await call()('POST', '/v1/register', { steamId: '76561198000000001', name: 'A' });
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
-  await ac('POST', '/v1/friends', { ids: [b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 3);
+  await ac('POST', '/v1/friends', { ids: [a.id, b.id] });
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 4);
   const shared = await sync.share({ call: ac, upload: async (hash, bytes) => {
     const res = await fetch(url + '/v1/files/' + hash, { method: 'PUT', headers: { authorization: `Bearer ${a.token}` }, body: bytes });
     assert.ok(res.ok, (await res.json()).error);
@@ -122,6 +139,10 @@ test('two real clients exchange only mutual-friend equipped files through the on
   await ac('POST', '/v1/presence', { state: { inGame: false } });
   const friend = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(friend.online, true); assert.equal(friend.inGame, false);
+  await ac('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Fixture server', trackId: 'fixture', trackName: 'Fixture track' } });
+  const riding = (await bc('GET', '/v1/friends')).friends[0];
+  assert.equal(riding.inEvent, true); assert.equal(riding.server, 'Fixture server'); assert.equal(riding.trackName, 'Fixture track');
+  assert.equal((await ac('GET', '/v1/friends')).friends.find((f) => f.id === a.id).server, 'Fixture server');
   // One client cannot exhaust another rider's allowance behind the same NAT.
   let limited;
   for (let i = 0; i < 301; i++) {

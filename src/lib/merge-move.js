@@ -3,7 +3,7 @@ const path = require('path');
 const { filesMatch } = require('./file-verify');
 
 // Merge unique files without replacing a different installed version.
-async function mergeMove(from, to, trash) {
+async function mergeMove(from, to, trash, onMoved = () => {}) {
   const source = path.resolve(from), destination = path.resolve(to);
   if (source.toLowerCase() === destination.toLowerCase() || destination.toLowerCase().startsWith(source.toLowerCase() + path.sep)) throw new Error('Invalid move destination');
   const result = { moved: [], conflicts: [] };
@@ -23,6 +23,7 @@ async function mergeMove(from, to, trash) {
         await trash(a);
       } else { await fs.mkdir(path.dirname(b), { recursive: true }); await fs.rename(a, b); }
       result.moved.push({ from: a, to: b });
+      onMoved({ from: a, to: b });
     }
   };
   await walk(source, destination);

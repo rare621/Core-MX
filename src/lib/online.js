@@ -23,6 +23,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let retryTimer = null;
   const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null };
   let progressAt = 0;
+  let pluginCache = { key: '' };
   const pendingCalls = new Map();
   let retryKey = '', retryAt = 0;
   const progress = (value) => { paint.progress = value; if (Date.now() - progressAt > 150 || value.loaded === 0) { progressAt = Date.now(); onChange(status()); } };
@@ -35,6 +36,20 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const bundledPlugin = () => path.join(appDir, 'plugin', PLUGIN);
   const pluginPath = () => (installDir() ? path.join(installDir(), 'plugins', PLUGIN) : null);
   const statePath = () => (userDir() ? path.join(userDir(), STATE_FILE) : null);
+  function pluginStatus() {
+    const target = pluginPath(), source = bundledPlugin();
+    const signature = (file) => { try { const st = fs.statSync(file); return `${st.mtimeMs}:${st.ctimeMs}:${st.size}`; } catch { return ''; } };
+    const installed = target ? signature(target) : '', available = signature(source);
+    const key = JSON.stringify([target, installed, source, available]);
+    if (pluginCache.key !== key) {
+      let needsUpdate = false;
+      if (installed && available) {
+        try { needsUpdate = !fs.readFileSync(target).equals(fs.readFileSync(source)); } catch {}
+      }
+      pluginCache = { key, installed: !!installed, available: !!available, needsUpdate };
+    }
+    return { installed: pluginCache.installed, available: pluginCache.available, needsUpdate: pluginCache.needsUpdate, path: target };
+  }
 
   // ---------- backend calls ----------
   function busyError() {
@@ -149,15 +164,17 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (c.url && defaultUrl && c.url !== defaultUrl) setCfg({ url: defaultUrl, ...(sameService(c.url) ? {} : { token: null, id: null }) });
     if (defaultUrl && !cfg().token && !c.optedOut) connect().catch((e) => { lastError = e.message; onChange(status()); });
     else if (c.token) syncPaints().catch(() => {});
+    // Existing installs otherwise keep the old DLO forever after an app upgrade.
+    // Windows locks loaded plugins: never replace one while the game is open.
+    if (pluginStatus().needsUpdate) installPlugin().then(() => onChange(status())).catch(() => onChange(status()));
   }
   function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); }
 
   // ---------- public ----------
   function status() {
     const c = cfg();
-    const pp = pluginPath();
     return {
-      plugin: { installed: !!(pp && fs.existsSync(pp)), available: fs.existsSync(bundledPlugin()), path: pp },
+      plugin: pluginStatus(),
       game: { running: gameRunning },
       presence: current,
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError },
@@ -234,7 +251,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       progress({ phase: 'checking', label: 'Checking equipped files', completed: 0, total: 0, friendId });
       const health = await call('GET', '/v1/health');
-      if (health.version < 2) throw new Error('Update the online server using the new mxbm-online-service.zip to enable gear sync');
+      if (health.version < 4) throw new Error('Update the online server using the new mxbm-online-service.zip (version 4) to enable gear and tyre sync');
       await syncFriends();
       const o = await currentOutfit();
       if (o) {

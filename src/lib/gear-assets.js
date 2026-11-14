@@ -5,13 +5,11 @@ const { chainOf, readChain, listFiles } = require('./asset-sources');
 const validName = (name) => typeof name === 'string' && !!name && !/[\\/:\0]/.test(name) && name !== '.' && name !== '..';
 const unique = (values) => [...new Map(values.map((v) => [v.toLowerCase(), v])).values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-async function roots({ modsDir, rider = 'default_mx', stockPkz }) {
+async function roots({ modsDir, rider = 'default_mx', stockPkz }, body = false) {
   if (!validName(rider)) throw new Error('Invalid rider model');
   return chainOf([
-    { dir: path.join(modsDir, 'rider', 'riders', rider) },
-    { dir: path.join(modsDir, 'rider') },
-    stockPkz ? { pkz: stockPkz, prefix: `rider/riders/${rider}` } : null,
-    stockPkz ? { pkz: stockPkz, prefix: 'rider' } : null,
+    { dir: body ? path.join(modsDir, 'rider', 'riders', rider) : path.join(modsDir, 'rider') },
+    stockPkz ? { pkz: stockPkz, prefix: body ? `rider/riders/${rider}` : 'rider' } : null,
   ]);
 }
 
@@ -46,26 +44,38 @@ async function modelSources(options, kind, name) {
   if (!validName(name)) return [];
   return subchain(await roots(options), `${kind}/${name}`);
 }
+async function modelChildren(source, kind) {
+  const names = await children(source, kind, 'model'), out = [];
+  for (const name of names) {
+    const chain = await subchain(source, `${kind}/${name}`), files = await listFiles(chain);
+    if (files.some((f) => !f.includes('/') && /\.(edf|hrc|ini|cfg)$/i.test(f))) { out.push(name); continue; }
+    // An unreadable packed model may still be usable in the game; a loose
+    // paint-only directory cannot by itself establish that the model exists.
+    if (source.some((s) => s.kind === 'dir' && fs.existsSync(path.join(s.dir, kind, name + '.pkz')))) out.push(name);
+  }
+  return out;
+}
 
 async function catalog(options, current) {
   const source = await roots(options);
+  const body = await roots(options, true);
   const helmet = await subchain(source, `helmets/${current.helmet || 'default'}`);
   const boots = await subchain(source, `boots/${current.boots || 'default'}`);
   const protection = await subchain(source, `protections/${current.protection || 'chest'}`);
   return {
-    helmet: unique(['default', ...await children(source, 'helmets', 'model')]),
+    helmet: unique(['default', ...await modelChildren(source, 'helmets')]),
     helmetPaint: await children(helmet, 'paints'),
     gogglesPaint: unique([...await children(helmet, 'goggles'), ...await children(source, 'goggles')]),
-    boots: unique(['default', ...await children(source, 'boots', 'model')]),
+    boots: unique(['default', ...await modelChildren(source, 'boots')]),
     bootsPaint: unique([...await children(boots, 'paints'), ...await children(source, 'boots'), ...await children(source, 'boots paints')]),
-    protection: unique(['chest', 'full', ...await children(source, 'protections', 'model')]),
-    protectionPaint: await children(protection, 'paints'),
-    suitPaint: await children(source, 'paints'), glovesPaint: await children(source, 'gloves'),
+    protection: ['', ...unique(['full', 'neck', ...await modelChildren(source, 'protections')])],
+    protectionPaint: current.protection ? await children(protection, 'paints') : [],
+    suitPaint: await children(body, 'paints'), glovesPaint: await children(body, 'gloves'),
   };
 }
 
 async function paintSource(options, slot, current) {
-  const source = await roots(options);
+  const source = await roots(options, slot === 'suitPaint' || slot === 'glovesPaint');
   const slots = {
     suitPaint: ['paints'], glovesPaint: ['gloves'],
     helmetPaint: [`helmets/${current.helmet || 'default'}/paints`],

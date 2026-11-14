@@ -9,27 +9,30 @@ const gear = require('./gear-assets');
 const { chainOf, readChain } = require('./asset-sources');
 const { modelBundle, validateModel, MAX_FILE } = require('./gear-sync');
 const { validateRiderPaint } = require('./paint-compat');
+const tyres = require('./tyres');
+const layout = require('./rider-layout');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^rider\/riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?\.pkz$/i.test(p));
+const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
 const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { return false; } };
 const modelOf = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
-const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(chest|full)$/i.test(name) : name === 'default';
+const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(full|neck)$/i.test(name) : name === 'default';
 
 async function outfitFiles(modsDir, prof, bike) {
   const lo = await profile.loadout(modsDir, prof, bike);
   const c = lo.current, rider = c.rider || 'default_mx', prefix = 'rider/riders/' + rider;
   const bikeDir = await profile.findBikeDir(modsDir, bike);
   const items = [], unavailable = [];
-  const equipped = profile.SLOTS.map((s) => ({ slot: s.id, label: s.label, value: c[s.id] || s.default || '', state: 'default' }));
+  const equipped = profile.SLOTS.map((s) => ({ slot: s.id, label: s.label, value: s.id === 'protection' && !c[s.id] ? 'None' : c[s.id] || s.default || '', state: 'default' }));
   let riderPaintError = null;
   try { await validateRiderPaint({ modsDir, current: c }); } catch (e) { riderPaintError = e.message; }
   for (const kind of ['rider', 'helmet', 'boots', 'protection']) {
-    const name = c[kind] || (kind === 'rider' ? 'default_mx' : kind === 'protection' ? 'chest' : 'default');
+    if (kind === 'protection' && !c.protection) continue;
+    const name = c[kind] || (kind === 'rider' ? 'default_mx' : 'default');
     if (defaults(kind, name)) continue;
     try {
       const buf = await modelBundle({ modsDir, rider, kind, name });
       if (!buf) throw new Error('Model files are missing or unreadable');
-      const target = kind === 'rider' ? 'rider/riders/' + name + '.pkz' : prefix + '/' + { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind] + '/' + name + '.pkz';
+      const target = kind === 'rider' ? 'rider/riders/' + name + '.pkz' : 'rider/' + { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind] + '/' + name + '.pkz';
       items.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, value: name, rider, modelKind: kind, path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
     } catch (e) { unavailable.push({ slot: kind, label: name, error: e.message }); }
   }
@@ -44,15 +47,28 @@ async function outfitFiles(modsDir, prof, bike) {
         target = 'bikes/' + bike + '/paints/' + name + '.pnt';
       } else {
         data = await gear.paintSource({ modsDir, rider }, s.id, c);
-        target = data && prefix + '/' + data.relative;
+        target = data && (['suitPaint', 'glovesPaint'].includes(s.id) ? prefix : 'rider') + '/' + data.relative;
       }
       if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing, damaged, or account-bound');
       const needs = [];
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
       if (modelOf[s.id] && c[modelOf[s.id]] && !defaults(modelOf[s.id], c[modelOf[s.id]])) needs.push({ kind: modelOf[s.id], name: c[modelOf[s.id]], rider });
-      if (!defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
+      if (['suitPaint', 'glovesPaint'].includes(s.id) && !defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
       items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
     } catch (e) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: e.message }); }
+  }
+  const tyre = await tyres.selected(modsDir, prof, bike, bikeDir);
+  for (const name of [...new Set([tyre.selected, tyre.base].filter(gear.validName))]) {
+    const slot = name === tyre.selected ? 'tyres' : 'tyreBase';
+    const existingSlot = equipped.find((e) => e.slot === slot);
+    if (existingSlot) existingSlot.value = name;
+    else equipped.push({ slot, label: slot === 'tyres' ? 'Bike tyres' : 'Bike tyre dependency', value: name, state: 'default' });
+    const exists = await fsp.stat(path.join(modsDir, 'tyres', name)).then(() => true).catch(() => false) || await fsp.stat(path.join(modsDir, 'tyres', name + '.pkz')).then(() => true).catch(() => false);
+    if (!exists) continue; // Built-in game tyres are already available on both PCs.
+    try {
+      const buf = await modelBundle({ modsDir, kind: 'tyres', name }); if (!buf) throw new Error('Tyre model is unavailable');
+      items.push({ slot, label: 'Tyres: ' + name, value: name, modelKind: 'tyres', path: 'tyres/' + name + '.pkz', sha256: sha256(buf), size: buf.length, buf, needs: [] });
+    } catch (e) { unavailable.push({ slot, label: name, error: e.message }); }
   }
   for (const e of equipped) {
     if (items.some((i) => i.slot === e.slot)) e.state = 'shared';
@@ -95,7 +111,10 @@ async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
     if (local && !owned) return { ...entry, state: 'name-taken', error: 'A different version of this model is already installed' };
   } else if (gear.validName(it.value)) {
     let data;
-    if (it.slot === 'bikePaint') {
+    if (it.path.startsWith('tyres/')) {
+      const data = await readChain(await chainOf([{ dir: path.join(modsDir, 'tyres', it.path.split('/')[1]) }]), 'paints/' + it.value + '.pnt');
+      if (data && sha256(data.buf) === it.sha256) return { ...entry, state: 'have' };
+    } else if (it.slot === 'bikePaint') {
       const bike = it.path.split('/')[1], dir = await profile.findBikeDir(modsDir, bike);
       if (dir) data = await readChain(await chainOf([{ dir }]), 'paints/' + it.value + '.pnt');
     } else {
@@ -119,7 +138,7 @@ async function listFriends({ call, modsDir, received = {}, have, friendId }) {
   const report = [];
   for (const lo of loadouts.filter((l) => !friendId || l.id === friendId)) {
     const items = [];
-    for (const it of lo.items || []) items.push(await inspectItem(it, { modsDir, received, have }));
+    for (const it of lo.items || []) items.push(await inspectItem({ ...it, path: typeof it.path === 'string' ? layout.canonical(it.path) : it.path }, { modsDir, received, have }));
     report.push({ ...lo, items });
   }
   return report;
@@ -134,7 +153,7 @@ async function fetchFriends({ call, download, modsDir, received, have, friendId,
     progress(0);
     try {
       const buf = await download(it.sha256, progress);
-      if (sha256(buf) !== it.sha256 || buf.length !== it.size || (it.modelKind ? !await validateModel(buf) : !readable(buf))) throw new Error('Shared file failed validation');
+      if (sha256(buf) !== it.sha256 || buf.length !== it.size || (it.modelKind ? !await validateModel(buf, it.modelKind) : !readable(buf))) throw new Error('Shared file failed validation');
       const dst = path.resolve(modsDir, ...it.path.split('/'));
       // Recheck immediately before writing, including symlink ancestors.
       const root = await fsp.realpath(modsDir);

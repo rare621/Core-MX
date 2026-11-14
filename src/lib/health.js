@@ -1,8 +1,8 @@
 // "Fix & clean": things in the game/mods folders that cause crashes or waste space, each with a safe fix.
 // Every fix moves things aside (renames or Recycle Bin) — nothing is permanently deleted.
-const fs = require('fs');
-const fsp = fs.promises;
+const fsp = require('fs').promises;
 const path = require('path');
+const layout = require('./rider-layout');
 
 const STOCK_DLLS = new Set(['oculus.dll', 'openvr.dll', 'openvr_api.dll', 'soft_oal.dll', 'steam_api64.dll']);
 const RESHADE = /^(opengl32|dxgi|d3d9|d3d11|reshade.*)\.dll$/i;
@@ -29,14 +29,8 @@ async function scan({ installDir, modsDir, items }) {
     const p = path.join(modsDir, 'tyres', e.name);
     if (!(await listDir(p)).length) issues.push({ id: `tyre:${e.name}`, kind: 'crash', title: 'Empty tyre folder', detail: `tyres/${e.name} is empty. Empty tyre folders can crash the bike selection screen.`, fix: 'Remove', fixId: 'trash', path: p });
   }
-  // Cleanup removes old-layout copies to the Recycle Bin, never to disabled mods.
-  const oldLayout = (i) => i.group === 'rider' && i.parts?.some((p) => /^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i.test(p));
-  const legacy = items.filter((i) => !i.disabled && oldLayout(i));
-  const oldDisabled = items.filter((i) => i.disabled && oldLayout(i));
-  if (fs.existsSync(path.join(modsDir, 'rider', 'riders', 'default_mx'))) {
-    if (legacy.length) issues.push({ id: 'legacy-gear', kind: 'clean', title: 'Old rider gear folders', detail: `${legacy.length} items use the older mods/rider/… layout. Current installs belong in rider/riders/default_mx/…. Remove sends these old files to the Recycle Bin.`, fix: 'Remove old files', fixId: 'trash-items', itemIds: legacy.map((i) => i.id) });
-    if (oldDisabled.length) issues.push({ id: 'disabled-legacy-gear', kind: 'clean', title: 'Old gear saved by earlier cleanup', detail: `${oldDisabled.length} old-layout items were kept in the disabled mods folder. Remove sends them to the Recycle Bin.`, fix: 'Remove old files', fixId: 'trash-items', itemIds: oldDisabled.map((i) => i.id) });
-  }
+  const misplaced = await layout.misplaced(modsDir);
+  if (misplaced.length) issues.push({ id: 'misplaced-gear', kind: 'clean', title: 'Gear in the wrong folders', detail: 'Helmets, boots and protection belong directly under rider/. Kits and gloves belong under rider/riders/<body>/. Repair moves files without replacing different existing copies. Identical extra copies go to the Recycle Bin.', fix: 'Repair folders', fixId: 'repair-gear' });
   // Mods in places the game won't read
   for (const it of items) {
     if (it.disabled) continue;

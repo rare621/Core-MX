@@ -18,6 +18,7 @@ test('progress and failed friends refreshes stay bounded instead of immediately 
     } },
     document: { addEventListener: () => {} }, setInterval: (cb) => intervals.push(cb),
     $: (selector) => ['#allServers', '#content'].includes(selector) ? box : null,
+    $$: () => [],
     icon: () => '', esc: String, cleanErr: (e) => e.message, timeAgo: () => 'just now',
     onlineTabs: () => '',
   });
@@ -30,7 +31,7 @@ test('progress and failed friends refreshes stay bounded instead of immediately 
   for (let i = 0; i < 100; i++) listeners['online:status'](status);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.length, 1);
-  now += 15000;
+  now += 300000;
   await intervals[0]();
   assert.equal(calls.length, 2);
   state.onlineTab = 'host'; // Exercise list fetching without drawing the friends screen.
