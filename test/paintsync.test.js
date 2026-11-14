@@ -47,6 +47,13 @@ test('equipped sync includes the helmet model and chosen paints, excludes unused
   assert.ok(outfit.items.every((it) => !it.label.includes('Unused')));
 });
 
+test('store-protected equipped files are reported but never included in friend sync', async (t) => {
+  const f = await fixture(t);
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture', ['rider/helmets/Helmet.pkz', 'bikes/Fixture/paints/Livery.pnt']);
+  assert.ok(!outfit.items.some((it) => it.path === 'rider/helmets/Helmet.pkz' || it.path === 'bikes/Fixture/paints/Livery.pnt'));
+  assert.deepEqual(outfit.unavailable.filter((it) => /store-protected/.test(it.error)).map((it) => it.slot).sort(), ['bikePaint', 'helmet']);
+});
+
 test('sync previews before download, skips identical loose and packaged files, and skips every download on a repeat sync', async (t) => {
   const f = await fixture(t);
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');

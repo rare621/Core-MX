@@ -255,7 +255,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       await syncFriends();
       const o = await currentOutfit();
       if (o) {
-        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, onProgress: progress });
+        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, protectedPaths: o.protectedPaths || [], onProgress: progress });
         paint.shared = shared.items; paint.unavailable = shared.unavailable;
       }
       const received = { ...(cfg().received || {}) };
