@@ -109,7 +109,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
   await ac('POST', '/v1/friends', { ids: [b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 2);
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 3);
   const shared = await sync.share({ call: ac, upload: async (hash, bytes) => {
     const res = await fetch(url + '/v1/files/' + hash, { method: 'PUT', headers: { authorization: `Bearer ${a.token}` }, body: bytes });
     assert.ok(res.ok, (await res.json()).error);
@@ -122,6 +122,18 @@ test('two real clients exchange only mutual-friend equipped files through the on
   await ac('POST', '/v1/presence', { state: { inGame: false } });
   const friend = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(friend.online, true); assert.equal(friend.inGame, false);
+  // One client cannot exhaust another rider's allowance behind the same NAT.
+  let limited;
+  for (let i = 0; i < 301; i++) {
+    const res = await fetch(url + '/v1/health', { headers: { authorization: `Bearer ${a.token}` } });
+    await res.json();
+    if (res.status === 429) { limited = res; break; }
+    assert.equal(res.status, 200);
+  }
+  assert.ok(limited, 'signed-in requests still have a bounded allowance');
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  assert.equal((await bc('GET', '/v1/friends')).friends[0].online, true);
+  assert.equal((await call()('GET', '/v1/health')).ok, true);
 });
 
 test('merging old gear handles existing folders, recycles identical duplicates and preserves conflicts', async (t) => {

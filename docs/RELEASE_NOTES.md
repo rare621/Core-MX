@@ -1,19 +1,13 @@
-## Equipped gear sync, helmet fixes, and reliable online presence
+## Online request fixes and clearer paint installation
 
-Install **MX-Bikes-Manager-Setup-1.0.5-x64.exe** on both riders' PCs.
+Install **MX-Bikes-Manager-Setup-1.0.6-x64.exe** on both riders' PCs.
 
-**Online server update required:** stop the server, copy **mxbm-server.js** from **mxbm-online-service.zip** over the existing script, then restart **start-server.cmd**. Keep **mxbm-data.json** and **mxbm-files**. The health page should report `"version":2`. The configured public address remains **http://67.84.130.214:60000**.
+**Update the online server too:** stop the server, replace **mxbm-server.js** in the existing server folder with the script from **mxbm-online-service.zip**, then restart **start-server.cmd**. Keep **mxbm-data.json** and **mxbm-files**. The health page should report `"version":3`. Accounts and shared files are preserved; the configured public address remains **http://67.84.130.214:60000**.
 
-- The manager keeps reporting presence while MX Bikes is closed. Friends see “Online in the manager” separately from playing or riding.
-- Click a friend or **Gear & sync** to review their equipped models, selected paints, bike livery, and session. Sync shows a progress bar and installs missing files into your mods folder. Identical existing files, including paints inside model packages, are skipped. Different existing versions are kept and reported.
-- Only equipped gear and the selected bike livery transfer. Model packages exclude unused paint variants. Account-bound or unreadable files are reported as unavailable.
-- Friends' sessions have Join and Get track & join actions when an address is available. Track lookup searches the original mod/store pages and checks the installed track before joining.
-- Helmet and paint lists combine both gear layouts and packaged paints. The 2021 6D ATR-2 package's built-in variants are now listed. Paint-only folders no longer hide sibling model packages.
-- Get Mods separates helmet, boot and protection models from paints, with clear paint-only labels.
-- Custom rider paints are checked against the installed rider models by texture IDs. AB-HOODIE paints require the hoodie model, display a Missing/Installed dependency with the creator page, and cannot silently install or equip on the default rider. Incompatible previews are flagged, and installed files can be deleted from the Get Mods details page.
-- New helmet models are valid paint targets before installation. Old archive gear paths are translated into `rider/riders/default_mx`, including on a fresh install. Missing model requirements and creator-linked model pages appear during review.
-- Rider paint pickers have Delete paint controls. Downloads have Show in folder and Delete files actions. Packaged paint deletion preserves the other contents and recycles the original package.
-- Browser-download popup cleanup no longer reads a destroyed window. Mixed gear bundles report their actual file categories and destination folders.
-- Fix & clean stays available. Removing old-layout gear sends it to the Recycle Bin rather than the disabled folder, including copies saved there by earlier cleanup. Regular mod disabling remains available.
+- Fixed an immediate friends retry loop after a failed request and repeated server-list requests triggered by sync progress. List requests share in-flight work and refresh at bounded intervals, with a longer pause after failures.
+- Rate-limit responses now pause all client requests for the server's retry delay. Older servers without a delay get a one-minute pause. The app shows a useful retry message instead of “slow down.”
+- Signed-in riders have separate server allowances, so friends behind one router do not consume each other's quota. The service still limits excessive requests and supplies `Retry-After`.
+- Paint-only or model-dependent downloads now show a warning dialog before downloading. Cancel and Open model page do not start a download. Continue downloads for review rather than installing automatically. Files discovered to require a model after download also go through review and a warning before installation.
+- Helmet/eye paints that contain a shared rider texture no longer get mistaken for rider kits or ask for a rider body. Ordinary stock rider kits use the default body automatically. Custom body selection appears only when needed; a missing body is explained instead of showing only incompatible choices.
 
-Validation: 53 automated checks passed, including a two-client sync against an isolated service; hidden Electron UI checks covered the friend dialog, progress bar, paint deletion controls, Downloads actions, and browser-window cleanup. The installed 6D helmet was also read and previewed locally.
+Validation: 58 automated checks passed, including two clients sharing one isolated service, separate rate allowances, retry recovery, and repeated progress/error events. A hidden Electron check exercised warning cancellation, model links, download acceptance, the install warning, and the rider-body controls. Live friend-to-friend testing remains dependent on both updated apps and the running service.

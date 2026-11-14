@@ -132,3 +132,34 @@ test('custom hoodie paints require a compatible rider instead of silently instal
   const dir = path.join(mods, 'rider', 'riders', 'default_mx', 'paints'); await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, 'Essentials.pnt'), bytes);
   await assert.rejects(paintCompat.validateRiderPaint({ modsDir: mods, current: { rider: 'default_mx', suitPaint: 'Essentials' } }), /matching rider model/);
 });
+
+test('helmet paints with shared rider/eye textures never require a rider body or install as a rider kit', async (t) => {
+  const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-helmet-face-'));
+  t.after(() => fs.rm(mods, { recursive: true, force: true }));
+  const modelDir = path.join(mods, 'rider', 'riders', 'default_mx', 'helmets', 'BHelmet');
+  await fs.mkdir(modelDir, { recursive: true }); await fs.writeFile(path.join(modelDir, 'helmet.edf'), model('helmet'));
+  const file = path.join(mods, 'Bhelmet_Eyeballs.pnt'), bytes = multiPaint(['rider', 'eyes']);
+  await fs.writeFile(file, bytes);
+  const files = [{ rel: 'Bhelmet_Eyeballs.pnt', abs: file, size: bytes.length }];
+  const inspected = await paintCompat.inspect(files, mods, null, 'helmetPaint');
+  assert.deepEqual(inspected.bodyPaintFiles, []);
+  assert.deepEqual(inspected.riderModels, []);
+  const context = { modsDir: mods, categories: [127], ...inspected,
+    // Stale classification must also be ignored when the user changes the type.
+    knownBodyPaintFiles: [files[0].rel], bodyPaintTextures: ['rider', 'eyes'], riderModels: [{ name: 'default_mx', textures: ['rider'] }] };
+  const plan = installer.plan(files, context, { kind: 'helmetPaint', paintTarget: 'BHelmet' });
+  assert.equal(plan.needsRiderTarget, false);
+  assert.deepEqual(plan.riderModels, []);
+  assert.equal(plan.entries[0].dest, 'rider/riders/default_mx/helmets/BHelmet/paints/Bhelmet_Eyeballs.pnt');
+  assert.equal(plan.counts.unresolved || 0, 0);
+});
+
+test('ordinary rider paints use the default body without asking the user to pick another rider', async (t) => {
+  const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-stock-kit-'));
+  t.after(() => fs.rm(mods, { recursive: true, force: true }));
+  const files = [{ rel: 'StockKit.pnt', size: 1 }];
+  const plan = installer.plan(files, { modsDir: mods, categories: [35], paintTextures: { 'StockKit.pnt': ['rider', 'skin'] }, riderModels: [{ name: 'default_mx', textures: ['rider', 'skin'] }] });
+  assert.equal(plan.needsRiderTarget, false);
+  assert.deepEqual(plan.riderModels, []);
+  assert.equal(plan.entries[0].dest, 'rider/riders/default_mx/paints/StockKit.pnt');
+});
