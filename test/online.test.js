@@ -1,8 +1,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const online = require('../src/lib/online');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 
-function fixture() {
+function fixture(overrides = {}) {
   let config = { url: 'http://192.168.0.38:60000', token: 'fixture-token', id: 'fixture-account', paintSync: false };
   const client = online.create({
     store: { get: (key) => key === 'online' ? config : key === 'friends' ? [] : undefined, set: (_key, value) => { config = value; } },
@@ -10,6 +13,7 @@ function fixture() {
     isGameRunning: async () => false, steamId: () => '76561198000000000', steamName: () => 'Fixture',
     defaultUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'],
     onChange: () => {},
+    ...overrides,
   });
   return { client, config: () => config, set: (patch) => { config = { ...config, ...patch }; } };
 }
@@ -29,6 +33,48 @@ test('moving to the public alias keeps the account without registering again', a
   assert.ok(calls.every((c) => c.url.startsWith('http://67.84.130.214:60000/')));
   assert.ok(!calls.some((c) => c.url.endsWith('/v1/register')));
   assert.equal(calls[0].options.headers.authorization, 'Bearer fixture-token');
+});
+
+test('an app upgrade detects an old installed plugin and refreshes it only with the game closed', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-plugin-update-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const bundled = path.join(root, 'app', 'plugin', online.PLUGIN), installed = path.join(root, 'game', 'plugins', online.PLUGIN);
+  await fs.mkdir(path.dirname(bundled), { recursive: true }); await fs.mkdir(path.dirname(installed), { recursive: true });
+  await fs.writeFile(bundled, 'updated plugin'); await fs.writeFile(installed, 'previous plugin');
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  let notify;
+  const updated = new Promise((resolve) => { notify = resolve; });
+  const f = fixture({ appDir: path.join(root, 'app'), installDir: () => path.join(root, 'game'), onChange: (st) => { if (!st.plugin.needsUpdate) notify(); } });
+  assert.equal(f.client.status().plugin.needsUpdate, true);
+  try { f.client.start(); await updated; }
+  finally { f.client.stop(); }
+  assert.equal(await fs.readFile(installed, 'utf8'), 'updated plugin');
+  assert.equal(f.client.status().plugin.needsUpdate, false);
+  await fs.writeFile(installed, 'previous plugin');
+  const running = fixture({ appDir: path.join(root, 'app'), installDir: () => path.join(root, 'game'), isGameRunning: async () => true });
+  await assert.rejects(running.client.installPlugin(), /Close MX Bikes first/);
+  assert.equal(await fs.readFile(installed, 'utf8'), 'previous plugin');
+});
+
+test('plugin server events replace game-only presence immediately and closing the game clears them', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-session-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  let running = true;
+  const reports = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url.endsWith('/v1/presence')) reports.push(JSON.parse(options.body).state);
+    return new Response('{}');
+  });
+  const f = fixture({ userDir: () => root, isGameRunning: async () => running });
+  const stateFile = path.join(root, online.STATE_FILE);
+  await fs.writeFile(stateFile, JSON.stringify({ v: 2, inEvent: 0 }));
+  await f.client.refresh();
+  assert.equal(reports.at(-1).inGame, true); assert.equal(reports.at(-1).inEvent, false);
+  await fs.writeFile(stateFile, JSON.stringify({ v: 2, inEvent: 1, type: 2, server: 'Fixture server', trackName: 'Fixture track' }));
+  await f.client.refresh();
+  assert.equal(reports.at(-1).server, 'Fixture server'); assert.equal(reports.at(-1).inEvent, true);
+  running = false; await f.client.refresh();
+  assert.equal(reports.at(-1).inGame, false); assert.equal(reports.at(-1).server, null);
 });
 
 test('startup migrates only configured aliases and respects opting out', async (t) => {

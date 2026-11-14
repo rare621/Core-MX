@@ -12,7 +12,7 @@ function fixture(t) {
   const gd = path.join(modsDir, 'rider', 'riders', 'default_mx');
   fs.mkdirSync(gd, { recursive: true });
   fs.writeFileSync(path.join(gd, 'rider.edf'), model('body'));
-  const helmetDir = path.join(gd, 'helmets', 'test_helmet');
+  const helmetDir = path.join(modsDir, 'rider', 'helmets', 'test_helmet');
   fs.mkdirSync(path.dirname(helmetDir), { recursive: true });
   const render = () => build({ modsDir, gd, current: { helmet: 'test_helmet' }, only: ['helmet'], texMax: 64 });
   return { gd, helmetDir, render };

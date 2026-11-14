@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENTS = new Set(['jobs:update', 'jobs:review', 'library:changed', 'shops:changed', 'game:status', 'jobs:started', 'deeplink:join', 'frostmod:list', 'host:status', 'online:status']);
+const EVENTS = new Set(['jobs:update', 'jobs:review', 'library:changed', 'rider:changed', 'shops:changed', 'game:status', 'jobs:started', 'deeplink:join', 'frostmod:list', 'host:status', 'online:status']);
 
 contextBridge.exposeInMainWorld('api', {
   invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),

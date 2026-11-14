@@ -7,7 +7,7 @@ S.friends = null;
 
 function onlineTabs() {
   const t = (id, ic, l) => `<button class="${S.onlineTab === id ? 'active' : ''}" data-online-tab="${id}">${icon(ic)}${l}</button>`;
-  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('host', 'play', 'Host')}${t('friends', 'user', 'Friends')}${t('ranked', 'star', 'Ranked')}</div>`;
+  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('ranked', 'star', 'Ranked')}${t('host', 'play', 'Host')}${t('friends', 'refresh', 'Sync')}</div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-online-tab]');

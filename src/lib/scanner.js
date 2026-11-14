@@ -277,9 +277,8 @@ async function scanRoot(rootAbs, disabled) {
         .then((xs) => xs.filter((x) => !TRACK_LABELS[x.name.toLowerCase()])));
     } else if (lower === 'rider') {
       const subs = await fsp.readdir(path.join(rootAbs, n), { withFileTypes: true }).catch(() => []);
-      // Current layout: rider/riders/<rider model>/<gear type>/...
+      // Body paints and gloves are per rider; accessories are shared under rider/.
       const riders = subs.find((s) => s.isDirectory() && s.name.toLowerCase() === 'riders');
-      let hasModern = false;
       if (riders) {
         jobs.push(scanModelDir(ctx, rootAbs, `${n}/${riders.name}`, 'rider', 'riders', 'Rider models').then((rows) => rows.filter((i) => i.kind === 'pkz' || fs.existsSync(path.join(rootAbs, n, riders.name, i.name, 'rider.edf')) || fs.existsSync(path.join(rootAbs, n, riders.name, i.name, 'rider.hrc'))).map((i) => ({ ...i, virtual: true }))));
         const models = await fsp.readdir(path.join(rootAbs, n, riders.name), { withFileTypes: true }).catch(() => []);
@@ -288,19 +287,20 @@ async function scanRoot(rootAbs, disabled) {
           const gear = await fsp.readdir(path.join(rootAbs, n, riders.name, m.name), { withFileTypes: true }).catch(() => []);
           for (const g of gear) {
             if (!g.isDirectory()) continue;
-            hasModern = true;
             const gl = g.name.toLowerCase();
-            const label = (RIDER_LABELS[gl] || g.name) + (m.name.toLowerCase() === 'default_mx' ? '' : ` (${m.name})`);
-            jobs.push(scanModelDir(ctx, rootAbs, `${n}/${riders.name}/${m.name}/${g.name}`, 'rider', `${m.name.toLowerCase()}/${gl}`, label));
+            const misplaced = !['paints', 'gloves'].includes(gl);
+            const label = (RIDER_LABELS[gl] || g.name) + (misplaced ? ' · misplaced folder' : m.name.toLowerCase() === 'default_mx' ? '' : ` (${m.name})`);
+            jobs.push(scanModelDir(ctx, rootAbs, `${n}/${riders.name}/${m.name}/${g.name}`, 'rider', `${misplaced ? 'misplaced/' : ''}${m.name.toLowerCase()}/${gl}`, label));
           }
         }
       }
-      // Older layout: rider/<gear type>/...
+      // These are the correct shared accessory folders. Only paints/gloves moved.
       for (const s of subs) {
         if (!s.isDirectory() || s === riders) continue;
         const sl = s.name.toLowerCase();
-        const label = (RIDER_LABELS[sl] || s.name) + (hasModern ? ' · old layout' : '');
-        jobs.push(scanModelDir(ctx, rootAbs, `${n}/${s.name}`, 'rider', (hasModern ? 'legacy/' : '') + sl, label));
+        const misplaced = ['paints', 'gloves'].includes(sl);
+        const label = (RIDER_LABELS[sl] || s.name) + (misplaced ? ' · misplaced folder' : '');
+        jobs.push(scanModelDir(ctx, rootAbs, `${n}/${s.name}`, 'rider', (misplaced ? 'misplaced/' : '') + sl, label));
       }
     } else if (lower.startsWith('bikes')) {
       jobs.push(scanModelDir(ctx, rootAbs, n, 'bikes', lower, lower === 'bikes' ? 'Bikes' : n));

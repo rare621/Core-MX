@@ -138,6 +138,7 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   const bodyChain = await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', riderName) }, { dir: path.join(modsDir, 'rider') }, stock(`rider/riders/${riderName}`), stock('rider/riders/default_mx')]);
   const gear = { modsDir, rider: riderName, stockPkz };
   const gearRoots = await gearAssets.roots(gear);
+  const bodyRoots = await gearAssets.roots(gear, true);
   const gfxR = await readChain(bodyChain, 'gfx.cfg');
   const gfx = gfxR ? parseCfg(gfxR.buf.toString('latin1')) : {};
   let bodyFile = 'rider.edf';
@@ -160,8 +161,8 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
     return bones[p] || null;
   };
   if (want('body')) {
-  const suitPaint = await loadPaint(await gearAssets.subchain(gearRoots, 'paints'), cur.suitPaint ? cur.suitPaint + '.pnt' : null);
-  const glovePaint = await loadPaint(await gearAssets.subchain(gearRoots, 'gloves'), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
+  const suitPaint = await loadPaint(await gearAssets.subchain(bodyRoots, 'paints'), cur.suitPaint ? cur.suitPaint + '.pnt' : null);
+  const glovePaint = await loadPaint(await gearAssets.subchain(bodyRoots, 'gloves'), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
     .then(async (p) => (p.length || !cur.glovesPaint ? p : loadPaint(bodyChain, `gloves/${cur.glovesPaint}.pnt`)));
   const suit2 = suitPaint.length || !cur.suitPaint ? suitPaint : await loadPaint(bodyChain, `paints/${cur.suitPaint}.pnt`);
   const missing = body.model.colors.length ? missingTextures(suit2.map((p) => p.name), body.model.colors) : [];
@@ -221,7 +222,7 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   }
 
   // --- chest protector / neck brace ---
-  const protName = cur.protection || 'chest';
+  const protName = cur.protection || '';
   const protChain = await gearAssets.modelSources(gear, 'protections', protName);
   if (protChain.length && want('protection')) {
     const pg = await readChain(protChain, 'gfx.cfg');

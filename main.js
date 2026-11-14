@@ -22,6 +22,10 @@ const game = require('./src/lib/game');
 const health = require('./src/lib/health');
 const ranked = require('./src/lib/ranked');
 const graphics = require('./src/lib/graphics');
+const graphicsPackages = require('./src/lib/graphics-packages');
+const recentInstalls = require('./src/lib/recent-installs');
+const equipInstalled = require('./src/lib/equip-installed');
+const serverPing = require('./src/lib/server-ping');
 const frostmod = require('./src/lib/frostmod');
 const host = require('./src/lib/host');
 const rider3d = require('./src/lib/rider3d');
@@ -33,8 +37,23 @@ const gearAssets = require('./src/lib/gear-assets');
 const riderPaints = require('./src/lib/rider-paints');
 const installSummary = require('./src/lib/install-summary');
 const { mergeMove } = require('./src/lib/merge-move');
+const riderLayout = require('./src/lib/rider-layout');
 const paintCompat = require('./src/lib/paint-compat');
+const { chainOf, readChain } = require('./src/lib/asset-sources');
 let online = null;
+let riderWatch = null;
+function watchRiderProfiles() {
+  if (riderWatch) return;
+  let previous = '';
+  riderWatch = setInterval(async () => {
+    try {
+      const list = await profile.listProfiles(profUserDir());
+      const stat = list.last && await fsp.stat(path.join(profUserDir(), 'profiles', list.last, 'profile.ini'));
+      const key = JSON.stringify([list.last, list.profiles, stat?.mtimeMs, stat?.size]);
+      if (previous && key !== previous) send('rider:changed', { active: list.last }); previous = key;
+    } catch {}
+  }, 2000); riderWatch.unref();
+}
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
 function stockRiderPkz() { const inst = store.get('settings').gameInstallDir; return inst ? path.join(inst, 'rider.pkz') : null; }
@@ -61,6 +80,12 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'mxb', privileges: { standard: t
 
 let mainWin = null;
 let store, thumbs, ses;
+const graphicsManager = graphicsPackages.create({
+  gameDir: () => store.get('settings').gameInstallDir,
+  cacheDir: () => path.join(app.getPath('userData'), 'graphics-packages'),
+  records: () => store.get('installs') || {}, save: (records) => store.set('installs', records),
+  trash: (file) => shell.trashItem(file), isGameRunning: () => profile.isGameRunning(),
+});
 let lastScan = { items: [] };
 const jobs = new Map();
 const browserJobs = new Map(); // webContents id -> job id
@@ -129,6 +154,28 @@ async function scan() {
   const r = await scanner.scanAll(modsDir(), disabledDir(), store.get('settings').gameInstallDir);
   lastScan = { items: decorate(r.items), ms: r.ms, at: Date.now() };
   return lastScan;
+}
+
+let gearRepair = null;
+async function repairGearFolders() {
+  if (gearRepair) return gearRepair;
+  gearRepair = (async () => {
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before repairing gear folders');
+    const result = await riderLayout.repair(modsDir(), (file) => shell.trashItem(file));
+    const changed = (key) => result.changes.get(key) || key;
+    if (result.changes.size) {
+      store.update('installs', (all) => Object.fromEntries(Object.entries(all || {}).map(([key, rec]) => [key, { ...rec, files: (rec.files || []).map(changed) }])));
+      const cfg = store.get('online') || {};
+      store.set('online', { ...cfg, received: Object.fromEntries(Object.entries(cfg.received || {}).map(([key, value]) => [changed(key), value])) });
+      const movedKey = (key) => { const dest = riderLayout.canonical(key); return dest !== key && !fs.existsSync(path.join(modsDir(), key)) && fs.existsSync(path.join(modsDir(), dest)) ? dest : key; };
+      store.update('images', (all) => Object.fromEntries(Object.entries(all || {}).map(([key, value]) => [movedKey(key), value])));
+      store.update('favorites', (all) => (all || []).map(movedKey));
+      for (const j of jobs.values()) if (j.installed) j.installed = j.installed.map(changed);
+      store.flush();
+    }
+    return { moved: result.changes.size, conflicts: result.conflicts };
+  })();
+  try { return await gearRepair; } finally { gearRepair = null; }
 }
 
 function findItem(id) { return lastScan.items.find((i) => i.id === id); }
@@ -234,7 +281,7 @@ function jobView(j) {
   return {
     id: j.id, title: j.title, postId: j.postId, url: j.url, link: j.link, image: j.image, status: j.status, error: j.error,
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
-    createdAt: j.createdAt, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
+    createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.equipCandidates, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable,
@@ -246,7 +293,7 @@ function jobView(j) {
     },
   };
 }
-function emitJob(j) { send('jobs:update', jobView(j)); }
+function emitJob(j) { if (['done', 'error'].includes(j.status)) { j.completedAt = j.completedAt || Date.now(); recentInstalls.pruneHistory(jobs); } send('jobs:update', jobView(j)); }
 
 function newJob(fields) {
   const id = crypto.randomUUID();
@@ -258,6 +305,7 @@ function newJob(fields) {
 }
 
 async function runDownload(j) {
+  j.completedAt = null;
   j.status = 'downloading'; emitJob(j);
   try {
     const file = await hosts.download(j.url, path.join(j.stageDir, 'dl'), ses, (r, t) => { j.received = r; j.total = t; emitJob(j); }, j.abort.signal);
@@ -269,11 +317,13 @@ async function runDownload(j) {
 }
 
 function fail(j, e) {
+  if (e.rollbackFailed) j.rollbackRecovery = true;
   j.status = 'error'; j.error = e.message || String(e); emitJob(j);
   cleanupStage(j);
 }
 
 async function afterDownload(j, file) {
+  if (j.abort.signal.aborted) { fail(j, new Error('Cancelled')); return; }
   j.file = file;
   j.status = 'extracting'; emitJob(j);
   try {
@@ -292,12 +342,14 @@ async function afterDownload(j, file) {
     const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories));
     Object.assign(j.ctx, inspected, { dependencies: [...(j.dependencies || []), ...inspected.dependencies] });
     if (!j.ctx.categories.length && !j.ctx.kindHint && inspected.knownBodyPaintFiles.length && inspected.knownBodyPaintFiles.length === j.files.filter((f) => /\.pnt$/i.test(f.rel)).length) { j.ctx.kindHint = 'riderKit'; j.ctx.detectReason = 'paint-textures'; }
+    if (j.abort.signal.aborted) throw new Error('Cancelled');
     j.plan = installer.plan(j.files, j.ctx, j.opts || {});
     if (j.plan.requiresModelWarning) j.requireReview = true;
     // Already have exactly these files? Don't install a second copy.
     const placed = j.plan.entries.filter((e) => e.dest);
     const targetRoot = j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
-    if (!j.plan.counts.unresolved && await filesMatch(placed, targetRoot)) {
+    if (j.plan.root !== 'game' && !j.plan.counts.unresolved && await filesMatch(placed, targetRoot)) {
+      if (j.abort.signal.aborted) throw new Error('Cancelled');
       recordInstall(j, placed.map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest));
       j.status = 'done'; j.installed = []; j.note = 'Already installed — you have these exact files, nothing was changed.';
       await recycleSourceArchive(j);
@@ -314,10 +366,26 @@ async function doInstall(j, opts) {
   try {
     j.status = 'installing'; emitJob(j);
     j.plan = installer.plan(j.files, j.ctx, opts);
-    const written = (await installer.apply(j.plan, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir())).map((w) => (j.plan.root === 'game' ? 'game:' : '') + w);
-    if (!written.length) throw new Error('Nothing was installed: no file had a destination.');
-    recordInstall(j, written);
+    if (j.relocateKey) {
+      if (await profile.isGameRunning()) throw new Error('Close MX Bikes before moving installed files');
+      if (j.plan.root === 'game') throw new Error('Graphics packages stay in the game folder; manage them in Graphics');
+      if (!j.plan.installable || j.plan.needsPaintTarget || j.plan.needsRiderTarget) throw new Error('Choose a destination first');
+      const changes = await recentInstalls.relocatePlan(j.plan, modsDir(), j.abort.signal);
+      store.update('installs', (all) => Object.fromEntries(Object.entries(all).map(([key, rec]) => [key, { ...rec, ...(key === j.relocateKey ? { kind: j.plan.kind, installOptions: j.plan.options } : {}), files: rec.files.map((rel) => changes.get(rel) || rel) }])));
+      for (const other of jobs.values()) if (other.installed) other.installed = other.installed.map((rel) => changes.get(rel) || rel);
+      j.status = 'done'; j.note = `Moved ${changes.size} installed files`; j.installed = []; emitJob(j); cleanupStage(j); await scan(); send('library:changed', {}); return;
+    }
+    const applyAndRecord = async () => {
+      const written = (await installer.apply(j.plan, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir(), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') })).map((w) => (j.plan.root === 'game' ? 'game:' : '') + w);
+      if (!written.length) throw new Error('Nothing was installed: no file had a destination.');
+      recordInstall(j, written);
+      j.installed = written; j.equipCandidates = equipInstalled.choices(written);
+      j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}`; emitJob(j);
+      return written;
+    };
+    const written = j.plan.root === 'game' ? await graphicsManager.install(j.plan, installKey(j, j.plan.entries.filter((e) => e.dest).map((e) => 'game:' + e.dest)), applyAndRecord) : await applyAndRecord();
     j.installed = written;
+    j.equipCandidates = equipInstalled.choices(written);
     if (j.sourceArchive) {
       const entries = j.plan.entries.filter((e) => written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest));
       j.sourceVerified = !j.plan.counts.unresolved && await filesMatch(entries, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir());
@@ -331,20 +399,22 @@ async function doInstall(j, opts) {
   } catch (e) { fail(j, e); }
 }
 
+function installKey(j, written) { return j.postId ? String(j.postId) : j.shopKey || 'local:' + crypto.createHash('sha1').update(j.title + written[0]).digest('hex').slice(0, 12); }
 function recordInstall(j, written) {
-  const key = j.postId ? String(j.postId) : j.shopKey || 'local:' + crypto.createHash('sha1').update(j.title + written[0]).digest('hex').slice(0, 12);
+  const key = installKey(j, written);
   store.update('installs', (all) => {
     const prev = all[key];
     all[key] = {
       postId: j.postId || null, shopKey: j.shopKey || null, title: j.title, link: j.link || null, image: j.image || null,
       categories: j.categories || [], siteModified: j.modified || null, installedAt: Date.now(),
-      source: j.url || j.file, kind: j.plan && j.plan.kind, files: Array.from(new Set([...(prev ? prev.files : []), ...written])),
+      source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.root === 'game' ? true : undefined, files: Array.from(new Set([...(prev && j.plan?.root !== 'game' ? prev.files : []), ...written])),
     };
     return all;
   });
 }
 
 function cleanupStage(j) {
+  if (j.rollbackRecovery) return;
   const staging = path.resolve(app.getPath('userData'), 'staging');
   const target = path.resolve(j.stageDir);
   if (target.startsWith(staging + path.sep)) j.cleaning = fsp.rm(target, { recursive: true, force: true }).catch(() => {});
@@ -380,7 +450,7 @@ function openBrowserFor(j, url, reason) {
   win.on('closed', () => {
     browserJobs.delete(browserContentsId);
     if (j.browserWin === win) j.browserWin = null;
-    if (j.status === 'browser') { j.status = 'error'; j.error = 'Browser window closed before a file was downloaded.'; emitJob(j); }
+    if (['browser', 'downloading'].includes(j.status)) { j.abort.abort(); j.browserDownload?.cancel(); fail(j, new Error('Cancelled')); }
   });
   win.loadURL(url);
 }
@@ -486,13 +556,14 @@ function setupDownloadsSession() {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, hosts.safeName(item.getFilename()));
     j.file = file;
+    j.browserDownload = item;
     item.setSavePath(file);
     j.status = 'downloading'; j.note = 'Downloading from browser…'; emitJob(j);
     item.on('updated', () => { j.received = item.getReceivedBytes(); j.total = item.getTotalBytes(); emitJob(j); });
     item.once('done', (_e, state) => {
       if (j.browserWin && !j.browserWin.isDestroyed()) { j.status = 'extracting'; j.browserWin.close(); }
-      if (state === 'completed') afterDownload(j, file);
-      else fail(j, new Error(`Browser download ${state}`));
+      if (state === 'completed' && !j.abort.signal.aborted) afterDownload(j, file);
+      else fail(j, new Error(j.abort.signal.aborted ? 'Cancelled' : `Browser download ${state}`));
     });
   });
 }
@@ -594,6 +665,8 @@ function registerIpc() {
   });
   handle('site:post', async (id) => {
     const post = await site.post(id), rec = store.get('installs')[id];
+    post.installKind = installer.kindFromCategories(post.categories);
+    if (post.installKind === 'bikePaint') post.needsModelNotice = false;
     if (rec) {
       const files = [];
       for (const rel of rec.files.filter((f) => /\.pnt$/i.test(f) && !f.startsWith('game:'))) {
@@ -647,6 +720,7 @@ function registerIpc() {
     return ids;
   });
   handle('jobs:list', () => [...jobs.values()].map(jobView).sort((a, b) => b.createdAt - a.createdAt));
+  handle('jobs:clearHistory', () => { for (const [id, j] of jobs) if (['done', 'error'].includes(j.status)) jobs.delete(id); return [...jobs.values()].map(jobView); });
   handle('jobs:reveal', (id) => {
     const j = jobs.get(id);
     if (!j) throw new Error('Download not found');
@@ -664,6 +738,10 @@ function registerIpc() {
     if (['downloading', 'queued', 'extracting', 'installing'].includes(j.status)) throw new Error('Cancel the download before deleting its files');
     if (j.status !== 'done') { if (j.file && fs.existsSync(j.file)) await shell.trashItem(j.file); cleanupStage(j); j.status = 'error'; j.error = 'Downloaded files deleted'; emitJob(j); return; }
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting installed files');
+    if (j.plan?.root === 'game') {
+      await graphicsManager.uninstall(installKey(j, j.installed || []));
+      j.status = 'error'; j.error = null; j.installed = []; j.filesDeleted = true; j.note = 'Graphics package removed; original game files restored'; emitJob(j); send('library:changed', {}); return;
+    }
     const installed = j.installed?.length ? j.installed : (j.plan?.entries || []).filter((e) => e.dest).map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest);
     const removed = new Set();
     for (const file of installed) {
@@ -689,10 +767,40 @@ function registerIpc() {
     return jobView(j);
   });
   handle('jobs:install', (id, opts) => { const j = jobs.get(id); if (j && j.files) doInstall(j, opts || j.opts || {}); });
+  async function equipContext(id, index) {
+    const j = jobs.get(id), choice = j?.equipCandidates?.[index];
+    if (!choice || j.status !== 'done') throw new Error('This installed item is no longer available');
+    const name = (await profile.listProfiles(profUserDir())).last; if (!name) throw new Error('Create an MX Bikes rider profile first');
+    const prof = await profile.readProfile(profUserDir(), name), bike = choice.bike || profile.currentBike(prof);
+    if (!bike) throw new Error('Choose your current bike in the Rider page first');
+    const lo = await profile.loadout(modsDir(), prof, bike, stockRiderPkz());
+    const changes = equipInstalled.changesFor(choice, lo.current);
+    const preview = structuredClone(prof);
+    for (const [slot, value] of Object.entries(changes)) {
+      const desc = profile.SLOTS.find((s) => s.id === slot); if (!desc) continue;
+      const key = desc.key === 'protectionModel' ? changes.protection || lo.current.protection : bike;
+      preview.sections[desc.section] ||= { values: {} }; preview.sections[desc.section].values[key] = value;
+    }
+    const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
+    return { name, bike, choice, lo: next, current: lo.current };
+  }
+  handle('jobs:equipContext', async (id, index) => { const ctx = await equipContext(id, index); return { profile: ctx.name, bike: ctx.bike, slot: ctx.choice.slot, lo: ctx.lo, preferred: ctx.choice.paints }; });
+  handle('jobs:equip', async (id, index, paint = '') => {
+    const ctx = await equipContext(id, index);
+    if (paint !== '' && !(ctx.lo.options[ctx.choice.slot] || []).includes(paint)) throw new Error('Choose an installed paint for this item');
+    const changes = equipInstalled.changesFor(ctx.choice, ctx.current, paint);
+    const next = { ...ctx.current, ...changes };
+    if (changes.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next });
+    const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.protection : ctx.bike, value]; });
+    if (ctx.choice.kind === 'bike') { const cls = await installedBikeCategory(ctx.bike); values.push(['info', 'bikeid', ctx.bike]); if (cls) values.push(['info', 'class', cls], ['category', cls, ctx.bike]); }
+    await profile.writeValues(profUserDir(), ctx.name, values); online?.syncPaints().catch(() => {}); return true;
+  });
   handle('jobs:cancel', (id) => {
     const j = jobs.get(id);
     if (!j) return;
     j.abort.abort();
+    j.browserDownload?.cancel();
+    if (j.status === 'installing') { j.note = 'Cancelling and restoring previous files…'; emitJob(j); return; }
     if (j.browserWin && !j.browserWin.isDestroyed()) j.browserWin.close();
     j.status = 'error'; j.error = 'Cancelled'; emitJob(j);
     cleanupStage(j);
@@ -747,9 +855,10 @@ function registerIpc() {
   handle('graphics:scan', async () => {
     const dir = store.get('settings').gameInstallDir;
     const r = await graphics.scan(dir);
-    const recs = Object.values(store.get('installs')).filter((x) => (x.files || []).some((f) => f.startsWith('game:')));
-    return { ...r, installDir: dir, installed: recs.map((x) => ({ title: x.title, image: x.image, link: x.link, files: x.files.length, installedAt: x.installedAt, key: x.postId ? String(x.postId) : x.shopKey })) };
+    const recs = Object.entries(store.get('installs')).filter(([, x]) => graphicsPackages.isGraphics(x));
+    return { ...r, installDir: dir, installed: recs.map(([key, x]) => ({ title: x.title, image: x.image, link: x.link, files: x.files.length, active: x.graphicsActive !== false, installedAt: x.installedAt, key })) };
   });
+  handle('graphics:setActive', async (key, enabled) => { await graphicsManager.setActive(key, !!enabled); send('library:changed', {}); return true; });
   handle('graphics:toggle', async (p, on) => { await graphics.toggle(store.get('settings').gameInstallDir, p, on); return true; });
   handle('graphics:trash', async (p) => { if (!insideGame(p)) throw new Error('Not in the game folder'); await shell.trashItem(p); return true; });
   handle('graphics:reveal', (p) => { if (insideGame(p)) shell.showItemInFolder(p); });
@@ -825,7 +934,7 @@ function registerIpc() {
   handle('online:connect', (url, name) => online.connect(url, name));
   handle('online:disconnect', () => online.disconnect());
   handle('online:share', (on) => online.setShare(on));
-  handle('online:servers', () => online.servers());
+  handle('online:servers', async (force = false) => { const result = await online.servers(); return { ...result, servers: await serverPing.measure(result.servers, undefined, !!force) }; });
   handle('online:friends', async () => {
     const friends = await online.syncFriends();
     if (!friends.some((f) => f.online && f.server && !f.address)) return friends;
@@ -877,11 +986,12 @@ function registerIpc() {
     } else if (issue.fixId === 'disable-items') {
       const r = await setEnabled(issue.itemIds || [], false);
       if (r.errors.length) throw new Error(r.errors.slice(0, 3).join('\n'));
+    } else if (issue.fixId === 'repair-gear') {
+      const result = await repairGearFolders();
+      await scan(); send('library:changed', {});
+      return { repaired: result.moved, conflicts: result.conflicts };
     } else if (issue.fixId === 'trash-items') {
-      if (await profile.isGameRunning()) throw new Error('Close MX Bikes before removing old gear files');
-      const allowed = (issue.itemIds || []).filter((id) => { const it = findItem(id); return it && it.group === 'rider' && it.parts.some((p) => /^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i.test(p)); });
-      const result = await trash(allowed);
-      if (result.errors.length) throw new Error(result.errors.slice(0, 3).join('\n'));
+      throw new Error('This old cleanup action is no longer valid. Check again to repair gear folders without deleting valid accessories.');
     } else if (issue.fixId === 'trash-item') {
       await trash([issue.itemId]);
     } else if (issue.fixId === 'move-track') {
@@ -931,12 +1041,45 @@ function registerIpc() {
   });
 
   // ---- rider loadout (profile.ini) ----
-  handle('rider:profiles', () => profile.listProfiles(profUserDir()));
+  handle('rider:profiles', () => { watchRiderProfiles(); return profile.listProfiles(profUserDir()); });
   handle('rider:createProfile', (name, source, copyGear) => profile.createProfile(profUserDir(), name, source, copyGear !== false));
   handle('rider:activateProfile', (name) => profile.activateProfile(profUserDir(), name));
+  handle('rider:deleteProfile', (name) => profile.deleteProfile(profUserDir(), name, (folder) => shell.trashItem(folder)));
+  async function installedBikeCategory(bike) {
+    if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
+    const model = await profile.findBikeDir(modsDir(), bike);
+    if (!model && !lastScan.items.some((it) => it.group === 'bikes' && it.name === bike)) throw new Error('That bike is not installed');
+    let category = game.classFor(bike);
+    if (!category && model) {
+      const data = await readChain(await chainOf([{ dir: model }]), bike + '.ini');
+      category = data?.buf.toString('latin1').match(/^\s*category\s*=\s*([^\r\n;]+)/mi)?.[1].trim() || scanner.detectClass(bike);
+    }
+    return category;
+  }
+  async function selectSavedBike(name, bike) {
+    const category = await installedBikeCategory(bike);
+    await profile.activateProfile(profUserDir(), name);
+    await game.quickStart(profUserDir(), name, { bike, bikeClass: category });
+    if (profile.currentBike(await profile.readProfile(profUserDir(), name)) !== bike) throw new Error('The bike selection could not be saved');
+    online?.refresh().catch(() => {}); return true;
+  }
+  handle('rider:selectBike', selectSavedBike);
   handle('rider:bikes', async (name) => profile.listBikes(modsDir(), await profile.readProfile(profUserDir(), name)));
-  handle('rider:loadout', async (name, bike) => {
-    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
+  function draftProfile(prof, bike, changes) {
+    const next = structuredClone(prof);
+    const protection = changes.protection ?? prof.sections.protection?.values[bike] ?? '';
+    for (const [slot, value] of Object.entries(changes || {})) {
+      const desc = profile.SLOTS.find((s) => s.id === slot);
+      if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
+      next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
+    }
+    return next;
+  }
+  handle('rider:loadout', async (name, bike, changes = {}) => {
+    const prof = await profile.readProfile(profUserDir(), name);
+    const saved = await profile.loadout(modsDir(), prof, bike, stockRiderPkz());
+    const lo = await profile.loadout(modsDir(), draftProfile(prof, bike, changes), bike, stockRiderPkz());
+    lo.savedCurrent = saved.current;
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
     lo.options.bikePaint = [...new Set(['', ...lo.options.bikePaint, ...packed])];
@@ -944,14 +1087,32 @@ function registerIpc() {
     lo.selectedInGame = lo.selectedInGame && lo.profileActive;
     return lo;
   });
-  handle('bike:model', async (name, bike, paint, texMax = 1024) => {
+  handle('rider:apply', async (name, bike, changes = {}) => {
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before applying. Preview changes have been kept.');
+    if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
+    const prof = await profile.readProfile(profUserDir(), name), preview = draftProfile(prof, bike, changes);
+    const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
+    if (next.current.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next.current });
+    const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
+    const category = await installedBikeCategory(bike) || prof.sections.info?.values.class;
+    values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);
+    await profile.writeValues(profUserDir(), name, values); await profile.activateProfile(profUserDir(), name);
+    const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
+    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
+    online?.syncPaints().catch(() => {}); return { saved: true };
+  });
+  handle('bike:model', async (name, bike, paint, texMax = 1024, previewCurrent = {}) => {
     if (typeof bike !== 'string' || /[\\/]|^\.+$/.test(bike)) throw new Error('Invalid bike name');
     if (paint == null) {
       const selected = name || (await profile.listProfiles(profUserDir())).last;
       const lo = selected && await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), selected), bike);
       paint = lo && lo.current.bikePaint || '';
     }
-    return bike3d.build({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike,
+    const active = name || (await profile.listProfiles(profUserDir())).last;
+    const selected = active && await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), active), bike, stockRiderPkz());
+    const tyre = Object.hasOwn(previewCurrent, 'tyres') ? previewCurrent.tyres : selected?.current.tyres;
+    if (tyre && !gearAssets.validName(tyre)) throw new Error('Invalid tyre selection');
+    return bike3d.build({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, tyresOverride: tyre,
       bikeDir: await profile.findBikeDir(modsDir(), bike), paint, texMax: Math.min(1024, Math.max(128, Number(texMax) || 1024)) });
   });
   handle('rider:deleteModel', async (model) => {
@@ -988,12 +1149,13 @@ function registerIpc() {
   });
   // Thumbnail model for one option of one slot: only the gear that slot changes, small textures.
   const SLOT_PARTS = { helmet: ['helmet'], helmetPaint: ['helmet'], gogglesPaint: ['helmet'], suitPaint: ['body'], glovesPaint: ['body'], rider: ['body'], boots: ['boots'], bootsPaint: ['boots'], protection: ['protection'], protectionPaint: ['protection'] };
-  handle('rider:thumbModel', async (name, bike, slot, value) => {
+  handle('rider:thumbModel', async (name, bike, slot, value, previewCurrent = {}) => {
     const only = SLOT_PARTS[slot];
     if (!only) throw new Error('No 3D preview for this slot');
     const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
     const inst = store.get('settings').gameInstallDir;
-    const cur = { ...lo.current, [slot]: value };
+    const overrides = Object.fromEntries(Object.entries(previewCurrent).filter(([key, v]) => profile.SLOTS.some((s) => s.id === key) && typeof v === 'string' && v.length < 200 && !/[\\/]|^\.+$/.test(v)));
+    const cur = { ...lo.current, ...overrides, [slot]: value };
     if (slot === 'helmet') { cur.helmetPaint = ''; cur.gogglesPaint = ''; }
     if (slot === 'rider') { cur.suitPaint = ''; cur.glovesPaint = ''; }
     if (slot === 'boots') cur.bootsPaint = '';
@@ -1012,6 +1174,29 @@ function registerIpc() {
   });
 
   handle('installs:list', () => store.get('installs'));
+  handle('installs:editLocation', async (key) => {
+    const rec = store.get('installs')[key]; if (!rec) throw new Error('Install record not found');
+    if (graphicsPackages.isGraphics(rec)) throw new Error('Graphics packages use the game folder. Enable or disable them in Graphics.');
+    const opts = recentInstalls.previousOptions(rec);
+    const base = installer.KINDS[opts.kind]?.base({ gear: `rider/riders/${opts.riderTarget || 'default_mx'}`, trackType: opts.trackType, customDir: opts.customDir }) || '';
+    const files = [];
+    for (const rel of rec.files) {
+      const abs = path.resolve(modsDir(), rel); if (!insideRoots(abs)) throw new Error('Invalid recorded install path');
+      const st = await fsp.stat(abs); if (!st.isFile()) continue;
+      files.push({ abs, size: st.size, rel: /\.pnt$/i.test(rel) ? path.posix.basename(rel) : rel.startsWith(base + '/') ? rel.slice(base.length + 1) : rel });
+    }
+    const inspected = await paintCompat.inspect(files, modsDir(), stockRiderPkz(), opts.kind);
+    const j = newJob({ title: rec.title, link: rec.link, relocateKey: key, files, opts, modelWarningAccepted: true, ctx: { modsDir: modsDir(), title: rec.title, categories: rec.categories || [], kindHint: opts.kind, relocate: true, ...inspected } });
+    j.plan = installer.plan(files, j.ctx, opts); j.status = 'review'; emitJob(j); return jobView(j);
+  });
+  handle('installs:moveBikePaints', async (key, bike) => {
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before moving paints');
+    const rec = store.get('installs')[key]; if (!rec) throw new Error('Install record not found');
+    const result = await recentInstalls.moveBikePaints({ modsDir: modsDir(), record: rec, bike, installedBikes: installer.listModels(modsDir(), 'bikes') });
+    store.update('installs', (all) => Object.fromEntries(Object.entries(all).map(([id, record]) => [id, { ...record, files: record.files.map((rel) => result.changes.get(rel) || rel) }])));
+    for (const j of jobs.values()) if (j.installed) j.installed = j.installed.map((rel) => result.changes.get(rel) || rel);
+    await scan(); send('library:changed', {}); return { moved: result.moved };
+  });
   handle('installs:checkUpdates', async () => {
     const recs = Object.values(store.get('installs')).filter((r) => r.postId);
     const posts = await site.postsByIds(recs.map((r) => r.postId));
@@ -1023,6 +1208,7 @@ function registerIpc() {
   handle('installs:uninstall', async (key) => {
     const rec = store.get('installs')[key];
     if (!rec) return;
+    if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); send('library:changed', {}); return; }
     for (const f of rec.files) {
       const abs = f.startsWith('game:') ? path.join(store.get('settings').gameInstallDir, f.slice(5)) : path.join(modsDir(), f);
       if (fs.existsSync(abs) && (insideRoots(abs) || insideGame(abs))) await shell.trashItem(abs).catch(() => {});
@@ -1037,6 +1223,8 @@ function registerIpc() {
     // Nov 2026), so Ride sets the bike and track in the profile and opens the game normally.
     const args = [];
     if (await profile.isGameRunning()) throw new Error('MX Bikes is already running.');
+    if (opts.profile && opts.bike) await selectSavedBike(opts.profile, opts.bike);
+    else if (opts.profile) await profile.activateProfile(profUserDir(), opts.profile);
     if (env.gameExe && game.launch(env.gameExe, args)) return true;
     // Fallback: Steam (launch options can be passed via the applaunch URL)
     await shell.openExternal(args.length ? `steam://run/${paths.MXB_APPID}//${encodeURIComponent(args.join(' '))}/` : `steam://rungameid/${paths.MXB_APPID}`);
@@ -1133,6 +1321,8 @@ app.whenReady().then(async () => {
   thumbs = new Thumbs(path.join(app.getPath('userData'), 'thumbs'), () => Object.values(store.get('images')));
   await thumbs.prune().catch(() => {});
   initSettings();
+  // Repair this manager's previous accessory routing before online sync can use it.
+  if (!await profile.isGameRunning()) await repairGearFolders().catch((e) => console.warn('Gear folder repair:', e.message));
   setupDownloadsSession();
   protocol.handle('mxb', handleImage);
   registerIpc();

@@ -113,7 +113,7 @@ function renderRail() {
   const packUpd = S.packsNeed || 0;
   const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
   $('#rail').innerHTML = VIEWS.map((v) => btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
-    + `<div class="rail-spacer"></div>${btn({ id: 'settings', label: 'Settings', icon: 'settings' })}`;
+    + `<div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-act="open-friends" title="Friends & status">${icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
 }
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
@@ -656,19 +656,19 @@ function hostMode(d) {
 
 // ---------- Get Mods: free (mxb-mods.com) + both shops behind one switch ----------
 S.getSrc = 'free';
-function isFree() { return (S.view === 'get' && S.getSrc === 'free') || (S.view === 'graphics' && S.gfxTab === 'get'); }
-function isShop() { return S.view === 'get' && S.getSrc !== 'free'; }
+function isFree() { return (S.view === 'get' && ['free', 'addons'].includes(S.getSrc)) || (S.view === 'graphics' && S.gfxTab === 'get'); }
+function isShop() { return S.view === 'get' && !['free', 'addons'].includes(S.getSrc); }
 function renderGet(c) {
   const src = (id, ic, label) => `<button class="${S.getSrc === id ? 'active' : ''}" data-src="${id}">${icon(ic)}${label}</button>`;
-  c.innerHTML = `<div class="view col"><div class="srcbar"><h2>Get Mods</h2><div class="seg-tabs">${src('free', 'globe', 'Free mods')}${src('hub', 'cart', 'MXB Hub')}${src('mxbs', 'cart', 'MX Bikes Shop')}</div></div><div class="view" id="getBody"></div></div>`;
+  c.innerHTML = `<div class="view col"><div class="srcbar"><h2>Get Mods</h2><div class="seg-tabs">${src('free', 'globe', 'MXB Mods')}${src('addons', 'layers', 'Addons')}${src('hub', 'cart', 'MXB Hub')}${src('mxbs', 'cart', 'MX Bikes Shop')}</div></div><div class="view" id="getBody"></div></div>`;
   const body = $('#getBody');
-  if (S.getSrc === 'free') { renderBrowse(body); return; }
+  if (['free', 'addons'].includes(S.getSrc)) { renderBrowse(body); return; }
   if (S.shop.id !== S.getSrc) { S.shop.id = S.getSrc; S.shop.cat = 0; S.shop.sort = 'date'; S.shop.query = ''; S.shop.products = []; S.shop.page = 0; S.shop.totalPages = 1; S.shop.total = 0; S.shop.req++; S.shop.loading = false; }
   renderShops(body);
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-src]');
-  if (b && S.view === 'get') { S.getSrc = b.dataset.src; renderGet($('#content')); }
+  if (b && S.view === 'get') { S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'liveries', 'riderkit', 'helmets', 'boots', 'gloves', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
 });
 
 // ---------- OEM packs ----------
@@ -756,7 +756,7 @@ document.addEventListener('click', async (e) => {
 
 function dlTabs(active) {
   const n = (S.updates && S.updates.length) || 0;
-  return `<div class="seg-tabs"><button class="${active === 'downloads' ? 'active' : ''}" data-dltab="downloads">${icon('download')}Downloads</button><button class="${active === 'updates' ? 'active' : ''}" data-dltab="updates">${icon('refresh')}Updates${n ? ` (${n})` : ''}</button></div>`;
+  return `<div class="seg-tabs"><button class="${active === 'downloads' ? 'active' : ''}" data-dltab="downloads">${icon('download')}Downloads</button><button class="${active === 'recent' ? 'active' : ''}" data-dltab="recent">${icon('clock')}Recent installs</button><button class="${active === 'updates' ? 'active' : ''}" data-dltab="updates">${icon('refresh')}Updates${n ? ` (${n})` : ''}</button></div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-dltab]');
@@ -787,7 +787,7 @@ function renderBrowse(c) {
     $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
-  $('#brTabs').innerHTML = S.tabs.map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
+  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'liveries', 'riderkit', 'helmets', 'boots', 'gloves', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
   drawBrowseKind();
   if (!S.browse.posts.length && !S.browse.loading) browseLoad(); else renderBrowseGrid();
 }
@@ -795,13 +795,14 @@ function renderBrowse(c) {
 function drawBrowseKind() {
   const box = $('#brKind'); if (!box) return;
   const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
-  box.hidden = !labels;
+  box.hidden = !labels || S.view === 'get' && S.getSrc === 'addons';
   if (!labels) { box.innerHTML = ''; return; }
   const choices = [['all', 'All'], ['models', labels[0]], ['paints', labels[1]], ...(S.browse.tab === 'helmets' ? [['addons', 'Addons']] : [])];
   box.innerHTML = choices.map(([kind, label]) => `<button class="chip ${(S.browse.kind || 'all') === kind ? 'active' : ''}" data-browse-kind="${kind}">${label}</button>`).join('');
 }
 
 function browseReset() {
+  S.browse.loading = false;
   S.browse.page = 0; S.browse.posts = []; S.browse.totalPages = 1; S.browse.error = null;
   S.browse.reqId = (S.browse.reqId || 0) + 1;
   $$('#brTabs .chip').forEach((b) => b.classList.toggle('active', b.dataset.tab === S.browse.tab));
@@ -815,7 +816,9 @@ async function browseLoad() {
   const reqId = b.reqId;
   renderBrowseGrid();
   try {
-    const r = await api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', page: b.page + 1, perPage: 30, orderby: b.sort });
+    let timeout;
+    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort });
+    const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total;
     b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
@@ -848,7 +851,7 @@ function renderBrowseGrid() {
   if (b.posts.length) html += `<div class="grid big">${b.posts.map(siteCard).join('')}</div>`;
   else if (b.loading) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
   else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't reach mxb-mods.com</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
-  else html += `<div class="empty"><div>${icon('search')}<h3>No mods found</h3><div>Try another search or category.</div></div></div>`;
+  else html += `<div class="empty"><div>${icon('search')}<h3>No mods found${b.page < b.totalPages ? ' on this page' : ''}</h3><div>Try another search or category.</div>${b.page < b.totalPages ? '<button class="btn" data-act="browse-more">Check next page</button>' : ''}</div></div>`;
   if (b.page < b.totalPages && b.posts.length) html += `<div class="loadmore" id="brMore">${b.loading ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
   const top = sc.scrollTop;
   sc.innerHTML = html;
@@ -887,9 +890,9 @@ async function openPost(summary) {
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
       : installed ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
       : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}Install</button>`;
-    return `<div class="dl"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
+    return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
       <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
-      ${action}</div>`;
+      ${action}<div class="download-inline" data-download-progress hidden></div></div>`;
   }).join('') : `<div class="notice warn">${icon('alert')}<div>No download links found on this page. Open it on the site to check.</div></div>`;
 
   $('.modal-body', m).innerHTML = `<div class="post">
@@ -904,7 +907,7 @@ async function openPost(summary) {
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
       ${(p.modelDependencies || []).map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model: ${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing — this paint does not include the model' : 'Check this required model — compatibility is verified when installing'}</div><button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}Open model page</button></div></div>`).join('')}
-      ${p.needsModelNotice && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
+      ${p.needsModelNotice && needsModelWarning(p) && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
       ${(p.dependencies || []).length ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('')}</div></div>` : ''}
       ${installed ? `<button class="btn btn-danger btn-sm" data-post-remove>${icon('trash')}Delete installed files</button>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
@@ -912,7 +915,10 @@ async function openPost(summary) {
       <div class="section-title">Downloads</div>
       <div class="dl-list">${dls}</div>
     </div></div>`;
+  refreshInlineDownloads(m);
   $('.modal-body', m).addEventListener('click', async (e) => {
+    const review = e.target.closest('[data-inline-review]');
+    if (review) { openReview(review.dataset.inlineReview); return; }
     const remove = e.target.closest('[data-post-remove]');
     if (remove) {
       if (!(await confirmBox('Delete installed files', `Move files installed by <b>${esc(p.title)}</b> to the Recycle Bin?`, 'Delete files', true))) return;
@@ -926,16 +932,18 @@ async function openPost(summary) {
     const d = e.target.closest('[data-dl]');
     if (d) {
       const dl = p.downloads[Number(d.dataset.dl)];
-      d.disabled = true;
+      const label = d.innerHTML;
+      d.disabled = true; d.textContent = 'Starting…';
       try {
-        if (await startDownload(p, dl)) d.innerHTML = `${icon('check')}Queued`;
-        else d.disabled = false;
-      } catch (e) { d.disabled = false; toast(esc(cleanErr(e)), 'err', 6000); }
+        if (await startDownload(p, dl)) refreshInlineDownloads(m);
+        else { d.disabled = false; d.innerHTML = label; }
+      } catch (e) { d.disabled = false; d.innerHTML = label; toast(esc(cleanErr(e)), 'err', 6000); }
     }
   });
 }
 
 function needsModelWarning(p) {
+  if (p.installKind === 'bikePaint' || p.kind === 'bikePaint' || (p.categories || []).some((c) => [37, 51, 361].includes(Number(c)))) return false;
   return p.gearKind === 'paint' || !!p.needsModelNotice || !!p.modelDependencies?.length || !!p.missingModelTextures?.length;
 }
 
@@ -963,16 +971,51 @@ function warnBeforePaintInstall(p, staged = false) {
 async function startDownload(p, dl) {
   const requireReview = needsModelWarning(p);
   if (requireReview && !await warnBeforePaintInstall(p)) return false;
-  await api.invoke('jobs:start', {
+  const id = await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
     categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview, modelWarningAccepted: requireReview,
   });
+  if (id && !S.jobs.has(id)) S.jobs.set(id, { id, title: p.title, url: dl.url, status: 'queued', createdAt: Date.now() });
+  refreshInlineDownloads();
   toast(`Downloading <b>${esc(p.title)}</b>…`, 'info', 2500);
   return true;
 }
 
 // ---------- downloads ----------
 const STATUS_LABEL = { queued: 'Queued', downloading: 'Downloading', extracting: 'Unpacking', review: 'Needs review', installing: 'Installing', done: 'Installed', error: 'Failed', browser: 'Waiting for browser' };
+
+function inlineDownloadHtml(j) {
+  const known = j.status === 'downloading' && j.total > 0;
+  const pct = known ? Math.max(0, Math.min(100, Math.floor((j.received || 0) / j.total * 100))) : 0;
+  const complete = j.status === 'review' || j.status === 'done';
+  const hints = {
+    queued: 'Waiting to start. Keep this page open or check Downloads.',
+    downloading: 'Please wait. Any install review popup appears after downloading and unpacking.',
+    browser: 'Complete the download in the browser window. Progress will appear here when the file starts downloading.',
+    extracting: 'Checking and unpacking the files. Please wait for the install review popup if one is needed.',
+    review: 'Ready for review. Confirm the install popup, or click Review & install to reopen it.',
+    installing: 'Installing the mod. Please wait until this says Installed.',
+    done: 'Installation complete.', error: j.error || 'Download failed. You can try again.',
+  };
+  return `<div class="download-inline-status ${j.status === 'error' ? 'sync-warning' : ''}"><b>${esc(STATUS_LABEL[j.status] || j.status)}</b><span>${known ? `${pct}% · ${fmtSize(j.received)} / ${fmtSize(j.total)}` : ''}</span></div>${j.status === 'error' ? '' : `<progress max="100" ${known || complete ? `value="${complete ? 100 : pct}"` : ''} aria-label="Mod download and installation progress"></progress>`}<div class="muted">${esc(hints[j.status] || j.note || '')}</div>`;
+}
+
+function refreshInlineDownloads(root = document) {
+  const jobs = [...S.jobs.values()].reverse();
+  for (const row of $$('[data-download-url]', root)) {
+    const job = jobs.find((j) => j.url && j.url === row.dataset.downloadUrl);
+    const box = $('[data-download-progress]', row);
+    if (!job || !box) continue;
+    box.hidden = false; box.innerHTML = inlineDownloadHtml(job);
+    const button = $('[data-dl], [data-own-file]', row);
+    if (button) {
+      button.disabled = !['error', 'review'].includes(job.status);
+      button.textContent = job.status === 'review' ? 'Review & install' : job.status === 'error' ? job.error === 'Cancelled' ? 'Install' : 'Try again' : STATUS_LABEL[job.status] || 'Please wait…';
+      if (job.status === 'review') button.dataset.inlineReview = job.id;
+      else delete button.dataset.inlineReview;
+    }
+  }
+}
 
 function jobHtml(j) {
   const pct = j.total ? Math.min(100, (j.received / j.total) * 100) : 0;
@@ -999,14 +1042,32 @@ function jobHtml(j) {
 }
 
 function renderDownloads(c) {
+  if (S.dlTab === 'recent') { renderRecentInstalls(c); return; }
   const list = [...S.jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>Downloads</h2>${dlTabs("downloads")}<div class="grow"></div>
       <button class="btn" data-act="pick-files">${icon('upload')}Install from file…</button>
-      ${list.some((j) => ['done', 'error'].includes(j.status)) ? `<button class="btn btn-ghost" data-act="clear-jobs">Clear finished</button>` : ''}</div>
+      ${list.some((j) => ['done', 'error'].includes(j.status)) ? `<button class="btn btn-ghost" data-act="clear-jobs" title="Clear completed history; installed files and active downloads are kept">Clear all completed</button>` : ''}</div>
     <div class="scroller"><div class="jobs" id="jobsList">${list.length ? list.map(jobHtml).join('') : `<div class="empty"><div>${icon('download')}<h3>No downloads yet</h3><div>Install mods from the Browse tab, or drag .pkz / .zip / .rar files onto this window.</div></div></div>`}</div></div>
   </div></div>`;
 }
+
+async function renderRecentInstalls(c) {
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Downloads</h2>${dlTabs('recent')}</div><div class="scroller" id="recentInstalls"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
+  try {
+    const all = await api.invoke('installs:list'); S.installs = all;
+    const rows = Object.entries(all).sort((a, b) => b[1].installedAt - a[1].installedAt).slice(0, 10);
+    const box = $('#recentInstalls'); if (!box) return;
+    box.innerHTML = `<p class="muted">Your last 10 installs. Change a location to move installed files; nothing is downloaded again.</p><div class="srv-list">${rows.map(([key, rec]) => `<div class="srv"><div class="srv-ico">${icon('download')}</div><div class="srv-txt"><div class="t">${esc(rec.title)}</div><div class="m">${esc(rec.kind || 'Mod')} · ${esc(timeAgo(rec.installedAt))}</div><div class="m recent-path">${esc(rec.files.slice(0, 2).join(' · '))}${rec.files.length > 2 ? ` · +${rec.files.length - 2} more` : ''}</div></div><div class="jactions">${rec.link ? `<button class="btn btn-sm" data-open="${esc(rec.link)}">${icon('external')}Source page</button>` : ''}${!rec.files.some((f) => f.startsWith('game:')) ? `<button class="btn btn-sm" data-edit-install="${esc(key)}">Change install location</button>` : '<span class="muted">Game folder · managed in Graphics</span>'}</div></div>`).join('') || '<div class="set-card muted">No recorded installs yet.</div>'}</div>`;
+  } catch (e) { const box = $('#recentInstalls'); if (box) box.textContent = cleanErr(e); }
+}
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-edit-install]'); if (!button) return;
+  button.disabled = true;
+  try { const job = await api.invoke('installs:editLocation', button.dataset.editInstall); S.jobs.set(job.id, job); openReview(job.id); }
+  catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+  finally { button.disabled = false; }
+});
 
 function updateJobInPlace(j) {
   const el = $(`[data-job="${j.id}"]`);
@@ -1064,14 +1125,14 @@ function openReview(id) {
   let opts = { ...(j.plan.options || {}), kind: j.plan.kind };
   let paintModelInfo = j.plan.paintModelInfo || [];
   const targetBike = (name) => bikeItem(name) || paintModelInfo.find((i) => i.name === name);
-  const targetFilters = { brand: '', cc: '' };
+  const targetFilters = { brand: '', cc: '', query: '' };
   const targetMatches = (name) => {
     const bike = targetBike(name);
     return (!targetFilters.brand || (bike && bike.brand === targetFilters.brand)) && (!targetFilters.cc || (bike && String(bike.cc) === targetFilters.cc));
   };
   const m = modal({
-    title: `Install — ${esc(j.title)}`, size: 'md', body: '<div id="rv"></div>',
-    foot: `<span class="grow" id="rvSummary"></span><button class="btn" data-close>Later</button><button class="btn btn-primary" id="rvInstall">${icon('download')}Install</button>`,
+    title: `${j.relocateKey ? 'Change install location' : 'Install'} — ${esc(j.title)}`, size: 'md', body: '<div id="rv"></div>',
+    foot: `${j.link ? `<button class="btn btn-ghost btn-sm" data-open="${esc(j.link)}">${icon('external')}Source page</button>` : ''}<span class="grow" id="rvSummary"></span><button class="btn" data-close>${j.relocateKey ? 'Cancel' : 'Later'}</button><button class="btn btn-primary" id="rvInstall">${icon('download')}Install</button>`,
     onClose: () => { reviewOpen = null; },
   });
   reviewOpen = m;
@@ -1088,8 +1149,9 @@ function openReview(id) {
       $('#rvInstall', m).disabled = true;
       return;
     }
-    const ctl = [];
-    ctl.push(`<div class="field"><label>Mod type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`);
+    const ctl = [], targets = [];
+    const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
+    const typeControl = `<div class="field"><label>Content type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`;
     if (p.kind === 'track') ctl.push(`<div class="field"><label>Track type</label><select data-opt="trackType">${p.trackTypes.map((t) => `<option ${t === p.options.trackType ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`);
     if (p.riderModels?.length) {
       const choices = p.riderModels.filter((r) => r.compatible || r.unverified);
@@ -1097,28 +1159,28 @@ function openReview(id) {
         ? `<div class="field"><label>Rider body required by these paints</label><select data-opt="riderTarget"><option value="">— choose the matching installed body —</option>${choices.map((r) => `<option value="${esc(r.name)}" ${r.name === p.options.riderTarget ? 'selected' : ''}>${esc(r.name)}${r.unverified ? ' · compatibility unverified' : ''}</option>`).join('')}</select></div>`
         : '<div class="notice warn">No matching rider body is installed. Install the model linked by the creator, then reopen this review. The default rider cannot use these paint textures.</div>');
     }
-    if (p.paintModelsBase && (p.needsPaintTarget || p.paintGuess === 'title')) {
-      const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
-      const candidates = p.paintModels.filter((n) => !bikeTarget || targetMatches(n));
+    if (p.paintModelsBase) {
+      const candidates = p.paintModels.filter((n) => !bikeTarget || targetMatches(n) && (n === p.options.paintTarget || !targetFilters.query || bikeTitle(n).toLowerCase().includes(targetFilters.query.toLowerCase())));
       if (bikeTarget) {
+        targets.push(`<div class="search review-search">${icon('search')}<input data-target-query placeholder="Search installed bikes…" aria-label="Search target bikes" value="${esc(targetFilters.query)}"></div>`);
         const targetBikes = p.paintModels.map(targetBike).filter(Boolean);
         for (const fc of FACETS.bikes.filter((f) => f.key !== 'cls')) {
           const values = [...new Set(targetBikes.map(fc.get).filter(Boolean))].sort(fc.order || ((a, b) => String(a).localeCompare(String(b))));
-          ctl.push(`<div class="field"><label>${esc(fc.label)}</label><select data-target-filter="${fc.key}"><option value="">${esc(FACET_ALL[fc.key])}</option>${values.map((v) => `<option value="${esc(v)}" ${String(v) === targetFilters[fc.key] ? 'selected' : ''}>${esc(fc.fmt(v))}</option>`).join('')}</select></div>`);
+          targets.push(`<div class="field"><label>${fc.key === 'cc' ? 'Engine size' : esc(fc.label)}</label><select data-target-filter="${fc.key}"><option value="">${esc(FACET_ALL[fc.key])}</option>${values.map((v) => `<option value="${esc(v)}" ${String(v) === targetFilters[fc.key] ? 'selected' : ''}>${esc(fc.fmt(v))}</option>`).join('')}</select></div>`);
         }
       }
-      ctl.push(`<div class="field"><label>Install paints onto${bikeTarget ? ` (${candidates.length})` : ''}</label><select data-opt="paintTarget"><option value="">— choose —</option>${candidates.map((n) => `<option value="${esc(n)}" ${n === p.options.paintTarget ? 'selected' : ''}>${esc(bikeTarget ? bikeTitle(n) : n)}</option>`).join('')}</select></div>`);
+      targets.push(`<div class="field review-target"><label>${bikeTarget ? `Bike · ${candidates.length} available` : 'Model for these paints'}</label><select data-opt="paintTarget"><option value="">${bikeTarget ? 'Choose a bike…' : 'Choose the matching model…'}</option>${candidates.map((n) => `<option value="${esc(n)}" ${n === p.options.paintTarget ? 'selected' : ''}>${esc(bikeTarget ? bikeTitle(n) : n)}</option>`).join('')}</select>${!candidates.length ? `<small class="muted">${p.paintModels.length ? 'No bikes match these filters.' : 'Install the matching model first, then reopen this review.'}</small>` : ''}</div>`);
     }
     if (p.kind === 'custom') ctl.push(`<div class="field"><label>Folder inside mods/</label><input class="input" data-opt="customDir" list="dirsList" placeholder="e.g. bikes/MY_BIKE/paints" value="${esc(p.options.customDir || '')}"><datalist id="dirsList">${['bikes', 'tracks/motocross', 'tracks/supercross', 'rider/paints', 'rider/helmets', 'rider/boots', 'rider/gloves', 'rider/protections', 'tyres', 'misc'].map((d) => `<option value="${d}">`).join('')}</datalist></div>`);
-    const missingModels = (p.requiredModels || []).filter((r) => !r.installed && !r.included);
+    const missingModels = (p.requiredModels || []).filter((r) => r.kind !== 'bike' && !r.installed && !r.included);
     const dependencyHelp = missingModels.map((r) => `<button class="btn btn-sm" data-act="paint-get" data-name="${esc(r.name)}">${icon('search')}Find ${esc(r.name)} model</button>`).join('') + (p.dependencies || []).map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('');
     const warn = p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
-    const detected = p.kindHint && p.kind === p.kindHint ? `<div class="notice ok">${icon('check')}<div>Detected a <b>${esc(p.kindLabel)}</b> from the files inside. Change the type above if that's wrong.</div></div>` : '';
-    const guess = detected + (p.paintGuess === 'title' ? `<div class="notice info">${icon('info')}<div>Guessed <b>${esc(p.options.paintTarget)}</b> from the mod name — check it's the right one.</div></div>` : '');
-    const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || '')}">${e.dest ? 'mods/' + esc(e.dest) : '<span class="muted">—</span>'}</div><span class="pill ${e.status}">${e.status}</span></div>`).join('');
-    $('#rv', m).innerHTML = `<div class="plan-controls">${ctl.join('')}</div>${warn}${guess}
-      <div class="section-title">Files <span class="muted">(${p.totalEntries})</span></div><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<div class="muted" style="margin-top:6px">…and ${p.totalEntries - p.entries.length} more</div>` : ''}`;
-    $('#rvSummary', m).textContent = `${p.installable} file(s) will be installed`;
+    const waiting = p.needsPaintTarget || p.needsRiderTarget;
+    const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
+    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Add this livery to <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the bike this livery was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}${warn}
+      <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
+    $('#rvSummary', m).textContent = waiting ? `Choose ${bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
+    $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : bikeTarget ? 'Install livery' : 'Install'}`;
     $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || p.needsRiderTarget || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
   };
   draw(j);
@@ -1151,11 +1213,17 @@ function openReview(id) {
     const nj = await api.invoke('jobs:plan', id, opts);
     if (nj) { S.jobs.set(id, nj); opts = { ...nj.plan.options, kind: nj.plan.kind }; draw(nj); }
   });
+  $('#rv', m).addEventListener('input', (e) => {
+    if (!e.target.hasAttribute('data-target-query')) return;
+    const selection = e.target.selectionStart;
+    targetFilters.query = e.target.value; draw(S.jobs.get(id) || j);
+    const search = $('[data-target-query]', m); search.focus(); search.setSelectionRange(selection, selection);
+  });
   $('#rvInstall', m).addEventListener('click', async (e) => {
     const current = S.jobs.get(id) || j;
     const p = current.plan;
     e.target.disabled = true;
-    if (p.requiresModelWarning && !current.modelWarningAccepted) {
+    if (p.kind !== 'bikePaint' && p.requiresModelWarning && !current.modelWarningAccepted) {
       const dependencies = (p.requiredModels || []).filter((r) => !r.included).map((r) => ({ label: r.name, installed: r.installed, url: p.dependencies?.[0]?.url }));
       if (!await warnBeforePaintInstall({ title: current.title, link: current.link || current.url, modelDependencies: dependencies }, true)) { e.target.disabled = false; return; }
     }
@@ -1165,7 +1233,9 @@ function openReview(id) {
 }
 
 // ---------- rider (loadout per bike, stored in the game profile) ----------
-S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null };
+S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null, drafts: {}, selectionDirty: false };
+const riderDraftKey = () => `${S.rider.profile}|${S.rider.bike}`;
+const riderDirty = () => S.rider.selectionDirty || Object.keys(S.rider.drafts[riderDraftKey()] || {}).length > 0;
 const SLOT_ICONS = { bikePaint: 'paint', rider: 'rider', helmet: 'helmet', helmetPaint: 'paint', gogglesPaint: 'goggles', suitPaint: 'shirt', protection: 'shield', protectionPaint: 'paint', glovesPaint: 'glove', boots: 'boot', bootsPaint: 'paint' };
 const PAINT_SLOTS = new Set(['bikePaint', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'protectionPaint', 'glovesPaint', 'bootsPaint']);
 // Choosing a new model resets the paints that belonged to the old one.
@@ -1187,10 +1257,10 @@ function gearBrand(value) {
 }
 
 // The installed gear item (helmet/boots/protector model) for a chosen value, for its picture.
-function gearItem(slotId, value) {
+function gearItem(slotId, value, context = S.rider) {
   if (slotId === 'bikePaint') {
-    const paint = S.items.find((i) => i.group === 'bikePaints' && !i.disabled && i.bike === S.rider.bike && i.name === value);
-    return paint || (!value || value.toLowerCase() === 'stock' ? bikeItem(S.rider.bike) : null);
+    const paint = S.items.find((i) => i.group === 'bikePaints' && !i.disabled && i.bike === context.bike && i.name === value);
+    return paint || (!value || value.toLowerCase() === 'stock' ? bikeItem(context.bike) : null);
   }
   const sub = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[slotId];
   if (!sub || !value) return null;
@@ -1199,6 +1269,8 @@ function gearItem(slotId, value) {
 function bikeItem(id) { return S.items.find((i) => i.group === 'bikes' && i.name === id); }
 function bikeTitle(id) { const it = bikeItem(id); return it ? it.title : id.replace(/_/g, ' '); }
 function prettyValue(slot, v) {
+  if (slot === 'protection' && !v) return 'None';
+  if (slot === 'tyres' && !v) return 'Bike default';
   if (!v) return PAINT_SLOTS.has(slot) ? 'Default' : '—';
   if (v === 'default' || v === 'default_mx') return 'Default';
   return v.replace(/_/g, ' ');
@@ -1222,7 +1294,7 @@ async function renderRider(c) {
     }
     if (!R.bikes) R.bikes = await api.invoke('rider:bikes', R.profile);
     if (!R.bike) R.bike = (R.bikes.find((b) => b.selected) || R.bikes.find((b) => b.installed) || R.bikes[0] || {}).id;
-    R.lo = await api.invoke('rider:loadout', R.profile, R.bike);
+    R.lo = await api.invoke('rider:loadout', R.profile, R.bike, R.drafts[riderDraftKey()] || {});
   } catch (e) {
     c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('alert')}<h3>Couldn't read your profile</h3><div>${esc(e.message)}</div></div></div></div>`;
     return;
@@ -1243,18 +1315,18 @@ function drawBike(c) {
     <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('bike')}</div>${profileControlsHtml()}</div>
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
-      <div class="rider-wrap"><div class="set-card"><div class="slot-l">Bike model</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame ? `<span class="badge ok">${icon('check')}Your current bike in game</span>` : ''}<p class="muted">Previewing your installed model and selected livery.</p><button class="btn" data-act="rider-pick-bike">${icon('bike')}Choose bike</button></div>
-      <div class="section-title">Livery</div><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Bike livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} ${icon('chevron')}</span></button>
-      <p class="muted" style="margin-top:16px;font-size:12px">Close MX Bikes before saving a different livery. Previews do not change your game files.</p></div>
+      <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
+      <div class="bike-livery-card"><div class="section-title">Appearance</div><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
+      <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
     </div></div></div></div>`;
   mountProfileControls();
-  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikePaint || ''); R.bikeModelKey = key;
+  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || ''); R.bikeModelKey = key;
   const attach = async () => {
     if (R.bikeModelKey !== key || !$('#bikeStage')) return;
     if (!R.bikeViewer) { const host = document.createElement('div'); host.className = 'stage-canvas'; R.bikeViewer = window.RiderViewer.create(host); }
     $('#bikeStage').prepend(R.bikeViewer.el);
     try {
-      const model = await api.invoke('bike:model', R.profile, R.bike, lo.current.bikePaint || '');
+      const model = await api.invoke('bike:model', R.profile, R.bike, lo.current.bikePaint || '', 1024, lo.current);
       if (R.bikeModelKey !== key || !$('#bikeStage') || !R.bikeViewer) return;
       R.bikeViewer.load(model); $('#bikeStatus').hidden = true;
       $('#bikeNote').textContent = model.warnings.join(' ');
@@ -1282,7 +1354,7 @@ function drawRider(c) {
   };
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('outfit')}</div>${profileControlsHtml()}
-      <span class="sub">Pick your gear for each bike — saves straight to your game</span>
+      <span class="sub">Preview your setup, then Apply to save it to the game</span>
       <button class="btn" data-act="rider-copy-all">${icon('copy')}Use this outfit on all bikes</button></div>
     <div class="scroller"><div class="rider-layout">
       <div class="rider-stage-col"><div class="rider-stage" id="riderStage">
@@ -1300,11 +1372,13 @@ function drawRider(c) {
 
 function profileControlsHtml() {
   const R = S.rider;
-  return `<div class="profile-controls"><label>Profile<select id="riderProfile">${R.profiles.map((p) => `<option ${p === R.profile ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label><button class="btn btn-sm" data-act="profile-create">${icon('plus')}Create profile</button>${R.lo?.profileActive ? `<span class="badge ok">${icon('check')}Active in game</span>` : '<button class="btn btn-sm" data-act="profile-activate">Use in game</button>'}</div>`;
+  return `<div class="profile-controls"><label>Profile<select id="riderProfile">${R.profiles.map((p) => `<option ${p === R.profile ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label><button class="btn btn-sm" data-act="profile-create">${icon('plus')}Create profile</button><button class="btn btn-icon btn-sm" data-act="profile-delete" title="Delete this profile">${icon('trash')}</button><button class="btn btn-icon btn-sm" data-act="rider-refresh" title="Refresh rider and bike from the game">${icon('refresh')}</button>${R.lo?.profileActive ? `<span class="badge ok">${icon('check')}Active in game</span>` : '<button class="btn btn-sm" data-act="profile-activate">Use in game</button>'}</div>`;
 }
 function mountProfileControls() {
+  const controls = $('.profile-controls');
+  if (controls) controls.insertAdjacentHTML('beforeend', `<span class="rider-save-state">${riderDirty() ? 'Preview changes' : S.rider.saveState || ''}</span><button class="btn btn-sm" data-act="rider-revert" ${riderDirty() ? '' : 'disabled'}>Revert</button><button class="btn btn-primary btn-sm" data-act="rider-apply">Apply</button>`);
   const select = $('#riderProfile');
-  if (select) select.addEventListener('change', (e) => { S.rider.profile = e.target.value; S.rider.bikes = null; S.rider.bike = null; renderRider($('#content')); });
+  if (select) select.addEventListener('change', async (e) => { S.rider.profile = e.target.value; S.rider.selectionDirty = true; S.rider.bikes = null; S.rider.bike = null; await renderRider($('#content')); });
 }
 
 function createProfileDialog() {
@@ -1399,10 +1473,9 @@ async function saveSlot(slotId, value) {
   const R = S.rider;
   const change = { [slotId]: value };
   for (const r of RESETS[slotId] || []) change[r] = '';
-  try {
-    await api.invoke('rider:save', R.profile, { [R.bike]: change });
-    toast(`Saved — ${esc(prettyValue(slotId, value))}`, 'ok', 1600);
-  } catch (e) { toast(esc(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')), 'err', 6000); }
+  const draft = { ...(R.drafts[riderDraftKey()] || {}), ...change };
+  for (const [slot, selected] of Object.entries(draft)) if (selected === (R.lo.savedCurrent?.[slot] || '')) delete draft[slot];
+  R.drafts[riderDraftKey()] = draft; R.saveState = 'Preview changes';
   renderRider($('#content'));
 }
 
@@ -1427,11 +1500,14 @@ const GEAR_FRAMING = { glovesPaint: 'hands', boots: 'feet', bootsPaint: 'feet' }
 S.gearThumbs = new Map();
 function gearThumbKey(slotId, value, lo) {
   const c = lo.current;
-  const ctx = { bikePaint: lo.bike, helmetPaint: c.helmet, gogglesPaint: c.helmet, bootsPaint: c.boots, protectionPaint: c.protection, suitPaint: c.rider, glovesPaint: c.rider }[slotId] || c.rider || '';
+  const model = { bikePaint: lo.bike, helmetPaint: c.helmet, gogglesPaint: c.helmet, bootsPaint: c.boots, protectionPaint: c.protection, suitPaint: c.rider, glovesPaint: c.rider }[slotId] || c.rider || '';
+  const context = { model, rider: c.rider, helmetPaint: ['gogglesPaint', 'helmetPaint'].includes(slotId) ? c.helmetPaint : undefined, gogglesPaint: ['gogglesPaint', 'helmetPaint'].includes(slotId) ? c.gogglesPaint : undefined };
+  delete context[slotId];
+  const ctx = encodeURIComponent(JSON.stringify(context));
   return `${slotId}|${ctx || ''}|${value}`;
 }
-function gearPicker(slot, opts, lo) {
-  const R = S.rider;
+function gearPicker(slot, opts, lo, config = {}) {
+  const R = config.context || S.rider;
   const current = lo.current[slot.id] || '';
   const sorted = [...opts].sort((a, b) => (b.value === current) - (a.value === current));
   const optionBrand = (o) => {
@@ -1444,12 +1520,14 @@ function gearPicker(slot, opts, lo) {
   const brands = [...new Set(opts.map(optionBrand))].sort();
   let closed = false, running = false, io = null;
   const queue = [];
+  let pendingSelection = current;
   const m = modal({
     title: esc(slot.label), size: 'lg',
     body: `<div class="search wide" style="margin-bottom:14px">${icon('search')}<input id="gpQ" placeholder="Search ${opts.length} options…" spellcheck="false"></div><div class="picker-filters"><label><span>Brand</span><select id="gpBrand"><option value="">All brands</option>${brands.map((b) => `<option>${esc(b)}</option>`).join('')}</select></label></div><div class="picker-count" id="gearCount"></div><div id="gpGrid" class="gear-grid"></div>`,
-    foot: slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
-    onClose: () => { closed = true; if (io) io.disconnect(); },
+    foot: config.confirmSelection ? '<button class="btn" data-close>Skip</button><button class="btn btn-primary" data-confirm-gear>Equip selected</button>' : slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
+    onClose: () => { closed = true; if (io) io.disconnect(); if (!config.picked) config.onClose?.(); },
   });
+  $('[data-confirm-gear]', m)?.addEventListener('click', () => { config.picked = true; m.close(); config.onPick(pendingSelection); });
   const tileImg = (key) => {
     const u = S.gearThumbs.get(key);
     if (u && u.pic && !u.locked) return u.pic;
@@ -1474,7 +1552,7 @@ function gearPicker(slot, opts, lo) {
       if (S.gearThumbs.has(key)) continue;
       const value = key.split('|').slice(2).join('|');
       let url = null;
-      const gi = gearItem(slot.id, value);
+      const gi = gearItem(slot.id, value, R);
       const pic = gi && gi.hasImage ? thumbHtml(gi) : null;
       if (slot.id === 'bikePaint') {
         // Livery choices use the image recorded with the installed download.
@@ -1482,7 +1560,7 @@ function gearPicker(slot, opts, lo) {
         url = pic ? { pic, locked: false } : null;
       } else {
       try {
-        const model = await api.invoke('rider:thumbModel', R.profile, R.bike, slot.id, value);
+        const model = await api.invoke('rider:thumbModel', R.profile, R.bike, slot.id, value, lo.current);
         // Missing, unsupported and protected assets all lack a preview; this
         // alone does not establish that the creator encrypted the file.
         if ((model.unreadable || []).includes(slot.id)) url = { locked: true, pic, reason: (model.warnings || []).find((w) => /requires? .*model|model.*missing/i.test(w)) };
@@ -1508,7 +1586,7 @@ function gearPicker(slot, opts, lo) {
       const key = gearThumbKey(slot.id, o.value, lo);
       return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" data-v="${esc(o.value)}" data-key="${esc(key)}">
         <span class="gear-img">${tileImg(key)}</span>${o.value === current ? `<span class="badge ok gear-sel">${icon('check')}Wearing</span>` : ''}
-        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button>${PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
+        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button>${!config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
     }).join('') : `<div class="empty"><div>${icon('search')}<h3>No matches</h3></div></div>`;
     $$('.gear-tile', m).forEach((t) => io.observe(t));
   };
@@ -1532,7 +1610,10 @@ function gearPicker(slot, opts, lo) {
       catch (e) { remove.disabled = false; toast(esc(cleanErr(e)), 'err', 6000); }
       return;
     }
-    const t = e.target.closest('[data-v]'); if (t) { m.close(); saveSlot(slot.id, t.dataset.v); }
+    const t = e.target.closest('[data-v]'); if (t) {
+      if (config.confirmSelection) { pendingSelection = t.dataset.v; $$('.gear-tile', m).forEach((tile) => tile.classList.toggle('selected', tile === t)); return; }
+      config.picked = true; m.close(); (config.onPick || ((v) => saveSlot(slot.id, v)))(t.dataset.v);
+    }
   });
   draw();
   setTimeout(() => $('#gpQ', m).focus(), 50);
@@ -1543,7 +1624,7 @@ S.accounts = { steam: null, shops: [] };
 async function refreshAccounts() {
   const [st, sh] = await Promise.all([api.invoke('steam:detect').catch(() => ({ found: false })), api.invoke('shops:list').catch(() => [])]);
   S.accounts = { steam: st, shops: sh };
-  return S.accounts;
+  renderRail(); return S.accounts;
 }
 function cleanErr(e) { return String(e && e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''); }
 
@@ -1755,8 +1836,8 @@ async function openProduct(p, files) {
   if (group) {
     box = `<div class="section-title">You own this</div><div class="dl-list">${group.files.map((f, i) => {
       const done = installed || haveMod({ shopKey: f.url, title: f.file, urls: [f.url] });
-      return `<div class="dl"><div class="info"><div class="label">${esc(f.file || f.title)}</div><div class="host">${esc(sh.name)}</div></div>
-        ${done ? `<span class="have">${icon('check')}Installed</span>` : `<button class="btn btn-primary" data-own-file="${i}">${icon('download')}Install</button>`}</div>`;
+      return `<div class="dl" data-download-url="${esc(f.url)}"><div class="info"><div class="label">${esc(f.file || f.title)}</div><div class="host">${esc(sh.name)}</div></div>
+        ${done ? `<span class="have">${icon('check')}Installed</span>` : `<button class="btn btn-primary" data-own-file="${i}">${icon('download')}Install</button>`}<div class="download-inline" data-download-progress hidden></div></div>`;
     }).join('')}</div>`;
   } else if (installed) {
     box = `<div class="buy-box"><span class="have">${icon('check')}Installed</span><span class="muted" style="font-size:12.5px">You already have this mod.</span></div>`;
@@ -1774,17 +1855,22 @@ async function openProduct(p, files) {
       <div class="tags">${(p.categories || []).map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${box}
     </div></div>`;
+  refreshInlineDownloads(m);
   };
   renderDetails();
   $('.modal-body', m).addEventListener('click', async (e) => {
+    const review = e.target.closest('[data-inline-review]');
+    if (review) { openReview(review.dataset.inlineReview); return; }
     const g = e.target.closest('[data-pg]');
     if (g) { $('#pgMain', m).src = imgs[Number(g.dataset.pg)]; $$('[data-pg]', m).forEach((x) => x.classList.toggle('active', x === g)); }
     const b = e.target.closest('[data-buy]');
     if (b) api.invoke('shops:open', p.shop, b.dataset.buy);
     const of = e.target.closest('[data-own-file]');
     if (of) {
-      of.outerHTML = `<span class="have">${icon('download')}Downloading…</span>`;
-      await installOwned(group.files[Number(of.dataset.ownFile)], p);
+      const label = of.innerHTML;
+      of.disabled = true; of.textContent = 'Starting…';
+      try { await installOwned(group.files[Number(of.dataset.ownFile)], p); refreshInlineDownloads(m); }
+      catch (err) { of.disabled = false; of.innerHTML = label; toast(esc(cleanErr(err)), 'err', 6000); }
     }
   });
   try {
@@ -1860,7 +1946,9 @@ function drawOwned() {
 }
 
 async function installOwned(it, prod) {
-  await api.invoke('jobs:start', { title: prod ? prod.title : it.title, url: it.url, shopKey: prod && prod.link ? prod.link : it.url, link: prod?.link || it.product || null, image: prod ? prod.image : null });
+  const id = await api.invoke('jobs:start', { title: prod ? prod.title : it.title, url: it.url, shopKey: prod && prod.link ? prod.link : it.url, link: prod?.link || it.product || null, image: prod ? prod.image : null });
+  if (id && !S.jobs.has(id)) S.jobs.set(id, { id, title: prod ? prod.title : it.title, url: it.url, status: 'queued', createdAt: Date.now() });
+  refreshInlineDownloads();
   toast(`Downloading <b>${esc(prod ? prod.title : it.title)}</b>…`, 'info', 2200);
 }
 
@@ -1976,24 +2064,36 @@ document.addEventListener('click', async (e) => {
   }
   const un = e.target.closest('[data-uninstall]');
   if (un) {
-    const rec = S.installs[un.dataset.uninstall];
-    if (!(await confirmBox('Uninstall', `Move the ${rec.files.length} file(s) installed for <b>${esc(rec.title)}</b> to the Recycle Bin?`, 'Uninstall', true))) return;
-    await api.invoke('installs:uninstall', un.dataset.uninstall);
-    await refreshInstalledIds();
-    toast('Uninstalled', 'ok');
-    renderInstalled($('#content'));
-    rescan(true);
+    un.disabled = true;
+    try {
+      const all = await api.invoke('installs:list'); S.installs = all;
+      const rec = all[un.dataset.uninstall];
+      if (!rec) throw new Error('This install is no longer listed');
+      const graphics = rec.files.some((f) => f.startsWith('game:'));
+      if (!(await confirmBox('Uninstall', `Remove <b>${esc(rec.title)}</b> (${rec.files.length} files)? ${graphics ? 'The package goes to the Recycle Bin and backed-up game files are restored.' : 'Installed files go to the Recycle Bin.'}`, 'Uninstall', true))) { un.disabled = false; return; }
+      await api.invoke('installs:uninstall', un.dataset.uninstall); await refreshInstalledIds();
+      toast('Uninstalled', 'ok');
+      if (S.view === 'graphics' || S.view === 'library' && S.lib.tab === 'graphics') refreshGraphicsViews();
+      else renderInstalled($('#content'));
+      rescan(true);
+    } catch (err) { un.disabled = false; toast(esc(cleanErr(err)), 'err', 6000); }
   }
 });
 
 // ---------- settings ----------
+S.settingsTab = 'general';
+function settingsTabs() {
+  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button></div>`;
+}
+document.addEventListener('click', (e) => { const tab = e.target.closest('[data-settings-tab]'); if (tab) { S.settingsTab = tab.dataset.settingsTab; renderSettings($('#content')); } });
 async function renderSettings(c) {
+  if (S.settingsTab === 'health') return renderHealth(c);
   if (!S.accounts.shops.length) await refreshAccounts();
   const env = S.env, s = env.settings;
   const pathRow = (val, ok, which) => `<div class="path-row"><div class="path">${ok ? `<span class="ok">${icon('check')}</span>` : `<span class="bad">${icon('alert')}</span>`}${esc(val || 'Not found')}</div>
     <button class="btn" data-act="pick-${which}">Change…</button>${val ? `<button class="btn btn-icon" data-folder="${which}" title="Open">${icon('folder')}</button>` : ''}</div>`;
   const t = env.tools;
-  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2></div><div class="scroller"><div class="settings">
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings">
     <div class="set-card"><h3>MX Bikes user folder</h3><p>Where your mods, profiles and replays live. Detected automatically from your Documents folder.</p>
       ${pathRow(s.gameUserDir, env.modsFound, 'user')}
       <div class="muted mono" style="margin-top:8px">mods: ${esc(env.modsDir)}</div></div>
@@ -2035,6 +2135,18 @@ document.addEventListener('click', async (e) => {
   const it = S.drawerId && S.items.find((i) => i.id === S.drawerId);
   switch (act) {
     case 'profile-create': createProfileDialog(); break;
+    case 'rider-apply': {
+      a.disabled = true;
+      try { await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {}); delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
+      catch (err) { a.disabled = false; toast(esc(cleanErr(err)), 'err', 7000); } break;
+    }
+    case 'rider-revert': delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
+    case 'rider-refresh': if (!riderDirty()) { S.rider.profile = null; S.rider.bike = null; } S.rider.bikes = null; S.rider.modelKey = null; S.rider.bikeModelKey = null; S.gearThumbs.clear(); await renderRider($('#content')); toast('Rider and bike refreshed from the game', 'ok'); break;
+    case 'profile-delete': {
+      if (!await confirmBox('Delete rider profile?', `Move <b>${esc(S.rider.profile)}</b> and its saved gear and settings to the Recycle Bin? Another profile will be selected if this one is active.`, 'Delete profile', true)) break;
+      try { const removed = S.rider.profile; const result = await api.invoke('rider:deleteProfile', removed); for (const key of Object.keys(S.rider.drafts)) if (key.startsWith(removed + '|')) delete S.rider.drafts[key]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profiles = result.profiles; S.rider.profile = result.last; S.rider.bikes = null; S.rider.bike = null; await renderRider($('#content')); }
+      catch (err) { toast(esc(cleanErr(err)), 'err', 6000); } break;
+    }
     case 'profile-activate': {
       try { const result = await api.invoke('rider:activateProfile', S.rider.profile); S.rider.activeProfile = result.name; await renderRider($('#content')); toast('Profile selected for your next ride', 'ok'); }
       catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
@@ -2093,7 +2205,7 @@ document.addEventListener('click', async (e) => {
     case 'rider-pick-bike': {
       const R = S.rider;
       bikePicker({ current: R.bike, selectedInGame: R.bikes.find((b) => b.selected)?.id,
-        onPick: (v) => { R.bike = v; renderRider($('#content')); } });
+        onPick: async (v) => { R.bike = v; R.selectionDirty = true; R.bikes = null; await renderRider($('#content')); } });
       break;
     }
     case 'rider-copy-all': {
@@ -2119,7 +2231,7 @@ document.addEventListener('click', async (e) => {
     case 'browse-retry': browseReset(); break;
     case 'pick-user': case 'pick-install': S.env = await api.invoke('settings:pickFolder', act === 'pick-user' ? 'user' : 'install'); render(); if (S.env.modsFound) rescan(true); break;
     case 'redetect': S.env = await api.invoke('settings:redetect'); render(); if (S.env.modsFound) rescan(true); toast('Folders re-detected', 'ok', 1800); break;
-    case 'clear-jobs': for (const j of [...S.jobs.values()]) if (['done', 'error'].includes(j.status)) { await api.invoke('jobs:dismiss', j.id); S.jobs.delete(j.id); } renderDownloads($('#content')); renderRail(); break;
+    case 'clear-jobs': S.jobs = new Map((await api.invoke('jobs:clearHistory')).map((j) => [j.id, j])); renderDownloads($('#content')); renderRail(); toast('Completed history cleared. Installed files were kept.', 'ok'); break;
     case 'check-updates': {
       a.disabled = true; a.innerHTML = `<div class="spinner" style="width:15px;height:15px"></div>Checking…`;
       try { S.updates = await api.invoke('installs:checkUpdates'); } catch (err) { toast(esc(err.message), 'err'); }
@@ -2138,7 +2250,7 @@ document.addEventListener('click', async (e) => {
 });
 
 $('#launchBtn').innerHTML = `${icon('play')}Launch MX Bikes`;
-$('#launchBtn').addEventListener('click', async () => { try { await api.invoke('game:launch'); toast('Launching MX Bikes…', 'info', 2500); } catch (e) { toast(esc(cleanErr(e)), 'err', 4000); } });
+$('#launchBtn').addEventListener('click', async () => { try { if (riderDirty()) { toast('Apply or Revert your Rider preview before launching MX Bikes.', 'info', 5000); return; } await api.invoke('game:launch'); toast('Launching MX Bikes…', 'info', 2500); } catch (e) { toast(esc(cleanErr(e)), 'err', 4000); } });
 
 // ---------- drag & drop install ----------
 let dragDepth = 0;
@@ -2171,16 +2283,51 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- events from main ----------
+api.on('rider:changed', async ({ active }) => { const profiles = await api.invoke('rider:profiles'); S.rider.profiles = profiles.profiles; if (!riderDirty()) { S.rider.profile = active; S.rider.bike = null; S.rider.saveState = ''; } S.rider.bikes = null; S.gearThumbs.clear(); if (S.view === 'rider') renderRider($('#content')); });
+const equipQueue = [];
+let equipPromptBusy = false;
+async function offerEquip(job) {
+  equipQueue.push(job); if (equipPromptBusy) return; equipPromptBusy = true;
+  try {
+    while (equipQueue.length) {
+      const j = equipQueue.shift();
+      await new Promise((resolve) => {
+        let choosing = false;
+        const choices = j.equipCandidates;
+        const m = modal({ title: 'Installed — use it now?', size: 'sm', body: `<p><b>${esc(j.title)}</b> is installed.</p><p class="muted">Equip it now, preview its paints first, or leave it installed for later. Close MX Bikes before applying profile changes.</p>${choices.length > 1 ? `<div class="field"><label>Item to equip</label><select data-equip-choice>${choices.map((c, i) => `<option value="${i}">${esc(c.label)} · ${esc(c.slot)}</option>`).join('')}</select></div>` : ''}`, foot: '<button class="btn" data-close>Skip</button><button class="btn" data-equip-installed="customize">Customize first</button><button class="btn btn-primary" data-equip-installed="now">Equip now</button>', onClose: () => { if (!choosing) resolve(); } });
+        $$('[data-equip-installed]', m).forEach((button) => button.addEventListener('click', async (e) => {
+          const index = Number($('[data-equip-choice]', m)?.value || 0); e.target.disabled = true;
+          try {
+            const ctx = await api.invoke('jobs:equipContext', j.id, index);
+            const options = [...new Set(['', ...(ctx.lo.options[ctx.slot] || [])])].map((value) => ({ value, label: prettyValue(ctx.slot, value) }));
+            const equip = async (paint) => {
+              try { await api.invoke('jobs:equip', j.id, index, paint); toast('Equipped in your game profile', 'ok'); S.rider.lo = null; }
+              catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+              finally { resolve(); }
+            };
+            choosing = true; m.close();
+            if (e.target.dataset.equipInstalled === 'customize') gearPicker(ctx.lo.slots.find((s) => s.id === ctx.slot), options, ctx.lo, { context: { profile: ctx.profile, bike: ctx.bike }, confirmSelection: true, onPick: equip, onClose: resolve });
+            else await equip(ctx.preferred.find((paint) => options.some((o) => o.value === paint)) || '');
+          } catch (err) { e.target.disabled = false; toast(esc(cleanErr(err)), 'err', 6000); }
+        }));
+      });
+    }
+  } finally { equipPromptBusy = false; }
+}
 api.on('jobs:update', (j) => {
   const prev = S.jobs.get(j.id);
   S.jobs.set(j.id, j);
+  for (const old of [...S.jobs.values()].filter((job) => ['done', 'error'].includes(job.status)).sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt)).slice(10)) { S.jobs.delete(old.id); $(`[data-job="${old.id}"]`)?.remove(); }
+  refreshInlineDownloads();
   if (prev && prev.status !== j.status) {
     if (j.status === 'done') toast(`Installed <b>${esc(j.title)}</b>`, 'ok', 4500);
     if (j.status === 'error' && j.error !== 'Cancelled') toast(`<b>${esc(j.title)}</b>: ${esc(j.error)}`, 'err', 7000);
     if (j.status === 'browser') toast(`<b>${esc(j.title)}</b> needs the browser window — click its download button there.`, 'info', 6000);
     renderRail();
   } else if (!prev) renderRail();
-  if (S.view === 'downloads') updateJobInPlace(j);
+  if (j.status === 'done' && prev?.status !== 'done' && j.equipCandidates?.length) offerEquip(j);
+  if (S.view === 'downloads' && (!S.dlTab || S.dlTab === 'downloads')) updateJobInPlace(j);
+  else if (S.view === 'downloads' && S.dlTab === 'recent' && j.status === 'done') renderRecentInstalls($('#content'));
 });
 api.on('jobs:review', (id) => {
   const j = S.jobs.get(id);
@@ -2196,7 +2343,7 @@ const onLibraryChanged = debounce(async () => {
   if (isFree()) renderBrowseGrid();
   if (isShop()) drawShops();
   if (S.view === 'packs') renderPacks($('#content'));
-  if (S.view === 'game' && S.gameTab === 'health') renderHealth($('#content'));
+  if (S.view === 'settings' && S.settingsTab === 'health') renderHealth($('#content'));
 }, 400);
 api.on('library:changed', onLibraryChanged);
 

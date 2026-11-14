@@ -14,12 +14,14 @@ const { dependenciesFromHtml, browseCategory, gearKind } = require('../src/lib/s
 const health = require('../src/lib/health');
 const paintCompat = require('../src/lib/paint-compat');
 
-test('modern paint-only folders cannot hide legacy helmets, and package paints stay listed after switching', async (t) => {
+test('shared helmets stay listed independently of the rider body and switching paint choices', async (t) => {
   const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-catalog-'));
   t.after(() => fs.rm(mods, { recursive: true, force: true }));
   const root = path.join(mods, 'rider'), modern = path.join(root, 'riders', 'default_mx');
   await fs.mkdir(path.join(root, 'helmets'), { recursive: true });
-  await fs.mkdir(path.join(modern, 'helmets', 'Other', 'paints'), { recursive: true });
+  await fs.mkdir(path.join(root, 'helmets', 'Other', 'paints'), { recursive: true });
+  await fs.mkdir(modern, { recursive: true });
+  await fs.writeFile(path.join(root, 'helmets', 'Other', 'helmet.edf'), model('other'));
   await fs.writeFile(path.join(modern, 'rider.edf'), model('body'));
   const helmet = path.join(root, 'helmets', '6D.pkz');
   await fs.writeFile(helmet, zip({ 'readme.pnt': paint(), '6D/gfx.cfg': 'model = helmet.hrc', '6D/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}', '6D/helmet.edf': model('helmet'), '6D/paints/AeroBlue.pnt': paint(), '6D/goggles/Black.pnt': paint() }));
@@ -45,8 +47,8 @@ test('new helmet bundled with paints is a valid target before it is installed', 
     const plan = installer.plan(files, { modsDir: mods, title: 'New helmet', categories: [] }, { kind });
     assert.ok(plan.paintModels.includes('NewHelmet'));
     assert.equal(plan.options.paintTarget, 'NewHelmet');
-    assert.equal(plan.entries.find((e) => e.rel === 'paints/Blue.pnt').dest, 'rider/riders/default_mx/helmets/NewHelmet/paints/Blue.pnt');
-    assert.equal(plan.entries.find((e) => e.rel === 'goggles/Black.pnt').dest, 'rider/riders/default_mx/helmets/NewHelmet/goggles/Black.pnt');
+    assert.equal(plan.entries.find((e) => e.rel === 'paints/Blue.pnt').dest, 'rider/helmets/NewHelmet/paints/Blue.pnt');
+    assert.equal(plan.entries.find((e) => e.rel === 'goggles/Black.pnt').dest, 'rider/helmets/NewHelmet/goggles/Black.pnt');
     assert.equal(plan.counts.unresolved || 0, 0);
   }
 });
@@ -83,22 +85,21 @@ test('paint-only model folders are not treated as installed dependencies', async
   assert.equal(plainLink[0].url, 'https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/');
 });
 
-test('old archive gear paths are translated to the current rider layout even on a fresh install', async (t) => {
+test('archive routing separates body paints and gloves from shared accessories on a fresh install', async (t) => {
   const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-modern-install-'));
   t.after(() => fs.rm(mods, { recursive: true, force: true }));
   const files = ['rider/paints/Kit.pnt', 'rider/gloves/Gloves.pnt', 'rider/helmets/Helmet/paints/Blue.pnt'].map((rel) => ({ rel, size: 1 }));
   const plan = installer.plan(files, { modsDir: mods, categories: [127, 35] });
-  assert.ok(plan.entries.every((e) => e.dest.startsWith('rider/riders/default_mx/')));
+  const expected = ['rider/riders/default_mx/paints/Kit.pnt', 'rider/riders/default_mx/gloves/Gloves.pnt', 'rider/helmets/Helmet/paints/Blue.pnt'];
+  assert.deepEqual(plan.entries.map((e) => e.dest), expected);
   const local = installer.plan(files, { modsDir: mods, local: true, categories: [] });
-  assert.ok(local.entries.every((e) => e.dest.startsWith('rider/riders/default_mx/')));
+  assert.deepEqual(local.entries.map((e) => e.dest), expected);
   await fs.mkdir(path.join(mods, 'rider', 'riders', 'default_mx'), { recursive: true });
   const issues = await health.scan({ modsDir: mods, items: [
     { id: 'active', group: 'rider', parts: ['rider/helmets/Helmet'], sub: 'legacy/helmets' },
     { id: 'disabled', group: 'rider', parts: ['rider/helmets/Other'], sub: 'helmets', disabled: true },
   ] });
-  assert.equal(issues.find((i) => i.id === 'legacy-gear').fixId, 'trash-items');
-  assert.equal(issues.find((i) => i.id === 'disabled-legacy-gear').fixId, 'trash-items');
-  assert.ok(!issues.some((i) => i.fixId === 'disable-items'));
+  assert.ok(!issues.some((i) => ['trash-items', 'disable-items'].includes(i.fixId)));
 });
 
 test('Get Mods separates helmet, boot and protection models from paint-only listings', () => {
@@ -136,7 +137,7 @@ test('custom hoodie paints require a compatible rider instead of silently instal
 test('helmet paints with shared rider/eye textures never require a rider body or install as a rider kit', async (t) => {
   const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-helmet-face-'));
   t.after(() => fs.rm(mods, { recursive: true, force: true }));
-  const modelDir = path.join(mods, 'rider', 'riders', 'default_mx', 'helmets', 'BHelmet');
+  const modelDir = path.join(mods, 'rider', 'helmets', 'BHelmet');
   await fs.mkdir(modelDir, { recursive: true }); await fs.writeFile(path.join(modelDir, 'helmet.edf'), model('helmet'));
   const file = path.join(mods, 'Bhelmet_Eyeballs.pnt'), bytes = multiPaint(['rider', 'eyes']);
   await fs.writeFile(file, bytes);
@@ -150,7 +151,7 @@ test('helmet paints with shared rider/eye textures never require a rider body or
   const plan = installer.plan(files, context, { kind: 'helmetPaint', paintTarget: 'BHelmet' });
   assert.equal(plan.needsRiderTarget, false);
   assert.deepEqual(plan.riderModels, []);
-  assert.equal(plan.entries[0].dest, 'rider/riders/default_mx/helmets/BHelmet/paints/Bhelmet_Eyeballs.pnt');
+  assert.equal(plan.entries[0].dest, 'rider/helmets/BHelmet/paints/Bhelmet_Eyeballs.pnt');
   assert.equal(plan.counts.unresolved || 0, 0);
 });
 
@@ -162,4 +163,18 @@ test('ordinary rider paints use the default body without asking the user to pick
   assert.equal(plan.needsRiderTarget, false);
   assert.deepEqual(plan.riderModels, []);
   assert.equal(plan.entries[0].dest, 'rider/riders/default_mx/paints/StockKit.pnt');
+});
+
+test('bike liveries never request a model warning, even when selecting a bike or inspection is unavailable', async (t) => {
+  const mods = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-livery-warning-'));
+  t.after(() => fs.rm(mods, { recursive: true, force: true }));
+  const files = [{ rel: 'Fixture.pnt', size: 1 }];
+  const context = { modsDir: mods, categories: [37], unreadablePaints: ['Fixture.pnt'] };
+  const choose = installer.plan(files, context);
+  assert.equal(choose.kind, 'bikePaint'); assert.equal(choose.requiresModelWarning, false);
+  assert.equal(choose.needsPaintTarget, true);
+  assert.ok(!choose.warnings.some((w) => /could not be inspected|required model/i.test(w)));
+  const selected = installer.plan(files, context, { kind: 'bikePaint', paintTarget: 'FixtureBike' });
+  assert.equal(selected.requiresModelWarning, false);
+  assert.equal(selected.entries[0].dest, 'bikes/FixtureBike/paints/Fixture.pnt');
 });

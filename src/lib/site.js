@@ -28,6 +28,13 @@ const BROWSE_TABS = [
 
 let categoryMap = null; // id -> {name, parent}
 const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
+const ADDON_CATEGORIES = { liveries: [37, 51, 361], riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], gloves: [32], protection: [135], goggles: [380] };
+function isAddonPost(post) {
+  const ids = post.categories || [];
+  if (ids.some((id) => [313, 343, 344, 365, 45, 304, 22].includes(id))) return false;
+  return ids.some((id) => Object.values(ADDON_CATEGORIES).flat().includes(id)) || !!post.needsModelNotice || !!post.modelDependencies?.length;
+}
+function scopePosts(posts, scope) { return scope === 'all' ? posts : posts.filter((p) => isAddonPost(p) === (scope === 'addons')); }
 function browseCategory(tab, kind = 'all') {
   const base = BROWSE_TABS.find((x) => x.id === tab) || BROWSE_TABS[0];
   return GEAR_CATEGORIES[tab]?.[kind] ? { ...base, cats: GEAR_CATEGORIES[tab][kind] } : base;
@@ -109,15 +116,17 @@ async function popular(range) {
   return posts;
 }
 
-async function search({ query = '', tab = 'all', kind = 'all', page = 1, perPage = 24, orderby = 'date' } = {}) {
+async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', page = 1, perPage = 24, orderby = 'date' } = {}) {
   const cats = await categories();
-  const t = browseCategory(tab, kind);
+  let t = browseCategory(tab, kind);
+  if (scope === 'addons') t = { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() };
   // "Best match" without a search reads as popular-first, like the popular sorts.
   if (orderby === 'relevance' && !query) orderby = 'popular-month';
   if (orderby.startsWith('popular')) {
     // The site's popular pages only rank a few dozen posts, so most categories have few or none
     // there. Show the category's popular posts first, then the rest of the category, newest first.
     let xs = await popular(orderby.split('-')[1] || 'month');
+    xs = scopePosts(xs, scope);
     if (t.cats) xs = xs.filter((p) => p.categories.some((c) => t.cats.includes(c) || (cats[c] && t.cats.includes(cats[c].parent))));
     if (t.exclude) xs = xs.filter((p) => !p.categories.some((c) => t.exclude.includes(c)));
     if (query) { const q = query.toLowerCase(); xs = xs.filter((p) => p.title.toLowerCase().includes(q)); }
@@ -135,7 +144,7 @@ async function search({ query = '', tab = 'all', kind = 'all', page = 1, perPage
     const { json, headers } = await getJson(`${BASE}/wp-json/wp/v2/posts?${rest}`);
     const restTotal = Number(headers.get('x-wp-total') || 0);
     const total = xs.length + restTotal;
-    return { total, totalPages: Math.max(1, Math.ceil(total / perPage)), page, posts: [...top, ...(need > 0 ? json.map((p) => summarizePost(p, cats)) : [])] };
+    return { total: scope === 'all' ? total : 0, totalPages: Math.max(1, Math.ceil(total / perPage)), page, posts: [...top, ...(need > 0 ? scopePosts(json.map((p) => summarizePost(p, cats)), scope) : [])] };
   }
   const params = new URLSearchParams({
     per_page: String(perPage), page: String(page), _embed: 'wp:featuredmedia',
@@ -150,10 +159,10 @@ async function search({ query = '', tab = 'all', kind = 'all', page = 1, perPage
   else params.set('orderby', 'date');
   const { json, headers } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
   return {
-    total: Number(headers.get('x-wp-total') || 0),
+    total: scope === 'all' ? Number(headers.get('x-wp-total') || 0) : 0,
     totalPages: Number(headers.get('x-wp-totalpages') || 0),
     page,
-    posts: json.map((p) => summarizePost(p, cats)),
+    posts: scopePosts(json.map((p) => summarizePost(p, cats)), scope),
   };
 }
 
@@ -287,4 +296,4 @@ async function postBySlug(slug) {
   return json[0] ? post(json[0].id) : null;
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind };
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES };

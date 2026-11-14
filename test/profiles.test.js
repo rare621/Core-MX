@@ -15,6 +15,14 @@ function fixture(t) {
   fs.writeFileSync(path.join(root, 'profiles', 'Original', 'controls.txt'), 'original controls');
   return root;
 }
+
+test('deleting the active profile selects another profile, recycles the folder and preserves the last remaining profile', async (t) => {
+  const root = fixture(t), recycled = [];
+  await profile.createProfile(root, 'Race', 'Original'); await profile.activateProfile(root, 'Race');
+  const result = await profile.deleteProfile(root, 'Race', async (folder) => { recycled.push(path.basename(folder)); fs.renameSync(folder, path.join(root, 'recycled-profile')); });
+  assert.deepEqual(recycled, ['Race']); assert.equal(result.last, 'Original'); assert.deepEqual(result.profiles, ['Original']);
+  await assert.rejects(profile.deleteProfile(root, 'Original', () => {}), /only profile/);
+});
 test('copying a profile preserves gear and controls without activating it', async (t) => {
   const root = fixture(t), before = fs.readFileSync(path.join(root, 'global.ini'));
   await profile.createProfile(root, 'Race setup', 'Original', true);

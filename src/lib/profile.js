@@ -9,6 +9,7 @@ const gearAssets = require('./gear-assets');
 // key 'bike' = value stored under the bike id; 'protectionModel' = stored under the chosen protection model.
 const SLOTS = [
   { id: 'bikePaint', label: 'Bike livery', section: 'paint', key: 'bike', group: 'Bike' },
+  { id: 'tyres', label: 'Tyres / wheels', section: 'tyres', key: 'bike', group: 'Bike' },
   { id: 'rider', label: 'Rider model', section: 'rider', key: 'bike', group: 'Rider', default: 'default_mx' },
   { id: 'helmet', label: 'Helmet', section: 'helmet', key: 'bike', group: 'Head', default: 'default' },
   { id: 'helmetPaint', label: 'Helmet paint', section: 'helmet_paint', key: 'bike', group: 'Head' },
@@ -62,10 +63,9 @@ async function names(dir, filter) {
   return [...out].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
-// Folder holding gear for a rider model (modern layout), else the old rider/ folder.
+// Only the body, kit paints and glove paints are in this rider-model folder.
 function gearDir(modsDir, rider) {
-  const modern = path.join(modsDir, 'rider', 'riders', rider || 'default_mx');
-  return fs.existsSync(modern) ? modern : path.join(modsDir, 'rider');
+  return path.join(modsDir, 'rider', 'riders', rider || 'default_mx');
 }
 
 async function bikeDirs(modsDir) {
@@ -112,7 +112,7 @@ async function loadout(modsDir, prof, bike, stockPkz) {
   const cur = {};
   for (const s of SLOTS.filter((x) => x.key === 'bike')) cur[s.id] = val(s.section, bike);
   if (!cur.rider) cur.rider = 'default_mx';
-  const protModel = cur.protection || 'chest';
+  const protModel = cur.protection || '';
   cur.protectionPaint = val('protection_paint', protModel);
 
   const gd = gearDir(modsDir, cur.rider);
@@ -122,12 +122,13 @@ async function loadout(modsDir, prof, bike, stockPkz) {
 
   const opts = {
     bikePaint: bikeDir ? await names(path.join(bikeDir, 'paints'), 'pnt') : [],
+    tyres: ['', ...await require('./tyres').options(modsDir, stockPkz)],
     rider: await names(path.join(modsDir, 'rider', 'riders')),
     helmet: ['default', ...(await names(path.join(gd, 'helmets')))],
     helmetPaint: helmet ? await names(path.join(gd, 'helmets', helmet, 'paints'), 'pnt') : [],
     gogglesPaint: helmet ? await names(path.join(gd, 'helmets', helmet, 'goggles'), 'pnt') : await names(path.join(gd, 'goggles'), 'pnt'),
     suitPaint: await names(path.join(gd, 'paints'), 'pnt'),
-    protection: [...new Set(['chest', 'full', ...(await names(path.join(gd, 'protections')))])],
+    protection: ['', 'full', 'neck'],
     protectionPaint: await names(path.join(gd, 'protections', protModel, 'paints'), 'pnt'),
     glovesPaint: await names(path.join(gd, 'gloves'), 'pnt'),
     boots: ['default', ...(await names(path.join(gd, 'boots')))],
@@ -270,4 +271,17 @@ async function activateProfile(userDir, value) {
   return { name, ...(await listProfiles(userDir)) };
 }
 
-module.exports = { SLOTS, currentBike, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile };
+async function deleteProfile(userDir, value, trash) {
+  if (await isGameRunning()) throw new Error('Close MX Bikes before deleting a profile');
+  const name = profileName(value), list = await listProfiles(userDir);
+  if (!list.profiles.includes(name)) throw new Error('Profile not found');
+  if (list.profiles.length < 2) throw new Error('Create another profile before deleting your only profile');
+  const folder = path.resolve(userDir, 'profiles', name), parent = path.resolve(userDir, 'profiles') + path.sep;
+  if (!folder.toLowerCase().startsWith(parent.toLowerCase())) throw new Error('Invalid profile path');
+  const active = list.last === name;
+  if (active) await activateProfile(userDir, list.profiles.find((p) => p !== name));
+  try { await trash(folder); } catch (e) { if (active) await activateProfile(userDir, name); throw e; }
+  return listProfiles(userDir);
+}
+
+module.exports = { SLOTS, currentBike, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile, deleteProfile };

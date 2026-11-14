@@ -15,10 +15,10 @@ function graphicsListHtml(g) {
         <button class="btn btn-sm btn-icon btn-danger" data-gfx-trash="${idx}" title="Remove">${icon('trash')}</button>
         <label class="toggle" title="${i.on ? 'Turn off' : 'Turn on'}"><input type="checkbox" data-gfx-toggle="${idx}" ${i.on ? 'checked' : ''}><span class="sw"></span></label></div></div>`).join('');
   const recs = g.installed.map((r) => `<div class="srv">${r.image ? `<img src="${esc(r.image)}" alt="" style="width:64px;height:40px;object-fit:cover;border-radius:8px">` : `<div class="srv-ico">${icon('sparkle')}</div>`}
-      <div class="srv-txt"><div class="t">${esc(r.title)}</div><div class="m">${r.files} file(s) · installed ${timeAgo(r.installedAt)}</div></div>
-      <div class="jactions">${r.link ? `<button class="btn btn-sm" data-open="${esc(r.link)}">${icon('external')}Page</button>` : ''}<button class="btn btn-sm btn-danger" data-uninstall="${esc(r.key)}">${icon('trash')}Uninstall</button></div></div>`).join('');
+      <div class="srv-txt"><div class="t">${esc(r.title)}</div><div class="m">${r.active ? 'Active' : 'Disabled'} · ${r.files} files · installed ${timeAgo(r.installedAt)}</div></div>
+      <div class="jactions"><button class="btn btn-sm ${r.active ? '' : 'btn-primary'}" data-gfx-active="${esc(r.key)}" data-enabled="${r.active ? '0' : '1'}">${icon('power')}${r.active ? 'Disable' : 'Enable'}</button>${r.link ? `<button class="btn btn-sm" data-open="${esc(r.link)}">${icon('external')}Page</button>` : ''}<button class="btn btn-sm btn-danger" data-uninstall="${esc(r.key)}">${icon('trash')}Uninstall</button></div></div>`).join('');
   return `${g.items.length ? `<div class="section-title">In your game folder</div><div class="srv-list">${rows}</div>` : ''}
-    ${recs ? `<div class="section-title">Installed with this app</div><div class="srv-list">${recs}</div>` : ''}
+    ${recs ? `<div class="section-title">Installed with this app</div><p class="muted">Only one graphics package can be active. Enabling another disables the current package.</p><div class="srv-list">${recs}</div>` : ''}
     ${!g.items.length && !recs ? `<div class="set-card gfx-empty">
         <div class="gfx-empty-ico">${icon('sparkle')}</div>
         <h3>No graphics mods yet</h3>
@@ -54,6 +54,13 @@ function refreshGraphicsViews() {
 }
 
 document.addEventListener('click', async (e) => {
+  const active = e.target.closest('[data-gfx-active]');
+  if (active) {
+    active.disabled = true;
+    try { await api.invoke('graphics:setActive', active.dataset.gfxActive, active.dataset.enabled === '1'); refreshGraphicsViews(); }
+    catch (err) { active.disabled = false; toast(esc(cleanErr(err)), 'err', 6000); }
+    return;
+  }
   const t = e.target.closest('[data-gfx-tab]');
   if (t) { S.gfxTab = t.dataset.gfxTab; renderGraphics($('#content')); return; }
   const get = e.target.closest('[data-act="gfx-get"]');
