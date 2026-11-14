@@ -1623,6 +1623,44 @@ function gearThumbKey(slotId, value, lo) {
   const ctx = encodeURIComponent(JSON.stringify(context));
   return `${slotId}|${ctx || ''}|${value}`;
 }
+// A picker should present a colour collection as one useful choice, rather
+// than turning every paint in a download into a separate first-level card.
+// The installer does not retain a creator-provided collection id, so use only
+// strong name signals: "Model - Colour" or a familiar trailing colour word.
+// If a name does not clearly belong to a collection, it remains its own card.
+function pickerPaintFamily(slotId, value) {
+  if (!PAINT_SLOTS.has(slotId) || !value) return '';
+  const dash = String(value).match(/^(.+?)\s+[-–—]\s+[^-–—]+$/);
+  if (dash && dash[1].trim().length > 2) return dash[1].trim();
+  const words = String(value).trim().split(/\s+/);
+  let cut = 0;
+  while (words.length - cut > 1 && PAINT_VARIANT_WORDS.has(words[words.length - 1 - cut].toLowerCase())) cut++;
+  return cut ? words.slice(0, -cut).join(' ') : '';
+}
+function groupPickerOptions(slot, options, current, noGrouping) {
+  if (noGrouping || !PAINT_SLOTS.has(slot.id)) return options.map((option) => ({ option }));
+  const families = new Map();
+  for (const option of options) {
+    const base = pickerPaintFamily(slot.id, option.value);
+    if (!base) continue;
+    const key = base.toLowerCase();
+    if (!families.has(key)) families.set(key, { key, label: base, options: [] });
+    families.get(key).options.push(option);
+  }
+  const grouped = new Map([...families].filter(([, family]) => family.options.length > 1));
+  const result = [], emitted = new Set();
+  for (const option of options) {
+    const key = pickerPaintFamily(slot.id, option.value).toLowerCase();
+    const family = grouped.get(key);
+    if (!family) { result.push({ option }); continue; }
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    // Show the equipped paint when it belongs to this collection, otherwise
+    // use its first paint as the representative thumbnail.
+    result.push({ ...family, option: family.options.find((entry) => entry.value === current) || family.options[0] });
+  }
+  return result;
+}
 function gearPicker(slot, opts, lo, config = {}) {
   const R = config.context || S.rider;
   const current = lo.current[slot.id] || '';
@@ -1639,7 +1677,7 @@ function gearPicker(slot, opts, lo, config = {}) {
   const queue = [];
   let pendingSelection = current;
   const m = modal({
-    title: esc(slot.label), size: 'lg',
+    title: esc(config.title || slot.label), size: 'lg',
     body: `<div class="search wide" style="margin-bottom:14px">${icon('search')}<input id="gpQ" placeholder="Search ${opts.length} options…" spellcheck="false"></div><div class="picker-filters"><label><span>Brand</span><select id="gpBrand"><option value="">All brands</option>${brands.map((b) => `<option>${esc(b)}</option>`).join('')}</select></label></div><div class="picker-count" id="gearCount"></div><div id="gpGrid" class="gear-grid"></div>`,
     foot: config.confirmSelection ? '<button class="btn" data-close>Skip</button><button class="btn btn-primary" data-confirm-gear>Equip selected</button>' : slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
     onClose: () => { closed = true; if (io) io.disconnect(); if (!config.picked) config.onClose?.(); },
@@ -1693,18 +1731,22 @@ function gearPicker(slot, opts, lo, config = {}) {
     }
     running = false;
   }
+  let visibleGroups = new Map();
   const draw = () => {
     io.disconnect();
     queue.length = 0;
     const q = $('#gpQ', m).value.toLowerCase().split(/\s+/).filter(Boolean);
     const brand = $('#gpBrand', m).value;
     const xs = sorted.filter((o) => (!brand || optionBrand(o) === brand) && q.every((t) => `${o.label} ${o.value} ${optionBrand(o)}`.toLowerCase().includes(t)));
-    $('#gearCount', m).textContent = `${xs.length} of ${opts.length}`;
-    $('#gpGrid', m).innerHTML = xs.length ? xs.slice(0, 400).map((o) => {
+    const grouped = groupPickerOptions(slot, xs, current, config.noGrouping);
+    visibleGroups = new Map(grouped.filter((entry) => entry.options).map((entry) => [entry.key, entry]));
+    $('#gearCount', m).textContent = `${xs.length} of ${opts.length}${grouped.length < xs.length ? ` · ${grouped.length} collections` : ''}`;
+    $('#gpGrid', m).innerHTML = xs.length ? grouped.slice(0, 400).map((entry) => {
+      const o = entry.option, collection = entry.options;
       const key = gearThumbKey(slot.id, o.value, lo);
-      return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" data-v="${esc(o.value)}" data-key="${esc(key)}">
+      return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" ${collection ? `data-open-group="${esc(entry.key)}"` : `data-v="${esc(o.value)}"`} data-key="${esc(key)}">
         <span class="gear-img">${tileImg(key)}</span>${o.value === current ? `<span class="badge ok gear-sel">${icon('check')}Wearing</span>` : ''}
-        <span class="gear-name" title="${esc(o.label)}">${esc(o.label)}</span></button><button class="gear-view btn btn-icon" data-view-gear="${esc(o.value)}" title="View ${esc(o.label)} in 3D" aria-label="View ${esc(o.label)} in 3D">${icon('eye')}</button>${!config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
+        ${collection ? `<span class="gear-collection-count">${collection.length} variants</span>` : ''}<span class="gear-name" title="${esc(collection ? entry.label : o.label)}">${esc(collection ? entry.label : o.label)}</span></button><button class="gear-view btn btn-icon" data-view-gear="${esc(o.value)}" title="View ${esc(o.label)} in 3D" aria-label="View ${esc(o.label)} in 3D">${icon('eye')}</button>${!collection && !config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
     }).join('') : `<div class="empty"><div>${icon('search')}<h3>No matches</h3></div></div>`;
     $$('.gear-tile', m).forEach((t) => io.observe(t));
   };
@@ -1732,6 +1774,26 @@ function gearPicker(slot, opts, lo, config = {}) {
       remove.disabled = true;
       try { await api.invoke('rider:deletePaint', R.profile, R.bike, slot.id, value); S.gearThumbs.clear(); m.close(); await renderRider($('#content')); toast('Paint deleted', 'ok'); }
       catch (e) { remove.disabled = false; toast(esc(cleanErr(e)), 'err', 6000); }
+      return;
+    }
+    const group = e.target.closest('[data-open-group]');
+    if (group) {
+      const entry = visibleGroups.get(group.dataset.openGroup);
+      if (!entry) return;
+      // Keep the collection picker behind the drill-in dialog.  Closing the
+      // drill-in simply returns to the grouped list; choosing a paint closes
+      // both and preserves the normal save/equip behaviour.
+      gearPicker(slot, entry.options, lo, {
+        ...config,
+        title: `${slot.label} — ${entry.label}`,
+        noGrouping: true,
+        onClose: () => {},
+        onPick: (value) => {
+          config.picked = true;
+          m.close();
+          (config.onPick || ((v) => saveSlot(slot.id, v)))(value);
+        },
+      });
       return;
     }
     const t = e.target.closest('[data-v]'); if (t) {
@@ -2500,7 +2562,15 @@ async function offerEquip(job) {
           const index = selectedIndex; e.target.disabled = true;
           try {
             const ctx = await api.invoke('jobs:equipContext', j.id, index);
-            const options = [...new Set(['', ...(ctx.lo.options[ctx.slot] || [])])].map((value) => ({ value, label: prettyValue(ctx.slot, value) }));
+            // A post-install Customize action must never reopen the player's
+            // entire library.  `preferred` is built from exactly the files
+            // written by this job; retain only those names which the selected
+            // model exposes.  A model-only download has no paint to choose,
+            // so it gets its default rather than unrelated existing paints.
+            const available = ctx.lo.options[ctx.slot] || [];
+            const downloaded = [...new Set(ctx.preferred || [])].filter((value) => available.includes(value));
+            const values = downloaded.length ? [...new Set(['', ...downloaded])] : [ctx.lo.current[ctx.slot] || ''];
+            const options = values.map((value) => ({ value, label: prettyValue(ctx.slot, value) }));
             const equip = async (paint) => {
               try { await api.invoke('jobs:equip', j.id, index, paint); toast('Equipped in your game profile', 'ok'); S.rider.lo = null; }
               catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }

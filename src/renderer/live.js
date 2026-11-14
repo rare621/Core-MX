@@ -117,7 +117,7 @@ async function drawLiveServers(refresh) {
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
           · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
         <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
-          ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : '<span class="muted" style="font-size:12px" title="No app user has joined this server by address yet — join it from the game\'s own server list">Join in game</span>'}</div></div>`;
+          ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : '<span class="muted" style="font-size:12px" title="MX Bikes does not provide an IP address to game plugins. Save this server or load the game server list with FrostMod to make it joinable here.">Join in game</span>'}</div></div>`;
     }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
   const qi = $('#allSrvQ');
   $$('[data-server-filter]', box).forEach((select) => select.addEventListener('change', () => { S.allSrv.filters[select.dataset.serverFilter] = select.value; drawLiveServers(); }));
@@ -126,15 +126,22 @@ async function drawLiveServers(refresh) {
 
 function openLiveServer(s) {
   const tl = trackLabel(s), have = trackHave(s);
+  let showAllRiders = false;
+  const ridersBody = () => {
+    const riders = s.riders || [], shown = showAllRiders ? riders : riders.slice(0, 5);
+    return `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
+        · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
+      <div class="section-title" style="margin-top:0">Riders (${riders.length})</div>
+      <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.name)}</div><div class="m">${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
+      ${riders.length > 5 ? `<button class="btn" style="margin-top:12px" data-live-riders-toggle>${showAllRiders ? 'Show fewer riders' : `Show all ${riders.length} riders`}</button>` : ''}`;
+  };
   const m = modal({
     title: esc(s.name),
-    body: `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
-        · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
-      <div class="section-title" style="margin-top:0">Riders (${s.riders.length})</div>
-      <div class="srv-list">${s.riders.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.name)}</div><div class="m">${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>`,
+    body: ridersBody(),
     foot: `${tl && !have ? `<button class="btn" data-live-mfind>${icon('search')}Get track</button>` : ''}<span class="grow"></span><button class="btn" data-close>Close</button>
       ${s.address ? `<button class="btn btn-primary" data-live-mjoin>${icon('play')}Join</button>` : ''}`,
   });
+  m.addEventListener('click', (e) => { if (e.target.closest('[data-live-riders-toggle]')) { showAllRiders = !showAllRiders; $('.modal-body', m).innerHTML = ridersBody(); } });
   const f = $('[data-live-mfind]', m); if (f) f.addEventListener('click', () => { m.close(); findTrack(tl); });
   const j = $('[data-live-mjoin]', m); if (j) j.addEventListener('click', () => { m.close(); joinServer(s.address, { name: s.name, address: s.address, track: tl }); });
 }

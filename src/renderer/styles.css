@@ -715,6 +715,7 @@ select option { background: var(--panel); }
 .gear-noimg .ico { width: 26px; height: 26px; }
 .gear-name { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px 2px; }
 .gear-sel { position: absolute; top: 14px; left: 14px; }
+.gear-collection-count { position: absolute; right: 12px; top: 12px; padding: 3px 7px; border-radius: 999px; background: rgba(0,0,0,.58); color: var(--text-2); font-size: 10px; font-weight: 700; }
 
 .gear-img { position: relative; }
 .gear-img > .ph, .gear-img > img { position: absolute; inset: 0; }
