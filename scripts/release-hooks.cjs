@@ -15,12 +15,13 @@ async function prepareResources(context) {
   const root = context.packager.projectDir;
   const target = path.join(root, 'build', 'generated');
   fs.mkdirSync(target, { recursive: true });
-  // Never package the developer's local service address, settings, or accounts.
-  fs.writeFileSync(path.join(target, 'online.config.json'), JSON.stringify({ serviceUrl: releaseServiceUrl(process.env.MXB_SERVICE_URL || '') }, null, 2) + '\n');
+  // Inherit the project's configured server unless the build explicitly overrides it.
+  const configured = JSON.parse(fs.readFileSync(path.join(root, 'online.config.json'), 'utf8'));
+  fs.writeFileSync(path.join(target, 'online.config.json'), JSON.stringify({ serviceUrl: releaseServiceUrl(process.env.MXB_SERVICE_URL || configured.serviceUrl || '') }, null, 2) + '\n');
   if (!fs.existsSync(path.join(root, 'plugin', 'mxbm_presence.dlo'))) throw new Error('The bundled presence plugin is missing');
 }
 
-async function verifyPackage({ appOutDir }) {
+async function verifyPackage({ appOutDir, packager }) {
   const archive = path.join(appOutDir, 'resources', 'app.asar');
   const files = asar.listPackage(archive).map((name) => name.replace(/\\/g, '/').replace(/^\//, ''));
   const forbidden = files.filter((name) => /^(?:\.git|\.tmp|test|scripts|server|dist|docs|build|CODEX_NOTES\.md|MODDING_PLAN\.md|online\.config\.json)(?:\/|$)/i.test(name)
@@ -30,7 +31,11 @@ async function verifyPackage({ appOutDir }) {
   for (const required of ['main.js', 'preload.js', 'src/renderer/index.html', 'node_modules/three/build/three.module.min.js', 'THIRD_PARTY_NOTICES.md']) {
     if (!files.includes(required)) throw new Error(`Release is missing ${required}`);
   }
-  console.log(`  verified release contents (${files.length} entries; no game assets or local data)`);
+  const bundled = JSON.parse(fs.readFileSync(path.join(appOutDir, 'resources', 'online.config.json'), 'utf8'));
+  const expected = JSON.parse(fs.readFileSync(path.join(packager.projectDir, 'build', 'generated', 'online.config.json'), 'utf8'));
+  if (bundled.serviceUrl !== expected.serviceUrl) throw new Error('The installer online-service address does not match its build configuration');
+  console.log(`  verified release contents (${files.length} entries; no game assets or user data)`);
+  console.log(`  verified bundled online service: ${bundled.serviceUrl || '(none)'}`);
 }
 
 module.exports = { releaseServiceUrl, prepareResources, verifyPackage };
