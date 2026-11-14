@@ -11,7 +11,7 @@ const REPORT_EVERY = 30 * 1000;
 const PAINT_EVERY = 3 * 60 * 1000;
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, defaultUrl, onChange }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, defaultUrl, previousServiceUrls = [], onChange }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false;
   let lastSent = '';
@@ -24,6 +24,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   const cfg = () => store.get('online') || {};
   const setCfg = (patch) => store.set('online', { ...cfg(), ...patch });
+  // Only explicitly configured aliases refer to the same service and account database.
+  const sameService = (url) => url === defaultUrl || previousServiceUrls.includes(url);
 
   const bundledPlugin = () => path.join(appDir, 'plugin', PLUGIN);
   const pluginPath = () => (installDir() ? path.join(installDir(), 'plugins', PLUGIN) : null);
@@ -109,7 +111,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     retryTimer = setInterval(() => { const c = cfg(); if (defaultUrl && !c.token && !c.optedOut) connect().then(() => { lastError = null; onChange(status()); }).catch(() => {}); }, 60 * 1000);
     // A built-in service address (online.config.json): connect to it without asking.
     const c = cfg();
-    if (c.url && defaultUrl && c.url !== defaultUrl) setCfg({ url: defaultUrl, token: null, id: null });
+    if (c.url && defaultUrl && c.url !== defaultUrl) setCfg({ url: defaultUrl, ...(sameService(c.url) ? {} : { token: null, id: null }) });
     if (defaultUrl && !cfg().token && !c.optedOut) connect().catch((e) => { lastError = e.message; onChange(status()); });
     else if (c.token) syncPaints().catch(() => {});
   }
@@ -154,7 +156,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!sid) throw new Error('Sign in to Steam on this PC first — your Steam ID is your friend code.');
     const prev = cfg();
     name = steamName() || name || prev.name || '';
-    setCfg({ url: u, token: prev.url === u ? prev.token : null, name, optedOut: false });
+    setCfg({ url: u, token: sameService(prev.url) ? prev.token : null, id: sameService(prev.url) ? prev.id : null, name, optedOut: false });
     await call('GET', '/v1/health');
     if (!cfg().token) {
       const r = await call('POST', '/v1/register', { steamId: sid, name: name || '' });

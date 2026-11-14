@@ -32,8 +32,16 @@ const onlineSvc = require('./src/lib/online');
 let online = null;
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
-function onlineDefaultUrl() {
-  try { const root = app.isPackaged ? process.resourcesPath : __dirname; const u = String(JSON.parse(fs.readFileSync(path.join(root, 'online.config.json'), 'utf8')).serviceUrl || '').trim().replace(/\/+$/, ''); return /^https?:\/\/[^\s/]+(:\d+)?$/i.test(u) ? u : ''; } catch { return ''; }
+function onlineConfig() {
+  try {
+    const root = app.isPackaged ? process.resourcesPath : __dirname;
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'online.config.json'), 'utf8'));
+    const origin = (value) => {
+      const u = String(value || '').trim().replace(/\/+$/, '');
+      return /^https?:\/\/[^\s/]+(:\d+)?$/i.test(u) ? u : '';
+    };
+    return { defaultUrl: origin(config.serviceUrl), previousServiceUrls: Array.isArray(config.previousServiceUrls) ? config.previousServiceUrls.map(origin).filter(Boolean) : [] };
+  } catch { return { defaultUrl: '', previousServiceUrls: [] }; }
 }
 function insideGame(p) {
   const g = store.get('settings').gameInstallDir;
@@ -1021,7 +1029,7 @@ app.whenReady().then(async () => {
     steamId: () => { const s = steam.detect(paths.steamRoot()); return s.found ? s.steamId : null; },
     steamName: () => { const s = steam.detect(paths.steamRoot()); return s.found ? s.name || '' : ''; },
     modsDir: () => modsDir(),
-    defaultUrl: onlineDefaultUrl(),
+    ...onlineConfig(),
     // The outfit you're riding: your profile's current bike (what the game will put you on).
     currentOutfit: async () => {
       const list = await profile.listProfiles(profUserDir());

@@ -22,6 +22,8 @@ For another release, update the package version and lockfile with `npm version p
 
 Local development and release builds use the server address in the root `online.config.json`. The installer copies that address into its bundled configuration.
 
+When the same backend moves to a new address, `previousServiceUrls` can list its old origins so existing accounts keep their sign-in. Only list addresses sharing the same account database. An override to a different service does not inherit these aliases.
+
 To override that address for a particular build, set the GitHub repository variable `MXB_SERVICE_URL` to an HTTP(S) origin. Locally, set `$env:MXB_SERVICE_URL = 'https://your-server.example'` before `npm run build:win`. A blank override keeps the configured project address. LAN addresses are reachable only within that network; users elsewhere need a reachable public service address. No server passwords or account tokens belong in this value. The service is deployed separately; see `server/README.md`.
 
 ## Code signing

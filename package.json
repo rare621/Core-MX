@@ -1,7 +1,7 @@
 {
   "name": "mx-bikes-manager",
   "productName": "MX Bikes Manager",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Manage installed MX Bikes mods and browse/install mods from mxb-mods.com",
   "main": "main.js",
   "private": true,

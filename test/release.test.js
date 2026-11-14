@@ -24,15 +24,15 @@ test('installer inherits the configured IP unless the build overrides it', async
   });
   await fs.mkdir(path.join(root, 'plugin'));
   await fs.writeFile(path.join(root, 'plugin', 'mxbm_presence.dlo'), 'test plugin');
-  await fs.writeFile(path.join(root, 'online.config.json'), JSON.stringify({ serviceUrl: 'http://192.168.0.38:60000' }));
+  await fs.writeFile(path.join(root, 'online.config.json'), JSON.stringify({ serviceUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'] }));
   process.env.MXB_SERVICE_URL = '';
   const context = { packager: { projectDir: root } };
   const generated = path.join(root, 'build', 'generated', 'online.config.json');
   await prepareResources(context);
-  assert.equal(JSON.parse(await fs.readFile(generated, 'utf8')).serviceUrl, 'http://192.168.0.38:60000');
+  assert.deepEqual(JSON.parse(await fs.readFile(generated, 'utf8')), { serviceUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'] });
   process.env.MXB_SERVICE_URL = 'https://service.example';
   await prepareResources(context);
-  assert.equal(JSON.parse(await fs.readFile(generated, 'utf8')).serviceUrl, 'https://service.example');
+  assert.deepEqual(JSON.parse(await fs.readFile(generated, 'utf8')), { serviceUrl: 'https://service.example' });
 });
 
 test('Windows setup bundles only runtime files and preserves user data on uninstall', () => {
