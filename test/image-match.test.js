@@ -1,0 +1,7 @@
+const {test}=require('node:test'),a=require('node:assert/strict'),{rankImages,broadQuery}=require('../src/lib/image-match');
+const posts=(...titles)=>titles.map((title,i)=>({title,image:'image'+i}));
+test('track images rank year, round, location and variant above source order',()=>{const r=rankImages('2024 ARLMX RD2 RANCHO CO AMS',posts('2023 ARLMX RD2 Rancho CO AMS','2024 ARLMX RD3 Lakewood AMS','2024 ARLMX RD2 Rancho CO PRO','2024 ARLMX Round 2 Rancho CO Amateur'));a.equal(r[0].image,'image3');a.equal(r[0].matchReliable,true);a.ok(r.slice(1).every(p=>!p.matchReliable));});
+test('search formatting and duplicate suffixes do not change the best match',()=>{const r=rankImages('2022.Aerial.eSX.RD14 (1)',posts('2022 Aerial eSX Round 13','2022 Aerial eSX Round 14 Atlanta'));a.equal(r[0].image,'image1');a.equal(r[0].matchReliable,true);});
+test('best available partial title wins, unrelated results are never automatic',()=>{const r=rankImages('Millville MX',posts('2024 Glen Helen','Millville MX 2012','Millville MX 2021'));a.equal(r[0].image,'image1');a.equal(r.at(-1).matchReliable,false);a.equal(broadQuery('2024 ARLMX RD2 Rancho CO AMS'),'arlmx rancho co');});
+
+test('Slayground 3 beats a similarly named store result and other numbered versions',()=>{const r=rankImages('Slayground 3',posts('Slay','Slayground 2','Slayground 3 | Slabz710'));a.equal(r[0].image,'image2');a.equal(r[0].matchReliable,true);a.equal(r.find(p=>p.image==='image1').matchReliable,false)});
