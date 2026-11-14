@@ -29,11 +29,13 @@ async function scan({ installDir, modsDir, items }) {
     const p = path.join(modsDir, 'tyres', e.name);
     if (!(await listDir(p)).length) issues.push({ id: `tyre:${e.name}`, kind: 'crash', title: 'Empty tyre folder', detail: `tyres/${e.name} is empty. Empty tyre folders can crash the bike selection screen.`, fix: 'Remove', fixId: 'trash', path: p });
   }
-  // Old-layout rider gear when the current layout exists (the game reads rider/riders/<model>/)
-  const legacy = items.filter((i) => !i.disabled && i.group === 'rider' && i.sub.startsWith('legacy/'));
-  if (legacy.length && fs.existsSync(path.join(modsDir, 'rider', 'riders', 'default_mx'))) {
-    const size = legacy.reduce((a, i) => a + i.size, 0);
-    issues.push({ id: 'legacy-gear', kind: 'clean', title: 'Old rider gear folders', detail: `${legacy.length} items (${(size / 1073741824).toFixed(1)} GB) in the old mods/rider/… folders. Current MX Bikes uses mods/rider/riders/default_mx/…, so these are leftovers. Turning them off moves them aside — you can turn them back on any time.`, fix: 'Turn off', fixId: 'disable-items', itemIds: legacy.map((i) => i.id), size });
+  // Cleanup removes old-layout copies to the Recycle Bin, never to disabled mods.
+  const oldLayout = (i) => i.group === 'rider' && i.parts?.some((p) => /^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i.test(p));
+  const legacy = items.filter((i) => !i.disabled && oldLayout(i));
+  const oldDisabled = items.filter((i) => i.disabled && oldLayout(i));
+  if (fs.existsSync(path.join(modsDir, 'rider', 'riders', 'default_mx'))) {
+    if (legacy.length) issues.push({ id: 'legacy-gear', kind: 'clean', title: 'Old rider gear folders', detail: `${legacy.length} items use the older mods/rider/… layout. Current installs belong in rider/riders/default_mx/…. Remove sends these old files to the Recycle Bin.`, fix: 'Remove old files', fixId: 'trash-items', itemIds: legacy.map((i) => i.id) });
+    if (oldDisabled.length) issues.push({ id: 'disabled-legacy-gear', kind: 'clean', title: 'Old gear saved by earlier cleanup', detail: `${oldDisabled.length} old-layout items were kept in the disabled mods folder. Remove sends them to the Recycle Bin.`, fix: 'Remove old files', fixId: 'trash-items', itemIds: oldDisabled.map((i) => i.id) });
   }
   // Mods in places the game won't read
   for (const it of items) {

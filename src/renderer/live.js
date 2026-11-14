@@ -10,6 +10,7 @@ async function liveStatus(refresh) {
 }
 api.on('online:status', (st) => {
   S.live.status = st;
+  if (S.friendDialog) S.friendDialog.progress();
   if (S.view !== 'online') return;
   if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(true); }
   if (S.onlineTab === 'friends') renderFriends($('#content'));
@@ -124,7 +125,7 @@ async function renderFriends(c) {
     if (l.status === 'hidden' || !l.online) return ['off', l.lastSeen ? `Offline · last seen ${timeAgo(l.lastSeen)}` : 'Offline', 3];
     if (l.server) return ['ride', `Riding on ${l.server}${l.trackName || l.trackId ? ` · ${l.trackName || l.trackId}` : ''}`, 0];
     if (l.inEvent) return ['ride', `Riding offline${l.trackName ? ` · ${l.trackName}` : ''}`, 0];
-    return ['on', 'In MX Bikes', 1];
+    return ['on', l.inGame ? 'In MX Bikes' : 'Online in the manager', 1];
   };
   const joinable = (f) => { const l = live.get(f.code); return l && l.status === 'ok' && l.online && l.server && l.address ? l : null; };
   const paintLine = (f) => {
@@ -139,9 +140,9 @@ async function renderFriends(c) {
   const rows = S.friends.map((f, i) => ({ f, i, s: statusOf(f) })).sort((a, b) => a.s[2] - b.s[2] || a.f.name.localeCompare(b.f.name));
   const friendCard = ({ f, i, s }) => {
     const j = joinable(f);
-    return `<div class="fr-row"><div class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></div>
+    return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
       <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}">${esc(s[1])}</div>${paintLine(f)}</div>
-      <div class="fr-act">${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
+      <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
         <button class="btn btn-sm btn-ghost btn-icon" data-friend-remove="${i}" title="Remove ${esc(f.name)}">${icon('x')}</button></div></div>`;
   };
 
@@ -159,7 +160,7 @@ async function renderFriends(c) {
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
       <button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button></div>
     <div class="scroller"><div class="fr-page">
-      ${banner}${pluginTip}
+      ${banner}${pluginTip}${friendProgressHtml()}
       ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length
         ? `<div class="section-title">Friends · ${S.friends.length}</div><div class="fr-list">${rows.map(friendCard).join('')}</div>`
@@ -170,7 +171,7 @@ async function renderFriends(c) {
       <div class="fr-settings">
         <label class="fr-set"><span><b>Show friends where I'm riding</b><span class="muted">Only friends who added you back see it.</span></span>
           <span class="toggle"><input type="checkbox" id="liveShare" ${!st || st.service.share ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label>
-        <label class="fr-set"><span><b>Paint sync</b><span class="muted">Swap bike liveries and gear paints with friends so you see each other's look in game. Paint files only.</span></span>
+        <label class="fr-set"><span><b>Outfit sync</b><span class="muted">Sync only equipped gear, its paints and the current bike livery. Files already installed are skipped.</span></span>
           <span class="toggle"><input type="checkbox" id="paintSync" ${!ps || ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label>
         ${connected && ps && ps.enabled ? `<div class="fr-set-links">${ps.error ? `<span style="color:var(--warn)">${esc(ps.error)}</span>` : ps.shared ? `<span class="muted">Sharing ${ps.shared.length} paint${ps.shared.length === 1 ? '' : 's'} from your outfit</span>` : ''}
           <span class="grow"></span><a href="#" data-act="paint-now">${ps.busy ? 'Syncing…' : 'Sync now'}</a>${ps.received ? `<a href="#" data-act="paint-remove">Remove ${ps.received} downloaded</a>` : ''}</div>` : ''}
@@ -232,7 +233,10 @@ document.addEventListener('click', async (e) => {
   if (fj) {
     const fr = S.friends[Number(fj.dataset.friendJoin)];
     const l = (S.live.friends || []).find((x) => x.id === fr.code);
-    if (l && l.address) joinServer(l.address, { name: l.server, address: l.address, track: l.trackName || l.trackId });
+    if (l && l.address) {
+      if ((l.trackName || l.trackId) && !trackInstalled(l.trackName || l.trackId)) findFriendTrack(fr, l, true);
+      else joinServer(l.address, { name: l.server, address: l.address, track: l.trackName || l.trackId });
+    }
   }
 });
 
@@ -242,6 +246,121 @@ function findMod(name) {
   S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.req = (S.browse.req || 0) + 1;
   go('get');
 }
+
+function friendProgressHtml() {
+  const ps = S.live.status && S.live.status.paintSync;
+  const p = ps && ps.progress;
+  if (!ps || !ps.busy || !p) return '';
+  const ratio = p.size ? Math.min(1, p.loaded / p.size) : 0;
+  const pct = p.total ? Math.min(100, (p.completed + ratio) / p.total * 100) : 0;
+  return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? 'Installing equipped files' : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
+}
+
+async function openFriendDetails(friend) {
+  let outfit = null, loading = true, error = null, syncing = false;
+  const m = modal({ title: esc(friend.name), body: '<div class="loadmore"><div class="spinner"></div></div>', foot: `<span class="grow"></span><button class="btn" data-close>Close</button><button class="btn btn-primary" data-sync-friend>${icon('download')}Sync equipped gear</button>`,
+    onClose: () => { if (S.friendDialog && S.friendDialog.modal === m) S.friendDialog = null; } });
+  const drawProgress = () => { const box = $('[data-friend-progress]', m); if (box) box.innerHTML = friendProgressHtml(); };
+  const draw = () => {
+    if (!m.isConnected) return;
+    const l = (S.live.friends || []).find((f) => f.id === friend.code);
+    const track = l && (l.trackName || l.trackId);
+    const missing = track && !trackInstalled(track);
+    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
+    const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
+      const item = (outfit.items || []).find((it) => it.slot === slot.slot);
+      const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
+      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.error : 'Included with the game';
+      const needs = item && item.needs || [];
+      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
+    }).join('');
+    $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Offline session')}${track ? ` · ${esc(track)}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(outfit.bikeName || outfit.bike || '')} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p><div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
+    const button = $('[data-sync-friend]', m);
+    button.disabled = loading || syncing || !outfit || !S.live.status?.service.connected;
+    button.innerHTML = syncing ? '<span class="spinner"></span>Syncing…' : `${icon('download')}Sync equipped gear`;
+  };
+  const refresh = async () => {
+    try { outfit = await api.invoke('online:friendLoadout', friend.code); error = null; }
+    catch (e) { error = cleanErr(e); }
+    loading = false; draw();
+  };
+  S.friendDialog = { id: friend.code, modal: m, progress: drawProgress, redraw: draw };
+  $('[data-sync-friend]', m).addEventListener('click', async () => {
+    syncing = true; error = null; draw();
+    try {
+      S.live.status = await api.invoke('online:paintSyncNow', friend.code);
+      const ps = S.live.status.paintSync;
+      if (ps.error) throw new Error(ps.error);
+      const result = (ps.friends || []).find((f) => f.id === friend.code);
+      const failed = result && result.items.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
+      const count = result && result.items.filter((it) => it.state === 'downloaded').length || 0;
+      toast(failed ? `${failed} files need attention — see the list` : count ? `Installed ${count} missing equipped files` : 'You already have the equipped files', failed ? 'info' : 'ok', 4500);
+      S.gearThumbs.clear();
+    } catch (e) { error = cleanErr(e); }
+    syncing = false;
+    const savedError = error; await refresh(); if (savedError) { error = savedError; draw(); }
+  });
+  $('.modal-body', m).addEventListener('click', (e) => {
+    const find = e.target.closest('[data-friend-find]');
+    if (find) { m.close(); findMod(find.dataset.friendFind); return; }
+    const l = (S.live.friends || []).find((f) => f.id === friend.code);
+    if (e.target.closest('[data-friend-track]')) { m.close(); findFriendTrack(friend, l); }
+    if (e.target.closest('[data-friend-modal-join]') && l) {
+      m.close();
+      if ((l.trackName || l.trackId) && !trackInstalled(l.trackName || l.trackId)) findFriendTrack(friend, l, true);
+      else joinServer(l.address, { name: l.server, track: l.trackName || l.trackId });
+    }
+  });
+  draw(); await refresh();
+}
+
+async function findFriendTrack(friend, session, joinAfter = false) {
+  const name = session && (session.trackName || session.trackId);
+  if (!name) return;
+  const m = modal({ title: `Download track — ${esc(name)}`, body: '<div class="loadmore"><div class="spinner"></div></div>', foot: '<button class="btn" data-close>Cancel</button>' });
+  try {
+    const { posts } = await api.invoke('library:imageCandidates', { query: name, tab: 'tracks', source: 'all' });
+    if (!m.isConnected) return;
+    const results = posts.slice(0, 12);
+    $('.modal-body', m).innerHTML = `<p class="muted">Choose the matching version from the creator's download page. Store purchases use the store's normal download process.</p><div class="friend-track-results">${results.map((p, i) => `<button class="friend-track-result" data-track-result="${i}">${p.image ? `<img src="${esc(p.image)}" alt="">` : ''}<span><b>${esc(p.title)}</b><small>${esc(p.source)}${p.matchReliable ? ' · Best match' : ' · Check version'}</small></span>${icon('chevron')}</button>`).join('') || '<div class="muted">No matching download pages found. Try searching Get Mods with a shorter track name.</div>'}</div>`;
+    $('.modal-body', m).addEventListener('click', (e) => {
+      const button = e.target.closest('[data-track-result]'); if (!button) return;
+      const p = results[Number(button.dataset.trackResult)];
+      if (joinAfter) { S.pendingFriendJoin = { friendId: friend.code, address: session.address, track: name, server: session.server, at: Date.now() }; toast('Install the matching track, then the app will join your friend', 'info', 6000); }
+      m.close();
+      if (p.source === 'mxb-mods') openPost(p);
+      else { S.shop.id = p.source === 'MX Bikes Shop' ? 'mxbs' : 'hub'; openProduct(p); }
+    });
+  } catch (e) { if (m.isConnected) $('.modal-body', m).textContent = cleanErr(e); }
+}
+
+async function checkFriendTrackJoin() {
+  const pending = S.pendingFriendJoin;
+  if (!pending || Date.now() - pending.at > 30 * 60 * 1000) { S.pendingFriendJoin = null; return; }
+  if (!trackInstalled(pending.track)) return;
+  S.pendingFriendJoin = null;
+  const friends = await api.invoke('online:friends');
+  const friend = friends.find((f) => f.id === pending.friendId);
+  if (!friend || !friend.online || friend.address !== pending.address || (friend.trackName || friend.trackId) !== pending.track) { toast('Track installed. Your friend changed session — open their profile to join.', 'info', 6000); return; }
+  await joinServer(pending.address, { name: pending.server, track: pending.track });
+}
+
+document.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-friend-details]');
+  const row = e.target.closest('[data-friend-open]');
+  if (button || row && !e.target.closest('button,a')) {
+    const friend = S.friends[Number(button ? button.dataset.friendDetails : row.dataset.friendOpen)];
+    if (friend) openFriendDetails(friend);
+  }
+});
+
+setInterval(async () => {
+  if (S.view !== 'online' || S.onlineTab !== 'friends' || !S.live.status?.service.connected || S.live.polling) return;
+  S.live.polling = true;
+  try { S.live.friends = await api.invoke('online:friends'); S.live.friendsErr = null; await renderFriends($('#content')); S.friendDialog?.redraw(); }
+  catch (e) { S.live.friendsErr = cleanErr(e); }
+  finally { S.live.polling = false; }
+}, 15000);
 
 // ---------- Add friends popup: Steam friends list, or a friend code ----------
 async function addFriendsModal() {

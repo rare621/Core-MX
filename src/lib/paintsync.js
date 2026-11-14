@@ -1,110 +1,173 @@
-// Paint sync: share the paint files your outfit uses (bike livery, kit, gloves, helmet, goggles,
-// boots, protector) with mutual friends, and download theirs into your mods folder so MX Bikes
-// shows them on track. Only readable .pnt paints travel — never models, never sealed paints.
+// Sync only the currently equipped models and paints. Original paint bytes stay intact.
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const profile = require('./profile');
 const pnt = require('./pnt');
-
+const gear = require('./gear-assets');
+const { chainOf, readChain } = require('./asset-sources');
+const { modelBundle, validateModel, MAX_FILE } = require('./gear-sync');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const rel = (modsDir, abs) => path.relative(modsDir, abs).split(path.sep).join('/');
-// Same rule as the service: relative, inside bikes/ or rider/, a .pnt, no "..".
-const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/.+\.pnt$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p);
+const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^rider\/riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?\.pkz$/i.test(p));
+const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { return false; } };
+const modelOf = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
+const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(chest|full)$/i.test(name) : name === 'default';
 
-function readable(buf) { try { return pnt.isPnt(buf) && pnt.names(buf).length > 0; } catch { return false; } }
-
-// The paint files behind a bike's outfit, with what a friend needs installed for each to show.
 async function outfitFiles(modsDir, prof, bike) {
   const lo = await profile.loadout(modsDir, prof, bike);
-  const c = lo.current, gd = lo.gearDir;
+  const c = lo.current, rider = c.rider || 'default_mx', prefix = 'rider/riders/' + rider;
   const bikeDir = await profile.findBikeDir(modsDir, bike);
-  const helmet = c.helmet && c.helmet !== 'default' ? c.helmet : null;
-  const boots = c.boots && c.boots !== 'default' ? c.boots : null;
-  const prot = c.protection || 'chest';
-  const want = [
-    ['bikePaint', 'Bike livery', c.bikePaint, [bikeDir && path.join(bikeDir, 'paints'), path.join(modsDir, 'bikes', bike, 'paints')], [{ kind: 'bike', name: bike }]],
-    ['suitPaint', 'Rider kit', c.suitPaint, [path.join(gd, 'paints')], []],
-    ['glovesPaint', 'Gloves', c.glovesPaint, [path.join(gd, 'gloves')], []],
-    ['helmetPaint', 'Helmet paint', c.helmetPaint, helmet ? [path.join(gd, 'helmets', helmet, 'paints')] : [], helmet ? [{ kind: 'helmet', name: helmet }] : []],
-    ['gogglesPaint', 'Goggles', c.gogglesPaint, [helmet && path.join(gd, 'helmets', helmet, 'goggles'), path.join(gd, 'goggles')], helmet ? [{ kind: 'helmet', name: helmet }] : []],
-    ['bootsPaint', 'Boot paint', c.bootsPaint, [boots && path.join(gd, 'boots', boots, 'paints'), path.join(gd, 'boots'), path.join(gd, 'boots paints')], boots ? [{ kind: 'boots', name: boots }] : []],
-    ['protectionPaint', 'Protector paint', c.protectionPaint, [path.join(gd, 'protections', prot, 'paints')], prot !== 'chest' ? [{ kind: 'protection', name: prot }] : []],
-  ];
-  const out = [];
-  for (const [slot, label, name, dirs, needs] of want) {
+  const items = [], unavailable = [];
+  const equipped = profile.SLOTS.map((s) => ({ slot: s.id, label: s.label, value: c[s.id] || s.default || '', state: 'default' }));
+  for (const kind of ['rider', 'helmet', 'boots', 'protection']) {
+    const name = c[kind] || (kind === 'rider' ? 'default_mx' : kind === 'protection' ? 'chest' : 'default');
+    if (defaults(kind, name)) continue;
+    try {
+      const buf = await modelBundle({ modsDir, rider, kind, name });
+      if (!buf) throw new Error('Model files are missing or unreadable');
+      const target = kind === 'rider' ? 'rider/riders/' + name + '.pkz' : prefix + '/' + { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind] + '/' + name + '.pkz';
+      items.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, value: name, rider, modelKind: kind, path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
+    } catch (e) { unavailable.push({ slot: kind, label: name, error: e.message }); }
+  }
+  for (const s of profile.SLOTS.filter((s) => /Paint$/.test(s.id))) {
+    const name = c[s.id];
     if (!name) continue;
-    for (const d of dirs.filter(Boolean)) {
-      const f = path.join(d, name + '.pnt');
-      let buf;
-      try { buf = await fsp.readFile(f); } catch { continue; }
-      if (!readable(buf)) break; // sealed / protected: not shared
-      const r = rel(modsDir, f);
-      if (safeRel(r)) out.push({ slot, label: `${label}: ${name}`, path: r, sha256: sha256(buf), size: buf.length, buf, needs });
-      break;
-    }
-  }
-  return { bike, items: out };
-}
-
-// Upload what's missing on the service, then publish the outfit.
-async function share({ call, upload, modsDir, prof, bike, bikeName }) {
-  const { items } = await outfitFiles(modsDir, prof, bike);
-  const meta = items.map(({ buf, ...m }) => m);
-  const r = await call('POST', '/v1/loadout', { bike, bikeName, items: meta });
-  for (const sha of r.missing || []) {
-    const it = items.find((x) => x.sha256 === sha);
-    if (it) await upload(sha, it.buf);
-  }
-  if ((r.missing || []).length) await call('POST', '/v1/loadout', { bike, bikeName, items: meta }); // now complete
-  return meta;
-}
-
-// Download friends' paints you don't have. Never overwrites a file you already have.
-// received: { relPath: { sha256, from, at } } — what paint sync has written, so it can be undone.
-async function fetchFriends({ call, download, modsDir, received, have }) {
-  const { loadouts } = await call('GET', '/v1/loadouts');
-  const report = [];
-  for (const lo of loadouts) {
-    const items = [];
-    for (const it of lo.items) {
-      const entry = { slot: it.slot, label: it.label, path: it.path, needs: [] };
-      if (!safeRel(it.path)) { entry.state = 'skipped'; items.push(entry); continue; }
-      const dst = path.join(modsDir, ...it.path.split('/'));
-      if (!dst.startsWith(path.resolve(modsDir) + path.sep)) { entry.state = 'skipped'; items.push(entry); continue; }
-      for (const n of it.needs || []) if (!have(n)) entry.needs.push(n);
-      let existing = null;
-      try { existing = await fsp.readFile(dst); } catch {}
-      if (existing) {
-        entry.state = sha256(existing) === it.sha256 ? 'have' : 'name-taken';
+    try {
+      let data, target;
+      if (s.id === 'bikePaint') {
+        data = bikeDir && await readChain(await chainOf([{ dir: bikeDir }]), 'paints/' + name + '.pnt');
+        target = 'bikes/' + bike + '/paints/' + name + '.pnt';
       } else {
-        try {
-          const buf = await download(it.sha256);
-          if (sha256(buf) !== it.sha256 || !readable(buf)) throw new Error('bad file');
-          await fsp.mkdir(path.dirname(dst), { recursive: true });
-          await fsp.writeFile(dst, buf);
-          received[it.path] = { sha256: it.sha256, from: lo.name || lo.id, at: Date.now() };
-          entry.state = 'downloaded';
-        } catch (e) { entry.state = 'failed'; entry.error = e.message; }
+        data = await gear.paintSource({ modsDir, rider }, s.id, c);
+        target = data && prefix + '/' + data.relative;
       }
-      items.push(entry);
+      if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing, damaged, or account-bound');
+      const needs = [];
+      if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
+      if (modelOf[s.id] && c[modelOf[s.id]] && !defaults(modelOf[s.id], c[modelOf[s.id]])) needs.push({ kind: modelOf[s.id], name: c[modelOf[s.id]], rider });
+      if (!defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
+      items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
+    } catch (e) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: e.message }); }
+  }
+  for (const e of equipped) {
+    if (items.some((i) => i.slot === e.slot)) e.state = 'shared';
+    else if (unavailable.some((i) => i.slot === e.slot)) e.state = 'unavailable';
+  }
+  return { bike, items, unavailable, equipped };
+}
+
+async function share({ call, upload, modsDir, prof, bike, bikeName, onProgress = () => {} }) {
+  const outfit = await outfitFiles(modsDir, prof, bike);
+  const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
+  const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
+  const r = await call('POST', '/v1/loadout', payload);
+  const missing = items.filter((i) => (r.missing || []).includes(i.sha256));
+  let completed = 0;
+  for (const it of missing) {
+    onProgress({ phase: 'uploading', label: it.label, completed, total: missing.length, loaded: 0, size: it.size });
+    await upload(it.sha256, it.buf);
+    onProgress({ phase: 'uploading', label: it.label, completed: ++completed, total: missing.length, loaded: it.size, size: it.size });
+  }
+  if (missing.length) await call('POST', '/v1/loadout', payload);
+  // Keep the former array return shape for the Sharing summary.
+  return { items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
+}
+
+async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
+  const entry = { ...it, requirements: it.needs || [], needs: [], state: 'ready' };
+  delete entry.buf;
+  if (!safeRel(it.path) || !/^[a-f0-9]{64}$/.test(it.sha256) || !Number.isSafeInteger(it.size) || it.size <= 0 || it.size > MAX_FILE) return { ...entry, state: 'skipped', error: 'Invalid shared file' };
+  for (const n of it.needs || []) if (!await have(n)) entry.needs.push(n);
+  const dst = path.resolve(modsDir, ...it.path.split('/'));
+  let existing;
+  try { existing = await fsp.readFile(dst); } catch {}
+  const owned = existing && received[it.path] && sha256(existing) === received[it.path].sha256;
+  if (existing && sha256(existing) === it.sha256) return { ...entry, state: 'have', needs: [] };
+  // The same content in the legacy layout or inside a model package also counts.
+  if (it.modelKind && gear.validName(it.value)) {
+    const local = await modelBundle({ modsDir, rider: it.rider || 'default_mx', kind: it.modelKind, name: it.value }).catch(() => null);
+    if (local && sha256(local) === it.sha256) return { ...entry, state: 'have', needs: [] };
+    if (local && !owned) return { ...entry, state: 'name-taken', error: 'A different version of this model is already installed' };
+  } else if (gear.validName(it.value)) {
+    let data;
+    if (it.slot === 'bikePaint') {
+      const bike = it.path.split('/')[1], dir = await profile.findBikeDir(modsDir, bike);
+      if (dir) data = await readChain(await chainOf([{ dir }]), 'paints/' + it.value + '.pnt');
+    } else {
+      const pieces = it.path.split('/');
+      const current = { [it.slot]: it.value };
+      const kind = modelOf[it.slot];
+      const sub = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind];
+      const at = pieces.indexOf(sub);
+      if (at >= 0) current[kind] = pieces[at + 1];
+      data = await gear.paintSource({ modsDir, rider: it.rider || 'default_mx' }, it.slot, current);
     }
-    report.push({ id: lo.id, name: lo.name, bike: lo.bike, bikeName: lo.bikeName, at: lo.at, items });
+    if (data && sha256(data.buf) === it.sha256) return { ...entry, state: 'have' };
+    if (data && !owned) return { ...entry, state: 'name-taken', error: 'A different paint with this name is already installed' };
+  }
+  if (existing && (!received[it.path] || sha256(existing) !== received[it.path].sha256)) return { ...entry, state: 'name-taken', error: 'A different file with this name is already installed' };
+  return entry;
+}
+
+async function listFriends({ call, modsDir, received = {}, have, friendId }) {
+  const { loadouts = [] } = await call('GET', '/v1/loadouts');
+  const report = [];
+  for (const lo of loadouts.filter((l) => !friendId || l.id === friendId)) {
+    const items = [];
+    for (const it of lo.items || []) items.push(await inspectItem(it, { modsDir, received, have }));
+    report.push({ ...lo, items });
   }
   return report;
 }
 
-// Remove every paint paint-sync downloaded (unchanged files only).
+async function fetchFriends({ call, download, modsDir, received, have, friendId, onProgress = () => {} }) {
+  const report = await listFriends({ call, modsDir, received, have, friendId });
+  const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
+  let completed = 0;
+  for (const { lo, it } of pending) {
+    const progress = (loaded) => onProgress({ phase: 'downloading', friendId: lo.id, label: it.label, completed, total: pending.length, loaded, size: it.size });
+    progress(0);
+    try {
+      const buf = await download(it.sha256, progress);
+      if (sha256(buf) !== it.sha256 || buf.length !== it.size || (it.modelKind ? !await validateModel(buf) : !readable(buf))) throw new Error('Shared file failed validation');
+      const dst = path.resolve(modsDir, ...it.path.split('/'));
+      // Recheck immediately before writing, including symlink ancestors.
+      const root = await fsp.realpath(modsDir);
+      await fsp.mkdir(path.dirname(dst), { recursive: true });
+      const parent = await fsp.realpath(path.dirname(dst));
+      if (!parent.toLowerCase().startsWith(root.toLowerCase() + path.sep)) throw new Error('Destination is outside your mods folder');
+      const latest = await inspectItem(it, { modsDir, received, have });
+      if (latest.state !== 'ready') { Object.assign(it, latest); }
+      else {
+        if (received[it.path]) await fsp.writeFile(dst, buf);
+        else await fsp.writeFile(dst, buf, { flag: 'wx' });
+        received[it.path] = { sha256: it.sha256, from: lo.name || lo.id, at: Date.now() };
+        it.state = 'downloaded'; it.needs = [];
+      }
+    } catch (e) { it.state = 'failed'; it.error = e.message; }
+    completed++;
+    onProgress({ phase: 'downloading', friendId: lo.id, label: it.label, completed, total: pending.length, loaded: 0, size: 0 });
+  }
+  // Refresh requirements after models have been installed.
+  for (const lo of report) for (const it of lo.items) {
+    it.needs = [];
+    for (const n of it.requirements || []) if (!await have(n)) it.needs.push(n);
+  }
+  return report;
+}
+
 async function removeReceived(modsDir, received) {
   let n = 0;
   for (const [r, info] of Object.entries(received)) {
     if (!safeRel(r)) { delete received[r]; continue; }
     const f = path.join(modsDir, ...r.split('/'));
-    try { if (sha256(await fsp.readFile(f)) === info.sha256) { await fsp.rm(f); n++; } } catch {}
+    try {
+      const real = await fsp.realpath(f), root = await fsp.realpath(modsDir);
+      if (real.toLowerCase().startsWith(root.toLowerCase() + path.sep) && sha256(await fsp.readFile(f)) === info.sha256) { await fsp.rm(f); n++; }
+    } catch {}
     delete received[r];
   }
   return n;
 }
-
-module.exports = { outfitFiles, share, fetchFriends, removeReceived, safeRel };
+module.exports = { outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };

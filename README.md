@@ -76,6 +76,10 @@ Join or save a server address, use shareable join links, and configure a session
 
 Live presence, friends, and paint sharing use the included presence plugin and a **separately hosted online service**. The server list reflects participating app users; it is not the game's complete public server browser. Installers include the server address configured in `online.config.json`, so these shared features need that service running and reachable from the user's network. Local mod management, previews, profiles, and store browsing work independently.
 
+Click a friend to see their equipped gear, selected paints, bike livery, server and track. **Sync equipped gear** shows progress and installs only missing files; identical files already in your mods folder or model packages are skipped. Your own outfit stays selected. **Get track & join** searches the creator's download pages and waits for the matching track to be installed before joining. A server address must be available through shared presence, a saved server, or a recent FrostMod server list.
+
+Online hosts updating from 1.0.3 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip**. Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
+
 To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
 
 ## Build from source

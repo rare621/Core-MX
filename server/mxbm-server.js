@@ -16,10 +16,10 @@ const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return
 const PORT = Number(arg('port', 60000));
 const DATA = path.resolve(arg('data', path.join(__dirname, 'mxbm-data.json')));
 const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-files')));
-const MAX_FILE = 32 * 1024 * 1024;              // one paint file
+const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 1;
+const VERSION = 2;
 
 const SERVER_TTL = 20 * 60 * 1000;   // a server drops off the list 20 min after anyone last saw it
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
@@ -45,7 +45,7 @@ const isAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || ''))
 const hash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const serverKey = (name) => str(name, 64).toLowerCase();
 // A path inside a mods folder that a paint file may be written to: relative, no "..", ends in .pnt.
-const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/[^\0]+\.pnt$/i.test(p) && !p.split('/').some((x) => x === '..' || x === '' || x === '.') && !/[\:]/.test(p);
+const safeRel = (p) => typeof p === 'string' && /^(bikes|rider)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => x === '..' || x === '' || x === '.') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^rider\/riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?\.pkz$/i.test(p));
 function storeSize() { let n = 0; for (const f of fs.readdirSync(FILES)) { try { n += fs.statSync(path.join(FILES, f)).size; } catch {} } return n; }
 
 function send(res, code, body) {
@@ -94,7 +94,7 @@ function presenceView(id) {
   const srv = s.server ? db.servers[serverKey(s.server)] : null;
   return {
     id, name: u ? u.name : '', online: true, inGame: !!s.inGame, inEvent: !!s.inEvent,
-    server: s.server || null, address: (srv && srv.address) || s.serverAddress || null,
+    server: s.inEvent ? s.server || null : null, address: s.inEvent ? (srv && srv.address) || s.serverAddress || null : null,
     trackId: s.trackId || null, trackName: s.trackName || null, bikeName: s.bikeName || null, category: s.category || null,
     riders: srv ? srv.riders.length : null, lastSeen: p.at,
   };
@@ -184,9 +184,12 @@ const routes = {
     if (!me) return [401, { error: 'not signed in' }];
     const items = (Array.isArray(body.items) ? body.items : []).slice(0, 20).map((it) => ({
       slot: str(it && it.slot, 30), label: str(it && it.label, 100), path: str(it && it.path, 260), sha256: String(it && it.sha256 || ''),
-      size: Number(it && it.size) || 0, needs: (Array.isArray(it && it.needs) ? it.needs : []).slice(0, 4).map((n) => ({ kind: str(n && n.kind, 20), name: str(n && n.name, 100) })),
-    })).filter((it) => /^[a-f0-9]{64}$/.test(it.sha256) && safeRel(it.path));
-    me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, at: Date.now() };
+      value: str(it && it.value, 100), rider: str(it && it.rider, 100), modelKind: ['rider', 'helmet', 'boots', 'protection'].includes(it && it.modelKind) ? it.modelKind : undefined,
+      size: Number(it && it.size) || 0, needs: (Array.isArray(it && it.needs) ? it.needs : []).slice(0, 4).map((n) => ({ kind: str(n && n.kind, 20), name: str(n && n.name, 100), rider: str(n && n.rider, 100) })),
+    })).filter((it) => /^[a-f0-9]{64}$/.test(it.sha256) && safeRel(it.path) && it.size > 0 && it.size <= MAX_FILE && !!it.modelKind === /\.pkz$/i.test(it.path));
+    const equipped = (Array.isArray(body.equipped) ? body.equipped : []).slice(0, 12).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), value: str(it && it.value, 100), state: str(it && it.state, 20) }));
+    const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 12).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200) }));
+    me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };
     save();
     return [200, { ok: true, missing: items.filter((it) => !fs.existsSync(path.join(FILES, it.sha256))).map((it) => it.sha256) }];
   },
@@ -255,11 +258,16 @@ async function fileRoute(req, res, sha) {
   } catch (e) { return send(res, e.code || 400, { error: e.message }); }
   const buf = Buffer.concat(chunks);
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha) return send(res, 400, { error: 'file does not match its hash' });
-  if (buf.length < 108 || buf.toString('latin1', 0, 4) !== 'PNT\0' || buf.readUInt32LE(104) > 256) return send(res, 400, { error: 'not a readable MX Bikes paint' });
+  const owned = Object.values((auth(req).user.loadout || {}).items || []).find((it) => it.sha256 === sha);
+  if (!owned || owned.size !== buf.length) return send(res, 400, { error: 'file is not in your equipped loadout' });
+  const plainPaint = buf.length >= 108 && buf.toString('latin1', 0, 4) === 'PNT\0' && buf.readUInt32LE(104) <= 256;
+  const sealedPaint = buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL' && buf.readUInt32LE(buf.length - 6) === buf.length - 62;
+  const model = buf.length >= 22 && buf.readUInt32LE(0) === 0x04034b50;
+  if (owned.modelKind ? !model : !plainPaint && !sealedPaint) return send(res, 400, { error: 'not a supported equipped paint or model file' });
   if (storeSize() + buf.length > MAX_STORE) return send(res, 507, { error: 'the online service is out of paint storage' });
   fs.writeFileSync(file + '.tmp', buf); fs.renameSync(file + '.tmp', file);
   return send(res, 200, { ok: true });
 }
 
 server.requestTimeout = 60000;
-server.listen(PORT, () => console.log(`MX Bikes Manager online service on port ${PORT} (data: ${DATA})`));
+server.listen(PORT, () => console.log(`MX Bikes Manager online service on port ${server.address().port} (data: ${DATA})`));

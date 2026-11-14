@@ -29,9 +29,14 @@ const bike3d = require('./src/lib/bike3d');
 const imageMatch = require('./src/lib/image-match');
 const { filesMatch } = require('./src/lib/file-verify');
 const onlineSvc = require('./src/lib/online');
+const gearAssets = require('./src/lib/gear-assets');
+const riderPaints = require('./src/lib/rider-paints');
+const installSummary = require('./src/lib/install-summary');
+const { mergeMove } = require('./src/lib/merge-move');
 let online = null;
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
+function stockRiderPkz() { const inst = store.get('settings').gameInstallDir; return inst ? path.join(inst, 'rider.pkz') : null; }
 function onlineConfig() {
   try {
     const root = app.isPackaged ? process.resourcesPath : __dirname;
@@ -129,7 +134,11 @@ function findItem(id) { return lastScan.items.find((i) => i.id === id); }
 
 async function moveSafe(from, to) {
   await fsp.mkdir(path.dirname(to), { recursive: true });
-  if (fs.existsSync(to)) throw new Error(`Already exists: ${to}`);
+  if (fs.existsSync(to)) {
+    const result = await mergeMove(from, to, (file) => shell.trashItem(file));
+    if (result.conflicts.length) throw new Error(`Kept different existing files: ${result.conflicts.slice(0, 2).join(', ')}`);
+    return;
+  }
   try { await fsp.rename(from, to); }
   catch (e) {
     if (e.code !== 'EXDEV') throw e;
@@ -224,12 +233,13 @@ function jobView(j) {
   return {
     id: j.id, title: j.title, postId: j.postId, url: j.url, image: j.image, status: j.status, error: j.error,
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
-    createdAt: j.createdAt, installed: j.installed,
+    createdAt: j.createdAt, installed: j.installed, filesDeleted: !!j.filesDeleted,
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
+      requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget,
       entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size })),
       totalEntries: p.entries.length,
     },
@@ -269,7 +279,7 @@ async function afterDownload(j, file) {
     j.files = await archive.stage(file, j.stageDir, store.get('settings'));
     j.ctx = {
       modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, categories: j.categories || [], categoryNames: j.categoryNames || [], title: j.title,
-      reinstall: !!(j.postId && store.get('installs')[j.postId]),
+      reinstall: !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [],
     };
     if (!j.ctx.categories.length) {
       // Uploaded from the computer: no site category, so look inside the files.
@@ -308,7 +318,7 @@ async function doInstall(j, opts) {
       j.sourceVerified = !j.plan.counts.unresolved && await filesMatch(entries, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir());
     }
     const dirs = [...new Set(written.map((w) => path.posix.dirname(w)))];
-    j.status = 'done'; j.note = `Installed ${written.length} file(s) to mods/${dirs.length === 1 ? dirs[0] : j.plan.base || ''}`;
+    j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}${dirs.length === 1 ? ` to ${j.plan.root === 'game' ? 'game' : 'mods'}/${dirs[0]}` : ` across ${dirs.length} folders`}`;
     await recycleSourceArchive(j);
     emitJob(j);
     cleanupStage(j);
@@ -354,7 +364,8 @@ function openBrowserFor(j, url, reason) {
     webPreferences: { partition: 'persist:mxb', contextIsolation: true, sandbox: true },
   });
   win.on('page-title-updated', (e) => e.preventDefault());
-  browserJobs.set(win.webContents.id, j.id);
+  const browserContentsId = win.webContents.id;
+  browserJobs.set(browserContentsId, j.id);
   j.browserWin = win;
   win.webContents.setWindowOpenHandler(({ url: next }) => {
     // Hosts often open the real file in a popup; keep it in this window if it looks like a file/host.
@@ -362,7 +373,8 @@ function openBrowserFor(j, url, reason) {
     return { action: 'deny' };
   });
   win.on('closed', () => {
-    browserJobs.delete(win.webContents.id);
+    browserJobs.delete(browserContentsId);
+    if (j.browserWin === win) j.browserWin = null;
     if (j.status === 'browser') { j.status = 'error'; j.error = 'Browser window closed before a file was downloaded.'; emitJob(j); }
   });
   win.loadURL(url);
@@ -468,6 +480,7 @@ function setupDownloadsSession() {
     const dir = path.join(j.stageDir, 'dl');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, hosts.safeName(item.getFilename()));
+    j.file = file;
     item.setSavePath(file);
     j.status = 'downloading'; j.note = 'Downloading from browser…'; emitJob(j);
     item.on('updated', () => { j.received = item.getReceivedBytes(); j.total = item.getTotalBytes(); emitJob(j); });
@@ -581,7 +594,7 @@ function registerIpc() {
   handle('jobs:start', (d) => {
     const j = newJob({
       title: d.title, postId: d.postId, shopKey: d.shopKey, url: d.url, image: d.image, link: d.link, modified: d.modified,
-      categories: d.categories, categoryNames: d.categoryNames,
+      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies,
     });
     runDownload(j);
     return j.id;
@@ -601,6 +614,37 @@ function registerIpc() {
     return ids;
   });
   handle('jobs:list', () => [...jobs.values()].map(jobView).sort((a, b) => b.createdAt - a.createdAt));
+  handle('jobs:reveal', (id) => {
+    const j = jobs.get(id);
+    if (!j) throw new Error('Download not found');
+    const installed = (j.installed && j.installed[0]) || (j.status === 'done' && j.plan?.entries.find((e) => e.dest)?.dest);
+    const root = j.plan?.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
+    const candidates = j.status === 'done' ? [installed && path.resolve(root, installed.replace(/^game:/, ''))] : [j.file, j.sourceArchive];
+    const file = candidates.filter(Boolean).find((p) => fs.existsSync(p));
+    if (file) shell.showItemInFolder(file);
+    else if (j.stageDir && fs.existsSync(j.stageDir)) shell.openPath(j.stageDir);
+    else throw new Error('This download has no file on disk yet');
+  });
+  handle('jobs:deleteFiles', async (id) => {
+    const j = jobs.get(id);
+    if (!j) throw new Error('Download not found');
+    if (['downloading', 'queued', 'extracting', 'installing'].includes(j.status)) throw new Error('Cancel the download before deleting its files');
+    if (j.status !== 'done') { if (j.file && fs.existsSync(j.file)) await shell.trashItem(j.file); cleanupStage(j); j.status = 'error'; j.error = 'Downloaded files deleted'; emitJob(j); return; }
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting installed files');
+    const installed = j.installed?.length ? j.installed : (j.plan?.entries || []).filter((e) => e.dest).map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest);
+    const removed = new Set();
+    for (const file of installed) {
+      const abs = file.startsWith('game:') ? path.resolve(store.get('settings').gameInstallDir, file.slice(5)) : path.resolve(modsDir(), file);
+      if (!insideRoots(abs) && !insideGame(abs)) throw new Error('File is outside the mod install folders');
+      if (fs.existsSync(abs)) await shell.trashItem(abs);
+      if (file.startsWith('game:') && fs.existsSync(abs + '.mxbm-bak')) await fsp.rename(abs + '.mxbm-bak', abs);
+      removed.add(file);
+    }
+    store.update('installs', (all) => Object.fromEntries(Object.entries(all).map(([key, rec]) => [key, { ...rec, files: rec.files.filter((file) => !removed.has(file)) }]).filter(([, rec]) => rec.files.length)));
+    j.status = 'error'; j.error = null; j.note = `Removed ${removed.size} installed files to the Recycle Bin`; j.installed = []; j.filesDeleted = true;
+    emitJob(j); await scan(); send('library:changed', {});
+    return { removed: removed.size };
+  });
   handle('jobs:plan', (id, opts) => {
     const j = jobs.get(id);
     if (!j || !j.files) return null;
@@ -747,9 +791,28 @@ function registerIpc() {
   handle('online:disconnect', () => online.disconnect());
   handle('online:share', (on) => online.setShare(on));
   handle('online:servers', () => online.servers());
-  handle('online:friends', () => online.syncFriends());
+  handle('online:friends', async () => {
+    const friends = await online.syncFriends();
+    if (!friends.some((f) => f.online && f.server && !f.address)) return friends;
+    const known = [...(store.get('servers') || [])];
+    let latest = null;
+    for (const file of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
+      try {
+        if ((await fsp.stat(file)).size > 512 * 1024) continue;
+        const parsed = frostmod.parse(await fsp.readFile(file, 'utf8'));
+        if (parsed && (!latest || parsed.at > latest.at)) latest = parsed;
+      } catch {}
+    }
+    if (latest && Date.now() - latest.at < 6 * 3600 * 1000) known.push(...latest.servers);
+    return friends.map((f) => {
+      if (!f.online || !f.server || f.address) return f;
+      const matches = [...new Set(known.filter((s) => s.name.trim().toLowerCase() === f.server.trim().toLowerCase()).map((s) => s.address).filter(Boolean))];
+      return matches.length === 1 ? { ...f, address: matches[0] } : f;
+    });
+  });
   handle('online:paintSync', (on) => online.setPaintSync(on));
-  handle('online:paintSyncNow', () => online.syncPaints());
+  handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
+  handle('online:friendLoadout', (friendId) => online.friendLoadout(friendId));
   handle('online:removeReceived', () => online.removeReceived());
   handle('online:steamFriends', async () => {
     const me = steam.detect(paths.steamRoot());
@@ -779,6 +842,11 @@ function registerIpc() {
     } else if (issue.fixId === 'disable-items') {
       const r = await setEnabled(issue.itemIds || [], false);
       if (r.errors.length) throw new Error(r.errors.slice(0, 3).join('\n'));
+    } else if (issue.fixId === 'trash-items') {
+      if (await profile.isGameRunning()) throw new Error('Close MX Bikes before removing old gear files');
+      const allowed = (issue.itemIds || []).filter((id) => { const it = findItem(id); return it && it.group === 'rider' && it.parts.some((p) => /^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i.test(p)); });
+      const result = await trash(allowed);
+      if (result.errors.length) throw new Error(result.errors.slice(0, 3).join('\n'));
     } else if (issue.fixId === 'trash-item') {
       await trash([issue.itemId]);
     } else if (issue.fixId === 'move-track') {
@@ -833,7 +901,7 @@ function registerIpc() {
   handle('rider:activateProfile', (name) => profile.activateProfile(profUserDir(), name));
   handle('rider:bikes', async (name) => profile.listBikes(modsDir(), await profile.readProfile(profUserDir(), name)));
   handle('rider:loadout', async (name, bike) => {
-    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);
+    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
     lo.options.bikePaint = [...new Set(['', ...lo.options.bikePaint, ...packed])];
@@ -856,7 +924,15 @@ function registerIpc() {
     await scan(); send('library:changed', {});
     return { ok: true };
   });
-  handle('rider:save', async (name, changes) => profile.saveLoadouts(profUserDir(), name, changes));
+  handle('rider:save', async (name, changes) => { const result = await profile.saveLoadouts(profUserDir(), name, changes); online?.syncPaints().catch(() => {}); return result; });
+  handle('rider:deletePaint', async (name, bike, slot, value) => {
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting a paint');
+    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);
+    await riderPaints.remove({ modsDir: modsDir(), current: lo.current, bike, slot, value, trash: (file) => shell.trashItem(file) });
+    if (lo.current[slot] === value) await profile.saveLoadouts(profUserDir(), name, { [bike]: { [slot]: '' } });
+    await scan(); send('library:changed', {}); online?.syncPaints().catch(() => {});
+    return { ok: true };
+  });
   handle('rider:previewModel', async (model) => {
     if (typeof model !== 'string' || /[\\/]|^\.+$/.test(model)) throw new Error('Invalid rider model');
     const inst = store.get('settings').gameInstallDir;
@@ -864,7 +940,7 @@ function registerIpc() {
   });
   // 3D preview of a bike's outfit. `override` previews values without saving them.
   handle('rider:model', async (name, bike, override) => {
-    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);
+    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
     const inst = store.get('settings').gameInstallDir;
     return rider3d.build({ modsDir: modsDir(), gd: lo.gearDir, stockPkz: inst ? path.join(inst, 'rider.pkz') : null, current: { ...lo.current, ...(override || {}) } });
   });
@@ -873,7 +949,7 @@ function registerIpc() {
   handle('rider:thumbModel', async (name, bike, slot, value) => {
     const only = SLOT_PARTS[slot];
     if (!only) throw new Error('No 3D preview for this slot');
-    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);
+    const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
     const inst = store.get('settings').gameInstallDir;
     const cur = { ...lo.current, [slot]: value };
     if (slot === 'helmet') { cur.helmetPaint = ''; cur.gogglesPaint = ''; }
@@ -1039,12 +1115,14 @@ app.whenReady().then(async () => {
       return bike ? { prof, bike, bikeName: bike } : null;
     },
     // Whether a model a friend's paint needs is installed (bike / helmet / boots / protection).
-    haveMod: (n) => {
-      if (n.kind === 'bike') return !!(lastScan && lastScan.items.some((i) => i.group === 'bikes' && i.name === n.name)) || fs.existsSync(path.join(modsDir(), 'bikes', n.name + '.pkz'));
-      const gd = profile.gearDir(modsDir(), 'default_mx');
+    haveMod: async (n) => {
+      if (n.kind === 'bike') return !!(lastScan && lastScan.items.some((i) => !i.disabled && i.group === 'bikes' && i.name === n.name)) || fs.existsSync(path.join(modsDir(), 'bikes', n.name + '.pkz'));
       const sub = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[n.kind];
-      return !sub || fs.existsSync(path.join(gd, sub, n.name)) || fs.existsSync(path.join(gd, sub, n.name + '.pkz'));
+      if (n.kind === 'rider') return fs.existsSync(path.join(modsDir(), 'rider', 'riders', n.name)) || fs.existsSync(path.join(modsDir(), 'rider', 'riders', n.name + '.pkz'));
+      if (!sub) return true;
+      return gearAssets.hasModel({ modsDir: modsDir(), rider: n.rider || 'default_mx', stockPkz: stockRiderPkz() }, sub, n.name);
     },
+    onInstalled: async () => { await scan(); send('library:changed', {}); },
     onChange: (st) => send('online:status', st),
   });
   online.start();
