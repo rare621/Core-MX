@@ -8,6 +8,7 @@ const recent = require('../src/lib/recent-installs');
 const equip = require('../src/lib/equip-installed');
 const site = require('../src/lib/site');
 const pings = require('../src/lib/server-ping');
+const { detectKind } = require('../src/lib/detect');
 
 async function folder(t) { const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-workflows-')); t.after(() => fs.rm(root, { recursive: true, force: true })); return root; }
 
@@ -50,6 +51,28 @@ test('history retains ten completed jobs and every active job without altering i
   assert.equal(recent.pruneHistory(jobs).length, 5); assert.equal(jobs.size, 11); assert.ok(jobs.has('active')); assert.ok(jobs.has('14'));
 });
 
+test('sealed store rider hoodie packages route as rider models from their package name', async () => {
+  const kind = await detectKind([{ rel: 'Rider-Hoodie-ABDesigns.pkz', abs: 'missing-but-sealed.pkz' }]);
+  assert.deepEqual(kind, { kind: 'riderModel', reason: 'package-name' });
+});
+
+test('mixed gear archives route body, gloves and boot paints from their own paths', () => {
+  const files = [
+    { rel: 'Royal - Polar/Gear/Royal Black.pnt', abs: 'a', size: 1 },
+    { rel: 'Royal - Polar/Gloves/Royal Black.pnt', abs: 'b', size: 1 },
+    { rel: 'Royal - Polar/2018_alpinestars_sm_10/Royal Black.pnt', abs: 'c', size: 1 },
+  ];
+  const plan = installer.plan(files, { modsDir: 'C:/missing-mods', categories: [126], title: 'Royal Polar' });
+  assert.equal(plan.kind, 'bootPaint');
+  assert.equal(plan.kindLabel, 'Mixed rider gear paints');
+  assert.equal(plan.paintModelsBase, null);
+  assert.deepEqual(plan.entries.map((entry) => entry.dest), [
+    'rider/riders/default_mx/paints/Royal Black.pnt',
+    'rider/riders/default_mx/gloves/Royal Black.pnt',
+    'rider/boots/2018_alpinestars_sm_10/paints/Royal Black.pnt',
+  ]);
+});
+
 test('addon listings separate paints from models, tracks and bundles using the website categories', () => {
   assert.equal(site.isAddonPost({ categories: [127, 33] }), true);
   assert.equal(site.isAddonPost({ categories: [37] }), false);
@@ -85,4 +108,13 @@ test('None protection stays empty and paint-only protection folders are not offe
   const lo = await require('../src/lib/profile').loadout(root, prof, 'bike');
   assert.ok(lo.options.protection.includes('')); assert.ok(lo.options.protection.includes('full')); assert.ok(lo.options.protection.includes('neck')); assert.ok(lo.options.protection.includes('Actual')); assert.ok(!lo.options.protection.includes('PaintOnly'));
   assert.equal(lo.current.protection, ''); assert.deepEqual(lo.options.protectionPaint, []);
+});
+
+test('protection inherits the game default until None clears it', async (t) => {
+  const root = await folder(t);
+  const profile = require('../src/lib/profile');
+  const inherited = await profile.loadout(root, { sections: { info: { values: { protection: 'chest' } }, protection: { values: {} } } }, 'bike');
+  assert.equal(inherited.current.protection, 'chest');
+  const none = await profile.loadout(root, { sections: { info: { values: { protection: '' } }, protection: { values: { bike: '' } } } }, 'bike');
+  assert.equal(none.current.protection, '');
 });

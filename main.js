@@ -1099,7 +1099,8 @@ function registerIpc() {
   handle('rider:bikes', async (name) => profile.listBikes(modsDir(), await profile.readProfile(profUserDir(), name)));
   function draftProfile(prof, bike, changes) {
     const next = structuredClone(prof);
-    const protection = changes.protection ?? prof.sections.protection?.values[bike] ?? '';
+    // Match MX Bikes: an absent per-bike protection inherits [info] protection.
+    const protection = changes.protection ?? prof.sections.protection?.values[bike] ?? prof.sections.info?.values.protection ?? '';
     for (const [slot, value] of Object.entries(changes || {})) {
       const desc = profile.SLOTS.find((s) => s.id === slot);
       if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
@@ -1127,6 +1128,9 @@ function registerIpc() {
     if (changes.tyres && !next.options.tyres.includes(changes.tyres)) throw new Error('That tyre set is not available for this bike. Choose one from its tyre list.');
     if (next.current.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next.current });
     const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
+    // The game uses [info] protection as a fallback for an empty per-bike
+    // setting.  Without this, the UI says None while the stock chest remains.
+    if (Object.hasOwn(changes, 'protection') && !changes.protection) values.push(['info', 'protection', '']);
     const category = await installedBikeCategory(bike) || prof.sections.info?.values.class;
     values.push(['tyres', bike, next.current.tyres || '']);
     values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);

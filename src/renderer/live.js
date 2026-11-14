@@ -116,7 +116,7 @@ async function drawLiveServers(refresh) {
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
           · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
         <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
-          ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : '<span class="muted" style="font-size:12px" title="MX Bikes does not provide an IP address to game plugins. Save this server or load the game server list with FrostMod to make it joinable here.">Join in game</span>'}</div></div>`;
+          ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : `<button class="btn btn-sm" data-live-address="${all.indexOf(s)}" title="MX Bikes does not expose server IP addresses to plugins">${icon('settings')}Set address</button>`}</div></div>`;
     }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
   const qi = $('#allSrvQ');
   $$('[data-server-filter]', box).forEach((select) => select.addEventListener('change', () => { S.allSrv.filters[select.dataset.serverFilter] = select.value; drawLiveServers(); }));
@@ -137,12 +137,45 @@ function openLiveServer(s) {
   const m = modal({
     title: esc(s.name),
     body: ridersBody(),
-    foot: `${tl && !have ? `<button class="btn" data-live-mfind>${icon('search')}Get track</button>` : ''}<span class="grow"></span><button class="btn" data-close>Close</button>
+    foot: `${tl && !have ? `<button class="btn" data-live-mfind>${icon('search')}Get track</button>` : ''}<span class="grow"></span>${s.address ? '' : `<button class="btn" data-live-maddress>${icon('settings')}Set address</button>`}<button class="btn" data-close>Close</button>
       ${s.address ? `<button class="btn btn-primary" data-live-mjoin>${icon('play')}Join</button>` : ''}`,
   });
   m.addEventListener('click', (e) => { if (e.target.closest('[data-live-riders-toggle]')) { showAllRiders = !showAllRiders; $('.modal-body', m).innerHTML = ridersBody(); } });
   const f = $('[data-live-mfind]', m); if (f) f.addEventListener('click', () => { m.close(); findTrack(tl); });
   const j = $('[data-live-mjoin]', m); if (j) j.addEventListener('click', () => { m.close(); joinServer(s.address, { name: s.name, address: s.address, track: tl }); });
+  const address = $('[data-live-maddress]', m); if (address) address.addEventListener('click', () => { m.close(); setLiveServerAddress(s); });
+}
+
+// MX Bikes plugins deliberately receive server names but not their network
+// addresses. Let a player associate an address once; it is saved locally and
+// immediately makes that live listing (and future matching listings) joinable.
+async function setLiveServerAddress(server) {
+  const m = modal({
+    title: `Set address — ${esc(server.name)}`,
+    size: 'sm',
+    body: `<p class="muted">MX Bikes does not give plugins a server IP address. Enter the address you use in the game browser for this server.</p><label class="field"><span>Server address</span><input id="liveServerAddress" class="input mono" placeholder="123.45.67.89:54210" style="width:100%" autocomplete="off" spellcheck="false"></label>`,
+    foot: '<button class="btn" data-close>Cancel</button><button class="btn btn-primary" data-live-address-save>Save address</button>',
+  });
+  const input = $('#liveServerAddress', m);
+  const save = $('[data-live-address-save]', m);
+  save.addEventListener('click', async () => {
+    const address = input.value.trim();
+    if (!/^[a-z0-9.-]+:\d{2,5}$/i.test(address)) { toast('Address should look like 123.45.67.89:54210', 'err'); input.focus(); return; }
+    save.disabled = true;
+    try {
+      if (!S.servers) S.servers = await api.invoke('servers:list');
+      const saved = { name: server.name, address, track: trackLabel(server), addedAt: Date.now() };
+      const at = S.servers.findIndex((row) => String(row.name || '').trim().toLowerCase() === String(server.name || '').trim().toLowerCase());
+      if (at >= 0) S.servers[at] = { ...S.servers[at], ...saved };
+      else S.servers.push(saved);
+      S.servers = await api.invoke('servers:save', S.servers);
+      server.address = address;
+      for (const row of S.live.servers?.servers || []) if (row.name === server.name && !row.address) row.address = address;
+      m.close(); await drawLiveServers();
+      toast(`Saved the address for <b>${esc(server.name)}</b>`, 'ok');
+    } catch (error) { save.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+  });
+  setTimeout(() => input.focus(), 30);
 }
 
 // ---------- Friends ----------
@@ -309,6 +342,8 @@ document.addEventListener('click', async (e) => {
   if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
   const j = e.target.closest('[data-live-join]');
   if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) }); }
+  const address = e.target.closest('[data-live-address]');
+  if (address) { e.stopPropagation(); const s = S.live.servers.servers[Number(address.dataset.liveAddress)]; return setLiveServerAddress(s); }
   const f = e.target.closest('[data-live-find]');
   if (f) { e.stopPropagation(); return findTrack(trackLabel(S.live.servers.servers[Number(f.dataset.liveFind)])); }
   const o = e.target.closest('[data-live-open]');

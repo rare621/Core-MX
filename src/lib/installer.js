@@ -97,6 +97,32 @@ function modelExists(dir) {
   try { return fs.readdirSync(dir).some((name) => /\.(edf|hrc|engn|geom|trh)$/i.test(name)); } catch { return false; }
 }
 
+const COLLECTION_DIRS = new Set(['gear', 'gears', 'paint', 'paints', 'files', 'file', 'mod', 'mods', 'download', 'downloads']);
+// A few older releases bundle a coordinated kit in one archive but do not
+// include a mods/ folder.  Their folder names are still meaningful: Gear is
+// a body paint, Gloves is a loose glove paint, and a model-named folder is a
+// paint for that exact accessory.  Keep those pieces independent instead of
+// forcing the entire archive into whichever website category was clicked.
+function mixedGearDestination(segs, lsegs, fname, o, kind) {
+  const at = (name) => lsegs.lastIndexOf(name);
+  const gearAt = Math.max(at('gear'), at('gears'));
+  if (gearAt >= 0 && gearAt < segs.length - 1) return `${o.gear}/paints/${fname}`;
+  const glovesAt = at('gloves');
+  if (glovesAt >= 0 && glovesAt < segs.length - 1) return `${o.gear}/gloves/${fname}`;
+  for (const [folder, target] of [['helmets', 'rider/helmets'], ['boots', 'rider/boots'], ['protections', 'rider/protections']]) {
+    const index = at(folder);
+    if (index >= 0 && index + 1 < segs.length - 1) return `${target}/${segs[index + 1]}/paints/${fname}`;
+  }
+  // For a mixed archive opened from the Boot Paint category, a direct parent
+  // such as 2018_alpinestars_sm_10 is the boot model name.  Do not replace it
+  // with a selected, unrelated boot model.
+  if (kind === 'bootPaint' && segs.length >= 2) {
+    const model = segs[segs.length - 2];
+    if (model && !COLLECTION_DIRS.has(String(model).toLowerCase())) return `rider/boots/${model}/paints/${fname}`;
+  }
+  return null;
+}
+
 // files: [{rel, abs, size}], ctx: {categories, title, modsDir}, opts: overrides {kind, trackType, paintTarget, customDir}
 function plan(files, ctx, opts = {}) {
   const modsDir = ctx.modsDir;
@@ -111,6 +137,7 @@ function plan(files, ctx, opts = {}) {
     else if (MODEL_OF[kind] && hasPkz && !hasPnt) kind = MODEL_OF[kind];
   }
   const K = KINDS[kind] || KINDS.custom;
+  const mixedGear = hasPnt && files.some((f) => /(?:^|\/)(?:gear|gears|gloves)(?:\/|$)/i.test(f.rel));
   // Do not infer layout from existing folders: earlier versions could create them incorrectly.
   const modern = true;
   const bodyPaintFiles = ctx.paintTextures ? Object.keys(ctx.paintTextures).filter((rel) => isBodyPaint(rel, ctx.paintTextures[rel], kind)) : kind === 'riderKit' ? ctx.bodyPaintFiles || [] : ctx.knownBodyPaintFiles || [];
@@ -192,6 +219,13 @@ function plan(files, ctx, opts = {}) {
         if (lsegs[ti] === 'tracks' && !TRACK_TYPES.includes(lsegs[ti + 1])) rest = ['tracks', o.trackType, ...segs.slice(ti + 1)];
         dest = rest.join('/'); how = 'structure';
       }
+    }
+    // Mixed apparel bundles have explicit folder cues.  Apply this before
+    // generic paint placement so a whole kit is never redirected into one
+    // arbitrary boot/helmet model selected by the user.
+    if (!dest && mixedGear && /\.pnt$/i.test(fname)) {
+      const routed = mixedGearDestination(segs, lsegs, fname, o, kind);
+      if (routed) { dest = routed; how = 'mixed-gear'; }
     }
     // Paints bundled next to a new model belong to that model, not rider-kit paints.
     if (!dest && paintModelsDir && /\.pnt$/i.test(fname) && o.paintTarget && ['paints', 'goggles'].includes(lsegs[0])) {
@@ -284,10 +318,10 @@ function plan(files, ctx, opts = {}) {
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
 
   return {
-    kind, kindLabel: K.label, autoKind, base: gameRoot ? 'MX Bikes install folder' : base, root: gameRoot ? 'game' : 'mods',
+    kind, kindLabel: mixedGear ? 'Mixed rider gear paints' : K.label, autoKind, base: gameRoot ? 'MX Bikes install folder' : base, root: gameRoot ? 'game' : 'mods',
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
-    options: o, paintModels, paintModelsBase: paintModelsDir, paintGuess,
+    options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess,
     entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
     requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included) || needsPaintTarget || showRiderTarget), dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),

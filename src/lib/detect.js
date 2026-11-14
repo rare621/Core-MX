@@ -18,11 +18,23 @@ function kindFromNames(names) {
   return null;
 }
 
+// Store packages are often sealed PKZ files, so their internal rider.hrc
+// cannot be read until the game loads them.  Recognise the unambiguous model
+// names used by the official stores instead of sending a rider model through
+// the generic "Other" prompt.
+function kindFromPackageName(names) {
+  const text = names.map((name) => String(name).replace(/\\/g, '/').split('/').pop()).join(' ').toLowerCase();
+  if (/\b(?:rider[-_ ]?(?:hoodie|model|plus)|hoodie[-_ ]?(?:rider|abdesigns)|rider\+)\b/.test(text)) return 'riderModel';
+  return null;
+}
+
 // files: [{rel, abs}] -> { kind, reason } or { kind: null }
 async function detectKind(files) {
   const names = files.map((f) => f.rel);
   let kind = kindFromNames(names);
   if (kind) return { kind, reason: 'files' };
+  kind = kindFromPackageName(names);
+  if (kind) return { kind, reason: 'package-name' };
 
   const pkzs = files.filter((f) => /\.pkz$/i.test(f.rel));
   let encrypted = 0;
@@ -39,4 +51,4 @@ async function detectKind(files) {
   return { kind: null, reason: 'unknown' };
 }
 
-module.exports = { detectKind };
+module.exports = { detectKind, kindFromPackageName };

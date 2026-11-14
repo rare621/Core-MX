@@ -112,6 +112,10 @@ async function loadout(modsDir, prof, bike, stockPkz) {
   const cur = {};
   for (const s of SLOTS.filter((x) => x.key === 'bike')) cur[s.id] = val(s.section, bike);
   if (!cur.rider) cur.rider = 'default_mx';
+  // MX Bikes falls back to [info] protection when a bike has no explicit
+  // [protection] value.  Treat that fallback as the selected item too; an
+  // empty per-bike value is not automatically "None" in the game.
+  if (cur.protection == null) cur.protection = val('info', 'protection') || '';
   const protModel = cur.protection || '';
   cur.protectionPaint = val('protection_paint', protModel);
 
@@ -216,6 +220,10 @@ async function saveLoadouts(userDir, name, changes) {
       if (!s) continue;
       setValue(s.section, s.key === 'bike' ? bike : protModel, value == null ? '' : String(value));
     }
+    // An empty per-bike protection setting otherwise falls back to the
+    // profile-wide stock chest protector.  Clearing the fallback makes
+    // "None" mean no protector in MX Bikes as well as in the preview.
+    if (Object.hasOwn(slots, 'protection') && !slots.protection) setValue('info', 'protection', '');
   }
   const backup = prof.file + '.mxbm-backup';
   if (!fs.existsSync(backup)) await fsp.copyFile(prof.file, backup);
