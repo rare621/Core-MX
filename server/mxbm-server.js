@@ -26,8 +26,23 @@ const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {} };
-try { db = { users: {}, servers: {}, ...JSON.parse(fs.readFileSync(DATA, 'utf8')) }; } catch {}
+let db = { users: {}, servers: {} }, cacheCleanupSafe = false;
+try {
+  const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
+  if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
+  db = { users: {}, servers: {}, ...saved }; cacheCleanupSafe = true;
+} catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
+const cacheReaders = new Map();
+const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha) });
+async function cleanCache() {
+  if (!cacheCleanupSafe) return;
+  try {
+    const result = await sweepCache();
+    if (result?.removed) console.log(`Cache cleanup: removed ${result.removed} unused files (${(result.bytes / 1048576).toFixed(1)} MB)`);
+  } catch (error) { console.warn('Cache cleanup:', error.message); }
+}
+cleanCache();
+setInterval(cleanCache, 30000).unref();
 const presence = new Map(); // steamId -> { at, share, state }
 let saveTimer = null;
 function save() {
@@ -263,7 +278,12 @@ async function fileRoute(req, res, sha) {
     const st = fs.statSync(file);
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': st.size, 'cache-control': 'private, max-age=31536000, immutable' });
     if (req.method === 'HEAD') return res.end();
-    return fs.createReadStream(file).pipe(res);
+    cacheReaders.set(sha, (cacheReaders.get(sha) || 0) + 1);
+    const stream = fs.createReadStream(file);
+    stream.once('close', () => { const count = cacheReaders.get(sha) - 1; if (count) cacheReaders.set(sha, count); else cacheReaders.delete(sha); });
+    stream.on('error', () => res.destroy());
+    res.once('close', () => stream.destroy());
+    return stream.pipe(res);
   }
   if (req.method !== 'PUT') return send(res, 405, { error: 'method not allowed' });
   if (!auth(req)) return send(res, 401, { error: 'not signed in' });

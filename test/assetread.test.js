@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { deflateRawSync } = require('node:zlib');
 const { decodeBlob, openArchive } = require('../src/lib/assetread');
+const { withLocalPreview } = require('../src/lib/assetread');
 const pnt = require('../src/lib/pnt');
 const { zip } = require('./helpers/assets');
 
@@ -59,6 +60,21 @@ function tempFile(t, buf) {
   const file = path.join(dir, 'asset.pkz'); fs.writeFileSync(file, buf);
   return file;
 }
+
+test('owned local previews read bound packages without enabling ordinary readers or their caches', async (t) => {
+  const original = Buffer.from('local preview fixture');
+  const file = tempFile(t, sealed(zip({ 'rider.edf': original }), true, true));
+  const { chainOf, readChain } = require('../src/lib/asset-sources');
+  await withLocalPreview(async () => {
+    const sources = await chainOf([{ pkz: file, prefix: '' }]);
+    assert.deepEqual((await readChain(sources, 'rider.edf')).buf, original);
+    assert.deepEqual(decodeBlob(sealed(original, false, true)), original);
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  assert.deepEqual(await chainOf([{ pkz: file, prefix: '' }]), []);
+  await assert.rejects(openArchive(file), /Account-bound/);
+  assert.throws(() => decodeBlob(sealed(original, false, true)), /Account-bound/);
+});
 
 test('reference encoder matches the standard RC4 vector', () => {
   assert.equal(rc4(Buffer.from('Key'), 0, Buffer.from('Plaintext')).toString('hex'), 'bbf316e8d940af0ad3');

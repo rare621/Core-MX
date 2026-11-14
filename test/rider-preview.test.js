@@ -5,6 +5,16 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
 const load = source.slice(source.indexOf('async function loadRiderModel()'), source.indexOf('function listPicker('));
+
+test('changing rider models resets body paints in the draft without changing shared gear or saving', async () => {
+  const rider = { drafts: { Bike: { suitPaint: 'Previous kit' } }, lo: { savedCurrent: { rider: 'default_mx', suitPaint: 'Saved kit', glovesPaint: 'Saved gloves', helmet: 'Helmet' } } };
+  let renders = 0;
+  const context = vm.createContext({ S: { rider }, riderDraftKey: () => 'Bike', $: () => ({}), renderRider: () => renders++ });
+  vm.runInContext(source.slice(source.indexOf('const RESETS ='), source.indexOf('function gearBrand')) + source.slice(source.indexOf('async function saveSlot('), source.indexOf("document.addEventListener('click'", source.indexOf('async function saveSlot('))), context);
+  await context.saveSlot('rider', 'Hoodie');
+  assert.deepEqual(JSON.parse(JSON.stringify(rider.drafts.Bike)), { rider: 'Hoodie', suitPaint: '', glovesPaint: '' });
+  assert.equal(renders, 1);
+});
 test('editing either outfit or bike replaces the active profile badge with Preview changes', () => {
   const html = source.slice(source.indexOf('function profileControlsHtml()'), source.indexOf('function mountProfileControls()'));
   let dirty = false;

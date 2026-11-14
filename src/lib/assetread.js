@@ -3,6 +3,12 @@
 const fs = require('fs');
 const zlib = require('zlib');
 const yauzl = require('yauzl');
+const { AsyncLocalStorage } = require('node:async_hooks');
+// Local previews may inspect the user's installed copy. Sync/export readers
+// retain the default restriction, including when preview work is concurrent.
+const previewContext = new AsyncLocalStorage();
+const localPreviewEnabled = () => previewContext.getStore() === true;
+const withLocalPreview = (read) => previewContext.run(true, read);
 
 const FOOTER_SIZE = 62, MAX_DIRECTORY = 16 * 1024 * 1024;
 const DEFAULT_LIMIT = 128 * 1024 * 1024, MAX_DROP = 1024 * 1024;
@@ -14,10 +20,10 @@ function footerInfo(footer, totalLength) {
   const mask = Buffer.from(footer.subarray(56, 62));
   const salt = [0xfd, 0xc7, 0x1c, 0xaf, 0x35, 0x71];
   for (let i = 0; i < mask.length; i++) mask[i] ^= salt[i];
-  // The middle field is a GUID binding. This reader handles creator-sealed
-  // content with no account binding; it does not override ownership checks.
+  // The middle field carries a binding marker. Only the local preview path
+  // opts into reading such installed files; sync/export keeps rejecting them.
   for (let i = 0; i < 16; i++) {
-    if ((footer[24 + i] ^ mask[i % 6]) !== 0) throw new Error('Account-bound content must be opened by its owner in the game');
+    if ((footer[24 + i] ^ mask[i % 6]) !== 0 && !localPreviewEnabled()) throw Object.assign(new Error('Account-bound content must be opened by its owner in the game'), { code: 'MXBM_ACCOUNT_BOUND' });
   }
   const key = Buffer.from(footer.subarray(8, 24));
   for (let i = 0; i < key.length; i++) key[i] ^= mask[(32 + i) % 6];
@@ -166,4 +172,17 @@ async function openArchive(file) {
   }
 }
 
-module.exports = { decodeBlob, openArchive };
+async function assertShareableFile(file) {
+  let handle;
+  try {
+    handle = await fs.promises.open(file, 'r');
+    const { size } = await handle.stat();
+    if (size >= FOOTER_SIZE) {
+      const footer = await readAt(handle, size - FOOTER_SIZE, FOOTER_SIZE, size);
+      previewContext.run(false, () => footerInfo(footer, size));
+    }
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  finally { if (handle) await handle.close(); }
+}
+
+module.exports = { decodeBlob, openArchive, withLocalPreview, localPreviewEnabled, assertShareableFile };

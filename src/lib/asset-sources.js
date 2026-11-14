@@ -2,24 +2,25 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { openArchive } = require('./assetread');
+const { openArchive, localPreviewEnabled } = require('./assetread');
 
 // ---------- file sources: a folder on disk or a folder inside a .pkz ----------
 const zips = new Map(); // pkz path -> Promise<{ zip, entries: Map(lowerPath -> entry) }>
 function openZip(file) {
+  const cacheKey = `${localPreviewEnabled() ? 'preview' : 'standard'}:${file}`;
   let stamp;
-  try { const st = fs.statSync(file); stamp = `${st.mtimeMs}|${st.size}`; } catch (e) { zips.delete(file); return Promise.reject(e); }
-  if (zips.get(file)?.stamp !== stamp) zips.delete(file);
-  if (!zips.has(file)) {
+  try { const st = fs.statSync(file); stamp = `${st.mtimeMs}|${st.size}`; } catch (e) { zips.delete(cacheKey); return Promise.reject(e); }
+  if (zips.get(cacheKey)?.stamp !== stamp) zips.delete(cacheKey);
+  if (!zips.has(cacheKey)) {
     const promise = openArchive(file).then((archive) => {
       const entries = new Map(archive.entries.map((e) => [e.fileName.replace(/\\/g, '/').toLowerCase(), e]));
       return { archive, entries };
-    }).catch((e) => { zips.delete(file); throw e; });
+    }).catch((e) => { zips.delete(cacheKey); throw e; });
     promise.stamp = stamp;
-    zips.set(file, promise);
+    zips.set(cacheKey, promise);
     while (zips.size > 24) zips.delete(zips.keys().next().value);
   }
-  return zips.get(file);
+  return zips.get(cacheKey);
 }
 async function zipRead(file, entry) {
   const { archive } = await openZip(file);

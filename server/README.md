@@ -16,7 +16,9 @@ Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <f
 
 ## Update an existing server
 
-Stop the server window, then copy **mxbm-server.js** from the new release ZIP over the old script in your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json** and **mxbm-files** where they are: those contain the accounts and shared files. No account reset or port-forwarding change is needed.
+Stop the server window, then copy **mxbm-server.js** and **cache-cleanup.js** from the new release ZIP into your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json** and **mxbm-files** where they are: those contain the accounts and shared files. No account reset or port-forwarding change is needed.
+
+The server checks its cache every 30 seconds. Files no longer referenced by any shared outfit are deleted after two minutes unused. This also clears old unused files after an upgrade. A file stays while any rider still shares it, including offline riders, and active downloads are protected. Turning outfit sharing off or unregistering releases that user's references. Only hash-named server cache files are removed; accounts and installed mods on players' PCs are untouched. Deleted cache copies can be uploaded again from a rider's installed files.
 
 The health page reports `"version":5` for accurate leave/offline status, tyre packages, the rate-limit fix and equipped gear sync. Both riders also need the updated manager (1.0.8 or later).
 

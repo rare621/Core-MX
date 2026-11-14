@@ -97,7 +97,7 @@ async function dependencyStatus(dependency, records, catalog) {
   const kind = dependencyModelKind(dependency);
   if (recorded) return { installed: true, kind };
   if (!kind || !catalog) return { installed: null, kind };
-  const name = matchingModel(catalog[kind] || [], dependency);
+  const name = matchingModel(catalog[({ helmets: 'helmet', protections: 'protection' })[kind] || kind] || [], dependency);
   return { installed: name ? true : false, kind, matchedName: name || '' };
 }
 function onlineConfig() {
@@ -727,9 +727,9 @@ function registerIpc() {
     const kind = dependencyModelKind(dependency);
     const tab = ({ boots: 'boots', helmets: 'helmets', protections: 'protection' })[kind] || 'all';
     const requests = [
-      site.search({ query: label, tab, perPage: 12, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' })).catch(() => [])),
-      shops.search(ses, { shop: 'hub', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'hub' })).catch(() => [])),
-      shops.search(ses, { shop: 'mxbs', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'mxbs' })).catch(() => [])),
+      site.search({ query: label, tab, perPage: 12, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' }))).catch(() => []),
+      shops.search(ses, { shop: 'hub', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'hub' }))).catch(() => []),
+      shops.search(ses, { shop: 'mxbs', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'mxbs' }))).catch(() => []),
     ];
     const sets = await Promise.all(requests);
     return sets.flat().map((item) => ({ ...item, dependencyScore: dependencySearchScore(item, dependency) }))
@@ -784,7 +784,7 @@ function registerIpc() {
     const hoodie = post.dependencies.find((d) => /\/rider-hoodie-abdesigns\/?(?:[?#].*)?$/.test(d.url));
     if (hoodie) {
       const models = await paintCompat.riderModels(modsDir(), stockRiderPkz());
-      post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: models.some((m) => m.textures.includes('abhoodie') || m.unverified && /ab.?hoodie/i.test(m.name)) }];
+      post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: models.some((m) => m.textures.includes('abhoodie') || m.unverified && /^(?:ab[ _-]?hoodie|rider[ _-]+hoodie[ _-]+abdesigns)$/i.test(m.name)) }];
     }
     return post;
   });
@@ -1154,11 +1154,17 @@ function registerIpc() {
   function draftProfile(prof, bike, changes) {
     const next = structuredClone(prof);
     // Match MX Bikes: an absent per-bike protection inherits [info] protection.
-    const protection = changes.protection ?? prof.sections.protection?.values[bike] ?? prof.sections.info?.values.protection ?? '';
+    const protection = changes.protection ?? (prof.sections.protection?.values[bike] || prof.sections.info?.values.protection || '');
     for (const [slot, value] of Object.entries(changes || {})) {
       const desc = profile.SLOTS.find((s) => s.id === slot);
       if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
       next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
+    }
+    // A draft of None must also clear the global fallback in this in-memory
+    // profile. The real profile is changed only by Apply.
+    if (Object.hasOwn(changes, 'protection')) {
+      next.sections.info ||= { values: {} };
+      next.sections.info.values.protection = changes.protection;
     }
     return next;
   }
@@ -1184,7 +1190,7 @@ function registerIpc() {
     const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
     // The game uses [info] protection as a fallback for an empty per-bike
     // setting.  Without this, the UI says None while the stock chest remains.
-    if (Object.hasOwn(changes, 'protection') && !changes.protection) values.push(['info', 'protection', '']);
+    values.push(['info', 'protection', next.current.protection || '']);
     const category = await installedBikeCategory(bike) || prof.sections.info?.values.class;
     values.push(['tyres', bike, next.current.tyres || '']);
     values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);
@@ -1469,8 +1475,7 @@ app.whenReady().then(async () => {
     // Whether a model a friend's paint needs is installed (bike / helmet / boots / protection).
     haveMod: async (n) => {
       if (n.kind === 'bike') return !!(lastScan && lastScan.items.some((i) => !i.disabled && i.group === 'bikes' && i.name === n.name)) || fs.existsSync(path.join(modsDir(), 'bikes', n.name + '.pkz'));
-      const sub = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[n.kind];
-      if (n.kind === 'rider') return fs.existsSync(path.join(modsDir(), 'rider', 'riders', n.name)) || fs.existsSync(path.join(modsDir(), 'rider', 'riders', n.name + '.pkz'));
+      const sub = { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' }[n.kind];
       if (!sub) return true;
       return gearAssets.hasModel({ modsDir: modsDir(), rider: n.rider || 'default_mx', stockPkz: stockRiderPkz() }, sub, n.name);
     },

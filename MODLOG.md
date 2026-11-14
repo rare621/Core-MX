@@ -27,3 +27,12 @@ Read the installed KX250 graphics and physics configuration. Both declare oem_mx
 ## Separate website instructions
 
 The [I <3 MY GF/BF HOODIES listing](https://mxb-mods.com/i-3-my-gf-bf-hoodies-2/) has an empty WordPress API description, while its rendered `#instructions` field specifies the ABDesigns hoodie requirement. That omission caused the missing paint-only warning. Parse this separate field for full details and bounded rider-kit listing enrichment, caching only metadata in memory. The live listing now yields paint-only, a required-model warning, two downloads and the ABDesigns model-page link. Standard rider kits, bike liveries and gloves remain in MXB Mods. Cursor tests verify that filtering does not skip matching rows between pages.
+
+## 2026-11-14: installed ABDesigns hoodie
+
+- The installed `Rider Hoodie-ABDesigns.pkz` has a nonzero KCOL binding marker. The previous reader rejected it before attempting its directory.
+- In a read-only local preview, the existing container decoder successfully verified the directory checksum and each asset CRC without additional keys. The archive contains `gfx.cfg`, `rider.hrc`, and `rider.edf` under its named root.
+- The hoodie body uses `abhoodie`, `rider`, `gloves`, and `face_parts` textures. The user's Dropsize paint applied to `abhoodie` and `rider`, with no missing-texture warnings.
+- The hoodie flattens several independent objects into one mesh. Applying the first object's transform to every sibling lays the body sideways. The existing bounds-based transform selection reproduces the EDF's recorded bounds (within float precision); the stock rider is unchanged. Enabled this selection for rider bodies and visually checked the upright hoodie with its Dropsize paint.
+- Only preview workers opt into this read path. Archive caches are separated by read mode; ordinary sync/export readers retain their existing restriction. No decoded package files or purchased assets are distributed with the app.
+- This confirms this package format, not support for every encrypted or owner-specific package.
