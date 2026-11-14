@@ -178,9 +178,16 @@ test('two real clients exchange only mutual-friend equipped files through the on
   await ac('POST', '/v1/presence', { state: { inGame: false } });
   const friend = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(friend.online, true); assert.equal(friend.inGame, false);
-  await ac('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Fixture server', trackId: 'fixture', trackName: 'Fixture track' } });
+  await ac('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Fixture server', serverAddress: '203.0.113.7:54210', trackId: 'fixture', trackName: 'Fixture track', session: 5 } });
   const riding = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(riding.inEvent, true); assert.equal(riding.server, 'Fixture server'); assert.equal(riding.trackName, 'Fixture track');
+  assert.equal(riding.session, 5);
+  assert.equal(riding.address, '203.0.113.7:54210');
+  assert.equal((await ac('GET', '/v1/servers')).servers[0].session, 5);
+  await ac('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Fixture server', trackId: 'fixture', session: 7 } });
+  assert.equal((await bc('GET', '/v1/friends')).friends[0].session, 7);
+  assert.equal((await ac('GET', '/v1/servers')).servers[0].session, 7);
+  assert.equal((await ac('GET', '/v1/servers')).servers[0].address, null, 'expired discovery does not retain an old server address');
   assert.equal((await ac('GET', '/v1/friends')).friends.find((f) => f.id === a.id).server, 'Fixture server');
   await ac('POST', '/v1/presence', { state: { inGame: false, inEvent: false } });
   assert.equal((await ac('GET', '/v1/servers')).servers.length, 0, 'leaving a server removes the stale live row immediately');

@@ -4,9 +4,39 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const crypto = require('crypto');
 
 const REPO = 'Frostn1/frostmod';
 const LIST = 'frostmod_masterlist.txt';
+const LIST_TTL = 6 * 3600 * 1000;
+const LICENSES = ['LICENSE.txt', 'MINHOOK-LICENSE.txt', 'NOTICE.txt', 'LIBCXX-LICENSE.txt', 'LIBCXXABI-LICENSE.txt', 'LIBUNWIND-LICENSE.txt', 'MINGW-LICENSE.txt', 'ZIG-LICENSE.txt'];
+
+// Only known discovery outputs: never remove settings, mods or user-created files.
+async function cleanup(installDir, userDir, { all = false, now = Date.now() } = {}) {
+  let removed = 0;
+  for (const file of listCandidates(installDir, userDir)) {
+    for (const candidate of [file, file + '.tmp', file.replace(/\.txt$/, '.tmp')]) {
+      try {
+        const stat = await fsp.lstat(candidate);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        let expired = now - stat.mtimeMs > (candidate === file ? LIST_TTL : 300000);
+        if (candidate === file && stat.size <= 512 * 1024) {
+          const list = parse(await fsp.readFile(candidate, 'utf8'));
+          expired ||= !list || list.at > now + 60000 || now - list.at >= LIST_TTL;
+        }
+        if (all || expired) { await fsp.unlink(candidate); removed++; }
+      } catch (e) { if (e.code !== 'ENOENT' && e.code !== 'EBUSY' && e.code !== 'EPERM') throw e; }
+    }
+  }
+  const partialPlugin = pluginPath(installDir);
+  if (partialPlugin) {
+    try {
+      const file = partialPlugin + '.part', stat = await fsp.lstat(file);
+      if (stat.isFile() && !stat.isSymbolicLink() && (all || now - stat.mtimeMs > 300000)) { await fsp.unlink(file); removed++; }
+    } catch (e) { if (!['ENOENT', 'EBUSY', 'EPERM'].includes(e.code)) throw e; }
+  }
+  return removed;
+}
 
 function pluginPath(installDir) { return installDir ? path.join(installDir, 'plugins', 'frostmod.dlo') : null; }
 
@@ -47,6 +77,7 @@ function parse(text) {
 }
 
 async function status(installDir, userDir) {
+  await cleanup(installDir, userDir);
   const plugin = pluginPath(installDir);
   const installed = !!plugin && fs.existsSync(plugin);
   const flagAdded = installed ? await ensureFlag(installDir).catch(() => false) : false;
@@ -92,4 +123,37 @@ async function install(ses, installDir) {
   return { version: r.tag_name, size: buf.length, path: dest };
 }
 
-module.exports = { status, install, parse, pluginPath, flagPath, ensureFlag, listCandidates };
+async function installBundled(appDir, installDir, replace = false) {
+  if (!installDir || !fs.existsSync(installDir)) throw new Error('Set your MX Bikes install folder in Settings first.');
+  const source = path.join(appDir, 'plugin', 'frostmod');
+  const release = JSON.parse(await fsp.readFile(path.join(source, 'release.json'), 'utf8'));
+  const bytes = await fsp.readFile(path.join(source, 'frostmod.dlo'));
+  if (bytes.length !== release.size || crypto.createHash('sha256').update(bytes).digest('hex') !== release.sha256) throw new Error('The bundled address-discovery plugin failed verification. Reinstall the manager.');
+  const dest = pluginPath(installDir);
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  let installed = false, matches = false;
+  let existingHash = null;
+  try { existingHash = crypto.createHash('sha256').update(await fsp.readFile(dest)).digest('hex'); }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+  matches = existingHash === release.sha256;
+  if (matches && LICENSES.every((name) => fs.existsSync(path.join(path.dirname(dest), 'frostmod-licenses', name)))) {
+    await ensureFlag(installDir);
+    return { installed: false, version: release.version, path: dest };
+  }
+  const upgrade = (release.replaces || []).includes(existingHash);
+  if (!matches && (!existingHash || replace || upgrade)) {
+    const temporary = dest + '.part';
+    try {
+      await fsp.writeFile(temporary, bytes);
+      await fsp.rename(temporary, dest);
+      installed = true;
+    } finally { await fsp.rm(temporary, { force: true }); }
+  }
+  const licenses = path.join(path.dirname(dest), 'frostmod-licenses');
+  await fsp.mkdir(licenses, { recursive: true });
+  for (const name of LICENSES) await fsp.copyFile(path.join(source, name), path.join(licenses, name));
+  await ensureFlag(installDir);
+  return { installed, version: installed || matches ? release.version : null, path: dest };
+}
+
+module.exports = { status, install, installBundled, parse, pluginPath, flagPath, ensureFlag, listCandidates, cleanup, LICENSES };

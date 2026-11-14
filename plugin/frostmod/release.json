@@ -1,0 +1,10 @@
+{
+  "version": "v0.52.0-mxbm.1",
+  "source": "https://github.com/Frostn1/frostmod/tree/fe1614ddbc294faba93e914697ae98bd89f494db",
+  "patch": "automatic-discovery.patch",
+  "sha256": "e87516779fa06a0c2c9bf24d5dd4a7d80fec16baf61491060e2952d6f0ec50b6",
+  "size": 1868288,
+  "replaces": [
+    "8e813dd3863d0391c50a234310d06edc8daf04e72c824dd68c4e09264145ed67"
+  ]
+}

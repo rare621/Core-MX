@@ -47,6 +47,7 @@ api.on('online:status', (st) => {
 });
 
 const SESSION_NAMES = ['Waiting', 'Practice', 'Pre-qualifying', 'Qualifying practice', 'Qualifying', 'Warmup', 'Race 1', 'Race 2'];
+const sessionLabel = (s) => Number.isInteger(s?.session) && SESSION_NAMES[s.session] ? SESSION_NAMES[s.session] : '';
 const trackLabel = (s) => s.trackName || s.trackId || '';
 const trackHave = (s) => !!(trackInstalled(s.trackName || '') || trackInstalled(s.trackId || ''));
 
@@ -114,7 +115,7 @@ async function drawLiveServers(refresh) {
       return `<div class="srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-ico">${icon('globe')}</div>
         <div class="srv-txt"><div class="t">${esc(s.name)}</div>
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
-          · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
+          ${sessionLabel(s) ? ` · <b>${esc(sessionLabel(s))}</b>` : ''} · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
         <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
           ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : `<button class="btn btn-sm" data-live-address="${all.indexOf(s)}" title="MX Bikes does not expose server IP addresses to plugins">${icon('settings')}Set address</button>`}</div></div>`;
     }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
@@ -129,7 +130,7 @@ function openLiveServer(s) {
   const ridersBody = () => {
     const riders = s.riders || [], shown = showAllRiders ? riders : riders.slice(0, 5);
     return `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
-        · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
+        ${sessionLabel(s) ? ` · ${esc(sessionLabel(s))}` : ''} · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
       <div class="section-title" style="margin-top:0">Riders (${riders.length})</div>
       <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.name)}</div><div class="m">${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
       ${riders.length > 5 ? `<button class="btn" style="margin-top:12px" data-live-riders-toggle>${showAllRiders ? 'Show fewer riders' : `Show all ${riders.length} riders`}</button>` : ''}`;
@@ -204,7 +205,7 @@ async function renderFriends(c) {
     if (l.status === 'not-on-service') return ['off', "Hasn't installed MX Bikes Manager yet", 4];
     if (l.status === 'not-added-back') return ['wait', 'Waiting for them to add you back', 2];
     if (l.status === 'hidden' || !l.online) return ['off', l.lastSeen ? `Offline · last seen ${timeAgo(l.lastSeen)}` : 'Offline', 3];
-    if (l.server) return ['ride', `Riding on ${l.server}${l.trackName || l.trackId ? ` · ${l.trackName || l.trackId}` : ''}`, 0];
+    if (l.server) return ['ride', `Riding on ${l.server}${l.trackName || l.trackId ? ` · ${l.trackName || l.trackId}` : ''}${sessionLabel(l) ? ` · ${sessionLabel(l)}` : ''}`, 0];
     if (l.inEvent) return ['ride', `In a riding session${l.trackName ? ` · ${l.trackName}` : ''}`, 0];
     return ['on', l.inGame ? 'In MX Bikes' : 'Online in the manager', 1];
   };
@@ -390,7 +391,7 @@ async function openFriendDetails(friend) {
       const needs = item && item.needs || [];
       return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
-    $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Riding session — server not reported')}${track ? ` · ${esc(track)}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(outfit.bikeName || outfit.bike || '')} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p><div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
+    $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Riding session — server not reported')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(outfit.bikeName || outfit.bike || '')} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p><div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
     const button = $('[data-sync-friend]', m);
     button.disabled = loading || syncing || !outfit || !S.live.status?.service.connected;
     button.innerHTML = syncing ? '<span class="spinner"></span>Syncing…' : `${icon('download')}Sync equipped gear`;

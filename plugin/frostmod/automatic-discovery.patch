@@ -1,0 +1,150 @@
+diff --git a/src/frostmod.cpp b/src/frostmod.cpp
+index f9c0116..156bf45 100644
+--- a/src/frostmod.cpp
++++ b/src/frostmod.cpp
+@@ -17,6 +17,7 @@
+ #include <windows.h>
+ #include <cstdint>
+ #include <cstdio>
++#include <share.h>
+ #include <cstdarg>
+ #include <string>
+ #include <deque>
+@@ -1776,28 +1777,62 @@ bool g_srvVerbose = false;
+ // label; when false the hook is a read-only PREVIEW (logs [srv] but hides nothing).
+ bool g_sbHideEnabled = true;
+ 
+-// What the game's browser received from the master, handed to MXB App (see masterlist.h).
+-// One vector per populate pass; the pass that just ended is published when the next one starts,
+-// and only when it differs from the last one written, so a browser sitting still writes nothing.
+-static std::vector<frostmod::masterlist::Row> g_mlPass, g_mlLast;
+-
+-static void MasterListPublish() {
+-    if (g_mlPass.empty() || g_mlPass == g_mlLast || !g_logPath[0]) return;
+-    std::string path = g_logPath;
+-    if (size_t s = path.find_last_of("\\/"); s != std::string::npos) path.resize(s + 1);
+-    else path.clear();
+-    const std::string tmp = path + "frostmod_masterlist.tmp";
+-    path += frostmod::masterlist::kFileName;
+-    const uint64_t ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+-        std::chrono::system_clock::now().time_since_epoch()).count();
+-    const std::string text = frostmod::masterlist::Serialize(g_mlPass, ms);
+-    FILE* f = nullptr;
+-    if (fopen_s(&f, tmp.c_str(), "wb") != 0 || !f) return;
+-    const bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
+-    fclose(f);
+-    if (ok && MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+-        g_mlLast = g_mlPass;
+-        Log("[masterlist] published %zu server(s) for MXB App", g_mlLast.size());
++// MXB Manager patch: capture rows without filesystem work on the game thread.
++static std::mutex g_mlMutex;
++static std::vector<frostmod::masterlist::Row> g_mlPass, g_mlPending;
++static HANDLE g_mlStop = nullptr, g_mlThread = nullptr;
++static std::string g_mlFile;
++static ULONGLONG g_mlSeen = 0;
++
++static DWORD WINAPI MasterListWorker(LPVOID) {
++    std::vector<frostmod::masterlist::Row> last;
++    ULONGLONG written = 0;
++    const std::string tmp = g_mlFile + ".tmp";
++    DeleteFileA(tmp.c_str());
++    DeleteFileA(g_mlFile.c_str());
++    while (WaitForSingleObject(g_mlStop, 500) == WAIT_TIMEOUT) {
++        std::vector<frostmod::masterlist::Row> rows;
++        ULONGLONG seen;
++        {
++            std::lock_guard<std::mutex> lock(g_mlMutex);
++            rows = g_mlPending.empty() ? g_mlPass : g_mlPending;
++            g_mlPending.clear();
++            seen = g_mlSeen;
++        }
++        const auto now = GetTickCount64();
++        if (!seen || now - seen > 2000 || (rows == last && now - written < 60000)) continue;
++        const uint64_t ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
++            std::chrono::system_clock::now().time_since_epoch()).count();
++        const std::string text = frostmod::masterlist::Serialize(rows, ms);
++        FILE* f = nullptr;
++        if (fopen_s(&f, tmp.c_str(), "wb") != 0 || !f) continue;
++        const bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
++        const bool closed = fclose(f) == 0;
++        if (ok && closed && MoveFileExA(tmp.c_str(), g_mlFile.c_str(), MOVEFILE_REPLACE_EXISTING)) {
++            if (rows != last) Log("[masterlist] published %zu server(s) for MXB Manager", rows.size());
++            last = rows;
++            written = now;
++        } else DeleteFileA(tmp.c_str());
++    }
++    DeleteFileA(tmp.c_str());
++    DeleteFileA(g_mlFile.c_str());
++    return 0;
++}
++static void MasterListStart() {
++    if (g_unloading.load() || g_mlThread || !g_logPath[0]) return;
++    g_mlFile = g_logPath;
++    const size_t sep = g_mlFile.find_last_of("\\/");
++    g_mlFile = (sep == std::string::npos ? std::string() : g_mlFile.substr(0, sep + 1))
++        + frostmod::masterlist::kFileName;
++    g_mlStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
++    if (g_mlStop) g_mlThread = CreateThread(nullptr, 0, MasterListWorker, nullptr, 0, nullptr);
++    if (!g_mlThread && g_mlStop) { CloseHandle(g_mlStop); g_mlStop = nullptr; }
++}
++static void MasterListStop(bool canBlock) {
++    if (g_mlStop) SetEvent(g_mlStop);
++    if (canBlock && g_mlThread && WaitForSingleObject(g_mlThread, 2000) == WAIT_OBJECT_0) {
++        CloseHandle(g_mlThread); g_mlThread = nullptr;
++        CloseHandle(g_mlStop); g_mlStop = nullptr;
+     }
+ }
+ 
+@@ -1840,6 +1875,13 @@ extern "C" bool SB_SuppressRow(uint64_t index, void* gameRsp) {
+ 
+     char name[128] = "";
+     SafeCopyStr(base + mxb::SBE_NAME, name, sizeof(name));           // name @ +0x86
++    {
++        std::lock_guard<std::mutex> lock(g_mlMutex);
++        if (index == 0) { g_mlPending = g_mlPass; g_mlPass.clear(); }
++        frostmod::masterlist::AddRow(g_mlPass, reinterpret_cast<const uint8_t*>(raw), n, name);
++        g_mlSeen = GetTickCount64();
++    }
++
+ 
+     frostmod::serverfilter::ServerInfo si;
+     si.name       = name;
+@@ -6937,6 +6979,11 @@ bool InstallHook(void* target, void* detour, void** original, const char* name)
+ }
+ 
+ // ===========================================================================
++template<class Fn>
++bool InstallHook(void* target, Fn detour, void** original, const char* name) {
++    return InstallHook(target, reinterpret_cast<void*>(detour), original, name);
++}
++
+ // GHS CLOSE GUARD  -  the one crash-to-desktop we can stop from in here
+ //
+ // A player's own crash line pinned it: closing an already-closed GHS handle is a
+@@ -9053,7 +9100,7 @@ DWORD WINAPI Init(LPVOID) {
+             Log("[filter] not available on %s - the server browser offsets are MX Bikes' "
+                 "and have not been ported.", g_game->display);
+         else if (fflag[0] && GetFileAttributesA(fflag) != INVALID_FILE_ATTRIBUTES)
+-            InstallServerFilterHook();
++            { if (InstallServerFilterHook()) MasterListStart(); }
+         else
+             Log("[filter] rules loaded (inert). Run frostmod.exe --filter-servers to "
+                 "install the read-only dump hook and preview the server list ([srv]).");
+@@ -9165,6 +9212,7 @@ static void PinSelf() {
+ 
+ // ---- teardown (src/unload.h has the order and why) -------------------------------------------
+ static void TdStopThreads(bool canBlock) {
++    MasterListStop(canBlock);
+     MsgFeedStop(canBlock);   // no-op in the plugin copy, which never started one
+     MdStop(canBlock);
+     // Init can sit up to 30 s waiting for the scanner; g_unloading already stops it hooking.
+diff --git a/src/version.h b/src/version.h
+index 35d3533..3bb22bd 100644
+--- a/src/version.h
++++ b/src/version.h
+@@ -2,4 +2,4 @@
+ // launcher. Shown in the in-game overlay, the DLL load banner, and the
+ // frostmod.exe console.
+ #pragma once
+-#define FROSTMOD_VERSION "0.52.0"
++#define FROSTMOD_VERSION "0.52.0-mxbm.1"

@@ -32,7 +32,7 @@ async function renderOnline(c) {
         <button class="btn btn-sm btn-primary" data-srv-join="${i}">${icon('play')}Join</button></div></div>`;
   }).join('');
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar"><h2>Online</h2>${onlineTabs()}</div>
+    <div class="toolbar"><h2>Online</h2>${onlineTabs()}<span class="grow"></span><button class="btn" data-act="address-discovery">${icon('globe')}Automatic addresses</button></div>
     <div class="scroller"><div style="max-width:960px">
       <div id="youAreOn"></div>
       <div class="section-title" style="display:flex">Live servers<span class="grow"></span><span id="allSrvMeta" class="muted" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
@@ -49,6 +49,54 @@ async function renderOnline(c) {
 
 // ---------- All servers (FrostMod's copy of the game's server list) ----------
 S.allSrv = { q: '', status: null };
+async function renderPluginSettings(c) {
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings" id="pluginSettings"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div>`;
+  try {
+    const [online, frost] = await Promise.all([api.invoke('online:status'), api.invoke('frostmod:status')]);
+    const box = $('#pluginSettings', c); if (!box) return;
+    const row = (id, name, text, installed, version, update = false) => `<div class="set-card"><h3>${name}</h3><p>${text}</p><div class="path-row"><span class="${installed ? 'ok' : 'muted'}">${installed ? 'Installed' : 'Not installed'}${version ? ` · ${esc(version)}` : ''}</span><span class="grow"></span>${update || !installed ? `<button class="btn btn-primary" data-plugin-install="${id}">${icon('download')}${update ? 'Update' : 'Install'}</button>` : ''}${installed ? `<button class="btn" data-plugin-remove="${id}">${icon('trash')}Remove</button>` : ''}</div></div>`;
+    box.innerHTML = `<p class="muted">Close MX Bikes before installing or removing plugins. Plugins load when the game starts.</p>
+      ${row('presence', 'MX Bikes Manager presence', 'Reports your track, bike, server, riders and session stage to the manager and your friends.', online.plugin.installed, '', online.plugin.needsUpdate)}
+      ${row('discovery', 'FrostMod · automatic server addresses', 'Bundled with setup. Saves server addresses when you open Multiplayer in MX Bikes. The manager shares matching addresses so friends can join. FrostMod also includes live mod reloads and gameplay/overlay features.', frost.installed, frost.version)}
+      ${!frost.installed && frost.autoInstall ? '<p class="muted">Automatic installation is waiting for the game to close and a valid game folder.</p><button class="btn" data-plugin-remove="discovery">Cancel automatic installation</button>' : ''}
+      <p class="muted">Removing FrostMod keeps it removed on future app starts. Use Install to enable it again.</p>`;
+    box.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-plugin-install], [data-plugin-remove]'); if (!button || button.disabled) return;
+      const remove = !!button.dataset.pluginRemove, kind = button.dataset.pluginRemove || button.dataset.pluginInstall;
+      const route = kind === 'presence' ? `online:plugin${remove ? 'Remove' : 'Install'}` : `frostmod:${remove ? 'uninstall' : 'install'}`;
+      button.disabled = true;
+      try { await api.invoke(route); toast(remove ? 'Plugin removed' : 'Plugin installed — restart MX Bikes to load it', 'ok'); await renderPluginSettings(c); }
+      catch (e) { toast(esc(cleanErr(e)), 'err', 6000); button.disabled = false; }
+    }, { once: false });
+  } catch (e) { const box = $('#pluginSettings', c); if (box) box.textContent = cleanErr(e); }
+}
+async function addressDiscoveryDialog() {
+  const m = modal({ title: 'Automatic server addresses', size: 'sm', body: '<div class="loadmore"><div class="spinner"></div></div>', foot: '<button class="btn" data-discovery-close>Close</button>' });
+  $('[data-discovery-close]', m).onclick = () => m.close();
+  async function draw() {
+    const st = await api.invoke('frostmod:status');
+    if (!m.isConnected) return;
+    const fresh = st.list && Date.now() - st.list.at < 6 * 3600 * 1000 && st.list.at <= Date.now() + 60000;
+    $('.modal-body', m).innerHTML = `<p>The manager matches your server to addresses saved from the game's Multiplayer browser, then shares the matching address with your friends.</p>
+      ${st.installed ? `<div class="notice ${fresh ? 'ok' : 'info'}">${icon(fresh ? 'check' : 'info')}<div>${fresh ? `${st.list.servers.length} server addresses available.` : 'Restart MX Bikes after installing, then open Multiplayer. Addresses are captured automatically as the list loads.'}</div></div><p class="muted">Open the game browser again to discover new servers. Duplicate server names are left unresolved.</p><button class="btn" data-discovery-refresh>${icon('refresh')}Check again</button>`
+      : `<p>Address discovery uses the bundled <a href="#" data-open="https://github.com/Frostn1/frostmod">FrostMod</a>, game plugin. It also includes live mod reloads and other gameplay/overlay features. You can install or remove it in Settings → Plugins.</p><p class="muted">Close MX Bikes before installing. Restart it afterwards and open Multiplayer. No extra Refresh click is needed.</p><button class="btn btn-primary" data-discovery-install>${icon('download')}Install FrostMod</button>`}
+      <p class="muted">Join launches the game directly into the selected server when the game is closed. Required tracks, bikes and any server password still apply.</p>`;
+    const check = $('[data-discovery-refresh]', m);
+    if (check) check.onclick = async () => { check.disabled = true; try { await api.invoke('online:refresh'); await draw(); await drawLiveServers(true); } catch (e) { toast(esc(cleanErr(e)), 'err'); check.disabled = false; } };
+    const install = $('[data-discovery-install]', m);
+    if (install) install.onclick = async () => {
+      install.disabled = true; install.textContent = 'Installing…';
+      try { await api.invoke('frostmod:install'); await draw(); }
+      catch (e) { toast(esc(cleanErr(e)), 'err', 6000); install.disabled = false; install.textContent = 'Install FrostMod'; }
+    };
+  }
+  try { await draw(); } catch (e) { if (m.isConnected) $('.modal-body', m).textContent = cleanErr(e); }
+}
+api.on('frostmod:list', () => {
+  S.allSrv.status = null;
+  if (S.view === 'online' && S.onlineTab === 'servers') drawLiveServers(true);
+  if (S.view === 'friends') { S.live.friendsNext = 0; renderFriends($('#content')); }
+});
 async function drawAllServers(refresh) {
   const box = $('#allServers');
   if (!box) return;
@@ -62,7 +110,7 @@ async function drawAllServers(refresh) {
     box.innerHTML = st.installed
       ? `<div class="set-card"><div style="display:flex;gap:14px;align-items:flex-start">${icon('info')}<div><b>FrostMod is installed — ${needsRestart ? 'restart MX Bikes' : 'one more step'}</b>
           <div class="muted" style="font-size:13px;margin-top:3px;line-height:1.6">${needsRestart ? '<b>Close MX Bikes completely and start it again</b> — FrostMod only switches on the server list when the game starts.<br>' : ''}
-            Then open <b>Multiplayer</b>, let the list load, and press the browser's <b>Refresh</b> once. FrostMod saves the list each time the browser refreshes, and it appears here automatically.</div>
+            Then open <b>Multiplayer</b> and let the list load. Addresses appear here automatically.</div>
           <div style="margin-top:12px;display:flex;gap:8px"><button class="btn btn-primary" data-act="frost-launch">${icon('play')}Launch MX Bikes</button><button class="btn btn-ghost" data-act="frost-remove">Remove FrostMod</button></div></div></div></div>`
       : `<div class="set-card"><h3>See every MX Bikes server</h3>
           <p>MX Bikes' full server list only comes from the game itself. <b>FrostMod</b> — a free, open-source plugin (also used by MXB App) — saves that list when you open the game's server browser, and this app reads it.</p>
@@ -93,6 +141,7 @@ async function drawAllServers(refresh) {
 
 document.addEventListener('click', async (e) => {
   const a = e.target.closest('[data-act]');
+  if (a && a.dataset.act === 'address-discovery') { await addressDiscoveryDialog(); return; }
   if (a && a.dataset.act === 'frost-install') {
     if (!(await confirmBox('Install FrostMod', `Download <b>frostmod.dlo</b> from <a href="#" data-open="https://github.com/Frostn1/frostmod/releases/latest">github.com/Frostn1/frostmod</a> (latest release) into your MX Bikes <span class="mono">plugins</span> folder?`, 'Install'))) return;
     a.disabled = true; a.innerHTML = '<div class="spinner" style="width:14px;height:14px"></div>Installing…';
