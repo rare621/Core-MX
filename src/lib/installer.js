@@ -2,6 +2,7 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const { isBodyPaint } = require('./paint-compat');
 
 const TRACK_TYPES = ['motocross', 'supercross', 'enduro', 'supermoto'];
 const TOP = new Set(['bikes', 'tracks', 'rider', 'tyres', 'misc']);
@@ -112,12 +113,13 @@ function plan(files, ctx, opts = {}) {
   // Current MX Bikes uses this layout even on a fresh install where the folder
   // has not been created yet. An explicitly requested legacy install can opt out.
   const modern = opts.legacyLayout !== true;
-  const bodyPaintFiles = kind === 'riderKit' ? ctx.bodyPaintFiles || [] : ctx.knownBodyPaintFiles || [];
-  const bodyTextures = ctx.paintTextures && bodyPaintFiles.length ? [...new Set(bodyPaintFiles.flatMap((rel) => ctx.paintTextures[rel] || []))] : ctx.bodyPaintTextures || [];
+  const bodyPaintFiles = ctx.paintTextures ? Object.keys(ctx.paintTextures).filter((rel) => isBodyPaint(rel, ctx.paintTextures[rel], kind)) : kind === 'riderKit' ? ctx.bodyPaintFiles || [] : ctx.knownBodyPaintFiles || [];
+  const bodyTextures = ctx.paintTextures ? [...new Set(bodyPaintFiles.flatMap((rel) => ctx.paintTextures[rel] || []))] : ctx.bodyPaintTextures || [];
   const riderModels = (ctx.riderModels || []).map((m) => ({ ...m, compatible: bodyTextures.every((t) => m.textures.some((n) => n.toLowerCase() === t.toLowerCase())) }));
   const compatibleRiders = riderModels.filter((m) => m.compatible);
   const riderTarget = opts.riderTarget || compatibleRiders.find((m) => m.name === 'default_mx')?.name || (compatibleRiders.length === 1 ? compatibleRiders[0].name : null);
   const needsRiderTarget = bodyTextures.length > 0 && !riderModels.some((m) => m.name === riderTarget && (m.compatible || m.unverified && opts.riderTarget));
+  const showRiderTarget = bodyTextures.length > 0 && (needsRiderTarget || !riderModels.some((m) => m.name === 'default_mx' && m.compatible) || opts.riderTarget && opts.riderTarget !== 'default_mx');
   const o = {
     trackType: opts.trackType || guessTrackType(text),
     paintTarget: opts.paintTarget || null,
@@ -224,7 +226,7 @@ function plan(files, ctx, opts = {}) {
 
     // A body paint cannot become a helmet paint just because a mixed download
     // carries helmet categories. Its texture IDs take precedence for placement.
-    if (/\.pnt$/i.test(fname) && (bodyPaintFiles.includes(f.rel) || (ctx.paintTextures?.[f.rel] || []).includes('rider'))) {
+    if (/\.pnt$/i.test(fname) && bodyPaintFiles.includes(f.rel)) {
       dest = needsRiderTarget ? null : `${modern ? `rider/riders/${riderTarget || 'default_mx'}` : 'rider'}/paints/${fname}`;
       how = 'paint-content';
     }
@@ -232,7 +234,7 @@ function plan(files, ctx, opts = {}) {
     if (dest) {
       dest = dest.replace(/\/+/g, '/').replace(/^\//, '');
       if (modern && (kind !== 'custom' || autoKind)) dest = dest.replace(/^rider\/(helmets|boots|boots paints|paints|gloves|protections|goggles)\//i, 'rider/riders/default_mx/$1/');
-      if ((bodyPaintFiles.includes(f.rel) || (ctx.paintTextures?.[f.rel] || []).includes('rider')) && /\/paints\//i.test(dest) && /^rider\//i.test(dest)) {
+      if (bodyPaintFiles.includes(f.rel) && /\/paints\//i.test(dest) && /^rider\//i.test(dest)) {
         if (needsRiderTarget) { dest = null; how = 'missing-rider'; }
         else if (riderTarget) dest = dest.replace(/^rider\/riders\/default_mx\//i, `rider/riders/${riderTarget}/`);
       }
@@ -280,7 +282,8 @@ function plan(files, ctx, opts = {}) {
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
     options: o, paintModels, paintModelsBase: paintModelsDir, paintGuess,
-    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels, needsRiderTarget, dependencies: ctx.dependencies || [],
+    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
+    requiresModelWarning: requiredModels.some((r) => !r.included) || needsPaintTarget || showRiderTarget, dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
     trackTypes: TRACK_TYPES,
   };

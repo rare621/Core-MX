@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 2;
+const VERSION = 3;
 
 const SERVER_TTL = 20 * 60 * 1000;   // a server drops off the list 20 min after anyone last saw it
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
@@ -69,13 +69,14 @@ function auth(req) {
   return null;
 }
 
-// Simple per-address rate limit: 120 requests a minute.
+// Signed-in riders get separate allowances even behind the same router.
+// Keep an address limit for anonymous requests; never trust forwarded headers.
 const hits = new Map();
-function limited(ip) {
-  const now = Date.now(), w = hits.get(ip) || { at: now, n: 0 };
+function limited(key, allowance) {
+  const now = Date.now(), w = hits.get(key) || { at: now, n: 0 };
   if (now - w.at > 60000) { w.at = now; w.n = 0; }
-  w.n++; hits.set(ip, w);
-  return w.n > 120;
+  w.n++; hits.set(key, w);
+  return w.n > allowance ? Math.max(1, Math.ceil((w.at + 60000 - now) / 1000)) : 0;
 }
 setInterval(() => { const now = Date.now(); for (const [k, w] of hits) if (now - w.at > 120000) hits.delete(k); }, 60000).unref();
 
@@ -219,7 +220,13 @@ const routes = {
 
 const server = http.createServer(async (req, res) => {
   const ip = req.socket.remoteAddress || '';
-  if (limited(ip)) return send(res, 429, { error: 'slow down' });
+  const me = auth(req);
+  const retryAfter = limited(me ? `user:${me.id}` : `ip:${ip}`, me ? 300 : 120);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    req.resume();
+    return send(res, 429, { error: 'Online service is busy. Please wait before retrying.', retryAfter });
+  }
   const url = new URL(req.url, 'http://x');
   const fm = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})$/);
   if (fm) return fileRoute(req, res, fm[1]);
@@ -227,7 +234,7 @@ const server = http.createServer(async (req, res) => {
   if (!route) return send(res, 404, { error: 'not found' });
   try {
     const body = req.method === 'POST' ? await readBody(req) : {};
-    const [code, out] = await route(req, body, auth(req));
+    const [code, out] = await route(req, body, me);
     send(res, code, out);
   } catch (e) {
     send(res, e.code >= 400 && e.code < 500 ? e.code : 500, { error: e.code ? e.message : 'server error' });

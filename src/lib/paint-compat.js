@@ -37,13 +37,27 @@ async function riderModels(modsDir, stockPkz) {
   return result;
 }
 
-async function inspect(files, modsDir, stockPkz, bodyContext = false) {
+function isBodyPaint(relative, names, kind = 'custom') {
+  const textures = clean(names);
+  if (textures.includes('abhoodie')) return true;
+  if (/(^|\/)(helmets|boots|boots paints|gloves|goggles|protections)\//i.test(relative)) return false;
+  if (/^rider\/(?:riders\/[^/]+\/)?paints\//i.test(relative)) return true;
+  if (kind === 'riderKit') return true;
+  // Gear paints can also replace the rider's face/eyes. A shared texture name
+  // alone must not override an explicit helmet/boot/bike destination.
+  if (kind !== 'custom' && kind !== 'riderModel') return false;
+  if (/helmet|goggles?|eyeballs?|boots?|protector/i.test(relative)) return false;
+  return textures.includes('rider');
+}
+
+async function inspect(files, modsDir, stockPkz, context = 'custom') {
+  const kind = context === true ? 'riderKit' : context === false ? 'custom' : context;
   const paintTextures = {}, unreadablePaints = [];
   for (const file of files.filter((f) => /\.pnt$/i.test(f.rel) && f.size <= 128 * 1024 * 1024)) {
     try { paintTextures[file.rel] = clean(pnt.names(await fs.readFile(file.abs))); } catch { unreadablePaints.push(file.rel); }
   }
-  const knownBodyPaintFiles = Object.keys(paintTextures).filter((rel) => paintTextures[rel].includes('rider') || paintTextures[rel].includes('abhoodie'));
-  const bodyPaintFiles = Object.keys(paintTextures).filter((rel) => knownBodyPaintFiles.includes(rel) || bodyContext && !/(^|\/)(helmets|boots|boots paints|gloves|goggles|protections)\//i.test(rel));
+  const knownBodyPaintFiles = Object.keys(paintTextures).filter((rel) => isBodyPaint(rel, paintTextures[rel], 'custom'));
+  const bodyPaintFiles = Object.keys(paintTextures).filter((rel) => isBodyPaint(rel, paintTextures[rel], kind));
   const bodyPaintTextures = [...new Set(bodyPaintFiles.flatMap((rel) => paintTextures[rel]))];
   const dependencies = bodyPaintTextures.includes('abhoodie') ? [{ label: 'AB-HOODIE rider model — creator store', url: 'https://mxbikes-shop.com/downloads/rider-hoodie-abdesigns/' }] : [];
   return { paintTextures, bodyPaintTextures, bodyPaintFiles, knownBodyPaintFiles, unreadablePaints, dependencies, riderModels: bodyPaintTextures.length ? await riderModels(modsDir, stockPkz) : [] };
@@ -65,4 +79,4 @@ async function validateRiderPaint({ modsDir, stockPkz, current }) {
   const missing = missingTextures(names, selected?.textures || []);
   if (missing.length) throw new Error(`This paint needs a matching rider model (${missing.join(', ')}). Install and select that model before equipping the paint.`);
 }
-module.exports = { inspect, riderModels, missingTextures, validateRiderPaint };
+module.exports = { inspect, riderModels, missingTextures, validateRiderPaint, isBodyPaint };

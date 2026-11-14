@@ -23,6 +23,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let retryTimer = null;
   const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null };
   let progressAt = 0;
+  const pendingCalls = new Map();
+  let retryKey = '', retryAt = 0;
   const progress = (value) => { paint.progress = value; if (Date.now() - progressAt > 150 || value.loaded === 0) { progressAt = Date.now(); onChange(status()); } };
 
   const cfg = () => store.get('online') || {};
@@ -35,24 +37,49 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const statePath = () => (userDir() ? path.join(userDir(), STATE_FILE) : null);
 
   // ---------- backend calls ----------
-  async function call(method, route, body) {
+  function busyError() {
+    return new Error(`Online service is busy. Retrying in ${Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))} seconds.`);
+  }
+  async function request(route, options) {
     const base = (cfg().url || '').replace(/\/+$/, '');
     if (!base) throw new Error('No online service set up');
-    const headers = { 'content-type': 'application/json' };
+    const key = base + ':' + (cfg().token || '');
+    if (key === retryKey && Date.now() < retryAt) throw busyError();
+    const headers = { ...options.headers };
     if (cfg().token) headers.authorization = `Bearer ${cfg().token}`;
-    const res = await fetch(base + route, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(10000) })
+    const res = await fetch(base + route, { ...options, headers })
       .catch((e) => { throw new Error(`Couldn't reach the online service (${e.cause ? e.cause.code || e.cause.message : e.message})`); });
+    if (res.status === 429) {
+      const header = res.headers?.get('retry-after');
+      const seconds = header && /^\d+$/.test(header) ? Number(header) : header ? (Date.parse(header) - Date.now()) / 1000 : 60;
+      retryKey = key; retryAt = Date.now() + Math.max(1, Number.isFinite(seconds) ? seconds : 60) * 1000;
+      await res.arrayBuffer?.();
+      throw busyError();
+    }
+    return res;
+  }
+  function call(method, route, body) {
+    // Renderer polling and sync can ask for the same list at the same time.
+    const key = JSON.stringify([cfg().url, cfg().token, method, route, body]);
+    const share = method === 'GET' || route === '/v1/friends';
+    if (share && pendingCalls.has(key)) return pendingCalls.get(key);
+    const run = jsonCall(method, route, body).finally(() => { if (share) pendingCalls.delete(key); });
+    if (share) pendingCalls.set(key, run);
+    return run;
+  }
+  async function jsonCall(method, route, body) {
+    const res = await request(route, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(10000) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Online service answered ${res.status}`);
     return data;
   }
   // Paint files: raw bytes by SHA-256.
   async function upload(sha, buf) {
-    const res = await fetch(`${cfg().url}/v1/files/${sha}`, { method: 'PUT', headers: { authorization: `Bearer ${cfg().token}`, 'content-type': 'application/octet-stream' }, body: buf, signal: AbortSignal.timeout(120000) });
+    const res = await request(`/v1/files/${sha}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buf, signal: AbortSignal.timeout(120000) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Upload failed (${res.status})`); }
   }
   async function download(sha, onProgress = () => {}) {
-    const res = await fetch(`${cfg().url}/v1/files/${sha}`, { headers: { authorization: `Bearer ${cfg().token}` }, signal: AbortSignal.timeout(120000) });
+    const res = await request(`/v1/files/${sha}`, { signal: AbortSignal.timeout(120000) });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
     const chunks = []; let size = 0;
     for await (const chunk of res.body) {

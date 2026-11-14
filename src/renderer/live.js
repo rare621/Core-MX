@@ -4,6 +4,29 @@
 // Servers tab: "Live servers" (with tracks and riders). Friends tab: where friends are, join them.
 S.live = { status: null, servers: null, serversErr: null, friends: null, friendsErr: null };
 
+// Render/status events are frequent during file sync. Fetch lists on a clock,
+// sharing any in-flight request and leaving time to recover after a failure.
+async function refreshLiveList(kind, force = false) {
+  const requestKey = `${kind}Request`, nextKey = `${kind}Next`, errorKey = `${kind}Err`;
+  if (S.live[requestKey]) return S.live[requestKey];
+  if (Date.now() < (S.live[nextKey] || 0) && (!force || S.live[errorKey])) return false;
+  if (force && Date.now() - (S.live[`${kind}Last`] || 0) < 1000) return false;
+  S.live[`${kind}Last`] = Date.now();
+  S.live[requestKey] = (async () => {
+    try {
+      S.live[kind] = await api.invoke(`online:${kind}`);
+      S.live[errorKey] = null;
+      S.live[nextKey] = Date.now() + 15000;
+    } catch (e) {
+      S.live[errorKey] = cleanErr(e);
+      S.live[nextKey] = Date.now() + 30000;
+    }
+    return true;
+  })();
+  try { return await S.live[requestKey]; }
+  finally { S.live[requestKey] = null; }
+}
+
 async function liveStatus(refresh) {
   if (!S.live.status || refresh) S.live.status = await api.invoke(refresh ? 'online:refresh' : 'online:status').catch(() => null);
   return S.live.status;
@@ -12,7 +35,7 @@ api.on('online:status', (st) => {
   S.live.status = st;
   if (S.friendDialog) S.friendDialog.progress();
   if (S.view !== 'online') return;
-  if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(true); }
+  if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(); }
   if (S.onlineTab === 'friends') renderFriends($('#content'));
 });
 
@@ -58,15 +81,13 @@ async function drawLiveServers(refresh) {
   const meta = $('#allSrvMeta');
   const setup = setupCardHtml(st, 'servers');
   if (!st || !st.service.connected) { box.innerHTML = setup; if (meta) meta.textContent = ''; return; }
-  if (!S.live.servers || refresh) {
-    try { S.live.servers = await api.invoke('online:servers'); S.live.serversErr = null; } catch (e) { S.live.serversErr = cleanErr(e); }
-  }
+  await refreshLiveList('servers', refresh);
   if (!$('#allServers')) return;
   if (S.live.serversErr) { box.innerHTML = setup + `<div class="notice danger">${icon('alert')}<div>${esc(S.live.serversErr)}</div></div>`; return; }
-  const all = S.live.servers.servers;
+  const all = S.live.servers?.servers || [];
   const q = (S.allSrv.q || '').toLowerCase();
   const xs = q ? all.filter((s) => `${s.name} ${trackLabel(s)} ${s.categories.join(' ')}`.toLowerCase().includes(q)) : all;
-  if (meta) meta.innerHTML = `${all.length} live · updated ${esc(timeAgo(S.live.servers.at))}`;
+  if (meta) meta.innerHTML = `${all.length} live · updated ${esc(timeAgo(S.live.servers?.at))}`;
   box.innerHTML = `${setup}<div class="filters" style="padding:0 0 12px"><div class="search wide">${icon('search')}<input id="allSrvQ" placeholder="Search by server, track or class…" value="${esc(S.allSrv.q || '')}" spellcheck="false"></div>
       <span class="count">${xs.length === all.length ? '' : `${xs.length} match${xs.length === 1 ? '' : 'es'}`}</span>
       <button class="btn btn-icon" data-act="live-refresh" title="Reload">${icon('refresh')}</button></div>
@@ -107,9 +128,9 @@ async function renderFriends(c) {
   if (!S.accounts.steam) await refreshAccounts();
   const st = await liveStatus();
   const connected = !!(st && st.service.connected);
-  if (connected && !S.live.friends && !S.live.friendsLoading) {
+  if (connected && Date.now() >= (S.live.friendsNext || 0) && !S.live.friendsRequest) {
     S.live.friendsLoading = true;
-    api.invoke('online:friends').then((f) => { S.live.friends = f; S.live.friendsErr = null; }).catch((e) => { S.live.friendsErr = cleanErr(e); })
+    refreshLiveList('friends')
       .finally(() => { S.live.friendsLoading = false; if (S.view === 'online' && S.onlineTab === 'friends') renderFriends($('#content')); });
   }
   const live = new Map((S.live.friends || []).map((f) => [f.id, f]));
@@ -221,7 +242,7 @@ document.addEventListener('click', async (e) => {
   if (act === 'paint-get') { findMod(a.dataset.name); return; }
   if (act === 'live-disconnect') { if (await confirmBox('Go offline', 'Stop using online features? Friends stop seeing you and paint sync pauses. You can go online again any time.', 'Go offline', true)) busy(async () => { S.live.status = await api.invoke('online:disconnect'); rerender(); })(); return; }
   if (act === 'live-refresh') { await liveStatus(true); drawYouAreOn(); return drawLiveServers(true); }
-  if (act === 'live-friends-refresh') { S.live.friends = null; return renderFriends($('#content')); }
+  if (act === 'live-friends-refresh') { await refreshLiveList('friends', true); return renderFriends($('#content')); }
   if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
   const j = e.target.closest('[data-live-join]');
   if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) }); }
@@ -355,10 +376,15 @@ document.addEventListener('click', (e) => {
 });
 
 setInterval(async () => {
-  if (S.view !== 'online' || S.onlineTab !== 'friends' || !S.live.status?.service.connected || S.live.polling) return;
+  const tab = S.onlineTab;
+  if (S.view !== 'online' || !['friends', 'servers'].includes(tab) || !S.live.status?.service.connected || S.live.polling) return;
   S.live.polling = true;
-  try { S.live.friends = await api.invoke('online:friends'); S.live.friendsErr = null; await renderFriends($('#content')); S.friendDialog?.redraw(); }
-  catch (e) { S.live.friendsErr = cleanErr(e); }
+  try {
+    await refreshLiveList(tab);
+    if (S.view !== 'online' || S.onlineTab !== tab) return;
+    if (tab === 'friends') { await renderFriends($('#content')); S.friendDialog?.redraw(); }
+    else await drawLiveServers();
+  }
   finally { S.live.polling = false; }
 }, 15000);
 

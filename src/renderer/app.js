@@ -926,18 +926,49 @@ async function openPost(summary) {
     const d = e.target.closest('[data-dl]');
     if (d) {
       const dl = p.downloads[Number(d.dataset.dl)];
-      startDownload(p, dl);
-      d.disabled = true; d.innerHTML = `${icon('check')}Queued`;
+      d.disabled = true;
+      try {
+        if (await startDownload(p, dl)) d.innerHTML = `${icon('check')}Queued`;
+        else d.disabled = false;
+      } catch (e) { d.disabled = false; toast(esc(cleanErr(e)), 'err', 6000); }
     }
   });
 }
 
+function needsModelWarning(p) {
+  return p.gearKind === 'paint' || !!p.needsModelNotice || !!p.modelDependencies?.length || !!p.missingModelTextures?.length;
+}
+
+function warnBeforePaintInstall(p, staged = false) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const dependencies = p.modelDependencies || [];
+    const page = dependencies.find((d) => d.installed !== true && d.url)?.url || dependencies.find((d) => d.url)?.url || p.link;
+    const missing = dependencies.some((d) => d.installed === false) || !!p.missingModelTextures?.length;
+    const m = modal({
+      title: missing ? 'Required model is missing' : 'Check the required model first', size: 'sm',
+      body: `<div class="notice warn">${icon('alert')}<div><b>This download does not supply the required model.</b><p>Paint files change how an existing model looks. They will not work properly until you have the matching model installed.</p></div></div>${dependencies.length ? `<div class="friend-gear-list">${dependencies.map((d) => `<div class="friend-gear-row"><div><b>${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing' : 'Not yet verified'}</div></div></div>`).join('')}</div>` : '<p class="muted">The matching model has not been confirmed. Check the creator’s instructions before continuing.</p>'}<p class="muted">${staged ? 'Check the chosen model and destinations in the install review before continuing.' : 'Continue downloads the files for review. It will not install them automatically.'}</p>`,
+      foot: `<button class="btn" data-close>Cancel</button>${page ? `<button class="btn" data-required-page>${icon('external')}${dependencies.some((d) => d.url) ? 'Open model page' : 'Read instructions'}</button>` : ''}<button class="btn btn-primary" data-continue-paint>${staged ? 'Install reviewed files' : 'Continue to review'}</button>`,
+      onClose: () => { if (!settled) resolve(false); },
+    });
+    const finish = (choice) => { settled = true; m.close(); resolve(choice); };
+    $('[data-continue-paint]', m).addEventListener('click', () => finish(true));
+    $('[data-required-page]', m)?.addEventListener('click', async () => {
+      try { await api.invoke('open:external', page); finish(false); }
+      catch (e) { toast(esc(cleanErr(e)), 'err', 5000); }
+    });
+  });
+}
+
 async function startDownload(p, dl) {
+  const requireReview = needsModelWarning(p);
+  if (requireReview && !await warnBeforePaintInstall(p)) return false;
   await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
-    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies,
+    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview, modelWarningAccepted: requireReview,
   });
   toast(`Downloading <b>${esc(p.title)}</b>…`, 'info', 2500);
+  return true;
 }
 
 // ---------- downloads ----------
@@ -1060,7 +1091,12 @@ function openReview(id) {
     const ctl = [];
     ctl.push(`<div class="field"><label>Mod type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`);
     if (p.kind === 'track') ctl.push(`<div class="field"><label>Track type</label><select data-opt="trackType">${p.trackTypes.map((t) => `<option ${t === p.options.trackType ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`);
-    if (p.riderModels?.length) ctl.push(`<div class="field"><label>Rider model for these paints</label><select data-opt="riderTarget"><option value="">— choose a compatible rider model —</option>${p.riderModels.map((r) => `<option value="${esc(r.name)}" ${r.name === p.options.riderTarget ? 'selected' : ''} ${!r.compatible && !r.unverified ? 'disabled' : ''}>${esc(r.name)}${r.unverified ? ' · compatibility unverified' : !r.compatible ? ' · incompatible paint textures' : ''}</option>`).join('')}</select></div>`);
+    if (p.riderModels?.length) {
+      const choices = p.riderModels.filter((r) => r.compatible || r.unverified);
+      ctl.push(choices.length
+        ? `<div class="field"><label>Rider body required by these paints</label><select data-opt="riderTarget"><option value="">— choose the matching installed body —</option>${choices.map((r) => `<option value="${esc(r.name)}" ${r.name === p.options.riderTarget ? 'selected' : ''}>${esc(r.name)}${r.unverified ? ' · compatibility unverified' : ''}</option>`).join('')}</select></div>`
+        : '<div class="notice warn">No matching rider body is installed. Install the model linked by the creator, then reopen this review. The default rider cannot use these paint textures.</div>');
+    }
     if (p.paintModelsBase && (p.needsPaintTarget || p.paintGuess === 'title')) {
       const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
       const candidates = p.paintModels.filter((n) => !bikeTarget || targetMatches(n));
@@ -1111,11 +1147,21 @@ function openReview(id) {
     const k = e.target.dataset.opt;
     if (!k) return;
     opts[k] = e.target.value;
-    if (k === 'kind') { delete opts.paintTarget; }
+    if (k === 'kind') { delete opts.paintTarget; delete opts.riderTarget; }
     const nj = await api.invoke('jobs:plan', id, opts);
     if (nj) { S.jobs.set(id, nj); opts = { ...nj.plan.options, kind: nj.plan.kind }; draw(nj); }
   });
-  $('#rvInstall', m).addEventListener('click', () => { api.invoke('jobs:install', id, opts); m.close(); });
+  $('#rvInstall', m).addEventListener('click', async (e) => {
+    const current = S.jobs.get(id) || j;
+    const p = current.plan;
+    e.target.disabled = true;
+    if (p.requiresModelWarning && !current.modelWarningAccepted) {
+      const dependencies = (p.requiredModels || []).filter((r) => !r.included).map((r) => ({ label: r.name, installed: r.installed, url: p.dependencies?.[0]?.url }));
+      if (!await warnBeforePaintInstall({ title: current.title, link: current.link || current.url, modelDependencies: dependencies }, true)) { e.target.disabled = false; return; }
+    }
+    try { await api.invoke('jobs:install', id, opts); m.close(); }
+    catch (error) { e.target.disabled = false; toast(esc(cleanErr(error)), 'err', 5000); }
+  });
 }
 
 // ---------- rider (loadout per bike, stored in the game profile) ----------
@@ -1923,7 +1969,7 @@ document.addEventListener('click', async (e) => {
       const p = await api.invoke('site:post', Number(u.dataset.update));
       const dl = p.downloads.find((d) => /default|recommended/i.test(d.flag)) || p.downloads[0];
       if (!dl) throw new Error('No download link on the mod page');
-      await startDownload(p, dl);
+      if (!await startDownload(p, dl)) { u.disabled = false; return; }
       S.updates = (S.updates || []).filter((x) => x.id !== p.id);
     } catch (err) { toast(esc(err.message), 'err'); u.disabled = false; }
     return;

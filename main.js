@@ -232,15 +232,15 @@ async function handleImage(request) {
 function jobView(j) {
   const p = j.plan;
   return {
-    id: j.id, title: j.title, postId: j.postId, url: j.url, image: j.image, status: j.status, error: j.error,
+    id: j.id, title: j.title, postId: j.postId, url: j.url, link: j.link, image: j.image, status: j.status, error: j.error,
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
-    createdAt: j.createdAt, installed: j.installed, filesDeleted: !!j.filesDeleted,
+    createdAt: j.createdAt, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
-      requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget,
+      requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget, requiresModelWarning: p.requiresModelWarning,
       entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size })),
       totalEntries: p.entries.length,
     },
@@ -289,10 +289,11 @@ async function afterDownload(j, file) {
       j.ctx.kindHint = d.kind;
       j.ctx.detectReason = d.reason;
     }
-    const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), (j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories)) === 'riderKit');
+    const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories));
     Object.assign(j.ctx, inspected, { dependencies: [...(j.dependencies || []), ...inspected.dependencies] });
     if (!j.ctx.categories.length && !j.ctx.kindHint && inspected.knownBodyPaintFiles.length && inspected.knownBodyPaintFiles.length === j.files.filter((f) => /\.pnt$/i.test(f.rel)).length) { j.ctx.kindHint = 'riderKit'; j.ctx.detectReason = 'paint-textures'; }
     j.plan = installer.plan(j.files, j.ctx, j.opts || {});
+    if (j.plan.requiresModelWarning) j.requireReview = true;
     // Already have exactly these files? Don't install a second copy.
     const placed = j.plan.entries.filter((e) => e.dest);
     const targetRoot = j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
@@ -303,7 +304,7 @@ async function afterDownload(j, file) {
       emitJob(j); cleanupStage(j); send('library:changed', {});
       return;
     }
-    if (store.get('settings').autoInstall && j.plan.confident) return doInstall(j, j.opts || {});
+    if (store.get('settings').autoInstall && j.plan.confident && !j.requireReview) return doInstall(j, j.opts || {});
     j.status = 'review'; emitJob(j);
     send('jobs:review', j.id);
   } catch (e) { fail(j, e); }
@@ -600,7 +601,7 @@ function registerIpc() {
         if (!insideRoots(abs)) continue;
         try { files.push({ rel, abs, size: (await fsp.stat(abs)).size }); } catch {}
       }
-      const info = await paintCompat.inspect(files, modsDir(), stockRiderPkz(), rec.kind === 'riderKit');
+      const info = await paintCompat.inspect(files, modsDir(), stockRiderPkz(), rec.kind || 'custom');
       if (info.bodyPaintTextures.length && !info.riderModels.some((m) => info.bodyPaintTextures.every((t) => m.textures.includes(t)))) {
         post.missingModelTextures = info.bodyPaintTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t));
         post.dependencies = [...post.dependencies, ...info.dependencies];
@@ -626,7 +627,7 @@ function registerIpc() {
   handle('jobs:start', (d) => {
     const j = newJob({
       title: d.title, postId: d.postId, shopKey: d.shopKey, url: d.url, image: d.image, link: d.link, modified: d.modified,
-      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies,
+      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, requireReview: !!d.requireReview, modelWarningAccepted: !!d.modelWarningAccepted,
     });
     runDownload(j);
     return j.id;
@@ -680,7 +681,8 @@ function registerIpc() {
   handle('jobs:plan', async (id, opts) => {
     const j = jobs.get(id);
     if (!j || !j.files) return null;
-    if (j.ctx.bodyPaintTextures?.length) j.ctx.riderModels = await paintCompat.riderModels(modsDir(), stockRiderPkz());
+    const kind = opts?.kind || j.opts?.kind || j.plan?.kind || installer.kindFromCategories(j.ctx.categories);
+    if (Object.entries(j.ctx.paintTextures || {}).some(([rel, names]) => paintCompat.isBodyPaint(rel, names, kind))) j.ctx.riderModels = await paintCompat.riderModels(modsDir(), stockRiderPkz());
     j.opts = opts;
     j.plan = installer.plan(j.files, j.ctx, opts);
     emitJob(j);
