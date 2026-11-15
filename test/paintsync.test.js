@@ -175,6 +175,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
   await bc('POST', '/v1/friends', { ids: [a.id] });
   const report = await sync.fetchFriends({ call: bc, download: async (hash) => Buffer.from(await (await fetch(url + '/v1/files/' + hash, { headers: { authorization: `Bearer ${b.token}` } })).arrayBuffer()), modsDir: f.receiver, received: {}, have: () => true });
   assert.equal(report[0].items.filter((it) => it.state === 'downloaded').length, 4);
+  assert.ok(report[0].equipped.some((entry) => entry.slot === 'bootsPaint'), 'the server must retain the final outfit slots for the full 3D preview');
   await ac('POST', '/v1/presence', { state: { inGame: false } });
   const friend = (await bc('GET', '/v1/friends')).friends[0];
   assert.equal(friend.online, true); assert.equal(friend.inGame, false);
