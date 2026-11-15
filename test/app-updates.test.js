@@ -25,3 +25,12 @@ test('development does not hit GitHub and failed startup checks can be retried',
   const manager = create({ updater: Object.assign(new EventEmitter(), { checkForUpdates: updater.checkForUpdates }), packaged: true, version: '1.0.7' });
   await manager.start(); assert.equal(manager.status().phase, 'error'); await manager.check(); assert.equal(count, 2);
 });
+
+test('Drive configuration errors reach Settings without exposing raw response bodies', async () => {
+  const updater = new EventEmitter();
+  updater.checkForUpdates = async () => { throw Object.assign(new Error('Duplicate latest.yml in the update folder. Keep one current copy.'), { code: 'DRIVE_UPDATE' }); };
+  const manager = create({ updater, packaged: true, version: '1.0.11' });
+  assert.match((await manager.check()).error, /Duplicate latest.yml/);
+  updater.checkForUpdates = async () => { throw new Error('private raw response'); };
+  assert.doesNotMatch((await manager.check()).error, /private raw response/);
+});

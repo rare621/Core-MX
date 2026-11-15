@@ -319,7 +319,28 @@ async function trash(ids) {
       try { await shell.trashItem(abs); } catch (e) { errors.push(`${it.title}: ${e.message}`); }
     }
   }
+  await reconcileInstallRecords();
+  send('library:changed', {});
   return { errors };
+}
+
+async function reconcileInstallRecords() {
+  const records = require('./src/lib/install-records');
+  const before = store.get('installs');
+  const missing = await records.missingFiles(before, { modsDir: modsDir(), disabledDir: disabledDir() });
+  if (!missing.size) return;
+  store.update('installs', (current) => {
+    const eligible = Object.fromEntries(Object.entries(current).filter(([id, record]) => record === before[id]));
+    const kept = records.prune(eligible, missing);
+    return Object.fromEntries(Object.entries(current).flatMap(([id, record]) => record !== before[id] ? [[id, record]] : kept[id] ? [[id, kept[id]]] : []));
+  });
+  for (const job of jobs.values()) if (job.status === 'done' && job.installed?.length) {
+    const remaining = job.installed.filter((file) => !missing.has(records.key(file)));
+    if (remaining.length === job.installed.length) continue;
+    job.installed = remaining;
+    if (!remaining.length) { job.filesDeleted = true; job.status = 'error'; job.error = null; job.note = 'Installed files removed'; }
+    emitJob(job);
+  }
 }
 
 async function deleteRiderModel(model, disabled = false) {
@@ -736,7 +757,11 @@ function registerIpc() {
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
   });
-  handle('library:trashFile', async (p) => { if (insideRoots(p)) await shell.trashItem(p); });
+  handle('library:trashFile', async (p) => {
+    if (!insideRoots(p)) throw new Error('Not in the mods folder');
+    await shell.trashItem(p);
+    await reconcileInstallRecords(); await scan(); send('library:changed', {});
+  });
   handle('library:showFile', (p) => { if (insideRoots(p)) shell.showItemInFolder(p); });
   handle('library:installLocal', async (id) => {
     const it = findItem(id);
@@ -1261,8 +1286,8 @@ function registerIpc() {
       bikeDir: await profile.findBikeDir(modsDir(), bike), paint, texMax: Math.min(1024, Math.max(128, Number(texMax) || 1024)) });
   });
   handle('rider:deleteModel', async (model) => {
-    await deleteRiderModel(model);
-    await scan(); send('library:changed', {});
+    try { await deleteRiderModel(model); }
+    finally { await reconcileInstallRecords(); await scan(); send('library:changed', {}); }
     return { ok: true };
   });
   handle('rider:save', async (name, changes) => {
@@ -1277,6 +1302,7 @@ function registerIpc() {
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting a paint');
     const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike);
     await riderPaints.remove({ modsDir: modsDir(), current: lo.current, bike, slot, value, trash: (file) => shell.trashItem(file) });
+    await reconcileInstallRecords();
     if (lo.current[slot] === value) await profile.saveLoadouts(profUserDir(), name, { [bike]: { [slot]: '' } });
     await scan(); send('library:changed', {}); online?.syncPaints().catch(() => {});
     return { ok: true };
@@ -1490,6 +1516,7 @@ app.whenReady().then(async () => {
   setTimeout(() => updates.start(), 2500).unref();
   // Repair this manager's previous accessory routing before online sync can use it.
   if (!await profile.isGameRunning()) await repairGearFolders().catch((e) => console.warn('Gear folder repair:', e.message));
+  await reconcileInstallRecords();
   setupDownloadsSession();
   protocol.handle('mxb', handleImage);
   registerIpc();
