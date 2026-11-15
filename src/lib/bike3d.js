@@ -23,6 +23,7 @@ const mount = (position, degrees = 0) => {
 async function relativeNames(chain) {
   const names = new Set();
   for (const source of chain) {
+    if (source.kind === 'overlay') { for (const name of Object.keys(source.files)) names.add(name); continue; }
     if (source.kind === 'dir') {
       for (const e of await fs.promises.readdir(source.dir, { withFileTypes: true })) {
         if (e.isFile()) names.add(e.name);
@@ -37,11 +38,16 @@ async function relativeNames(chain) {
   return [...names];
 }
 
-async function bikeSources({ modsDir, installDir, bikeDir, bike }) {
-  return chainOf([
+async function bikeSources({ modsDir, installDir, bikeDir, bike, swapFiles, excludeLoose }) {
+  const sources = await chainOf([
     bikeDir ? { dir: bikeDir } : { dir: path.join(modsDir, 'bikes', bike) },
     installDir ? { pkz: path.join(installDir, 'bikes.pkz'), prefix: `bikes/${bike}` } : null,
   ]);
+  for (const source of sources) if (source.kind === 'dir') source.exclude = excludeLoose || [];
+  // Each saved file is exposed as a small source with its original relative
+  // name. No live files need to move while the user is previewing a swap.
+  if (swapFiles) sources.unshift({ kind: 'overlay', files: swapFiles });
+  return sources;
 }
 
 async function paints(options) {

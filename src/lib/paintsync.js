@@ -92,8 +92,9 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
   return { bike, items, unavailable, equipped };
 }
 
-async function share({ call, upload, modsDir, prof, bike, bikeName, protectedPaths = [], onProgress = () => {} }) {
+async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], onProgress = () => {} }) {
   const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths);
+  if (appearance) outfit.unavailable.push(appearance);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
   const r = await call('POST', '/v1/loadout', payload);

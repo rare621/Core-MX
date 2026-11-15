@@ -250,6 +250,7 @@ function create(el) {
 
   function load(model) {
     clear();
+    floor.scale.set(1, 1, 1); floor.position.x = floor.position.z = 0;
     const nextFacing = model.previewYaw || 0;
     view.yaw += nextFacing - facingYaw;
     facingYaw = nextFacing;
@@ -259,7 +260,34 @@ function create(el) {
     resize(); place(); renderer.render(scene, camera); // draw now, don't wait for the next frame
   }
 
-  function dispose() { alive = false; cancelAnimationFrame(raf); ro.disconnect(); clear(); renderer.dispose(); dom.remove(); }
+  function loadScene({ rider, bike }) {
+    clear();
+    const actors = [];
+    for (const [kind, model] of [['rider', rider], ['bike', bike]]) {
+      if (!model) continue;
+      const actor = new THREE.Group();
+      addModel(model, actor, owned);
+      // Normalize each model's facing direction, then turn the bike slightly
+      // to expose its side panels alongside the standing rider.
+      actor.rotation.y = (model.previewYaw || 0) + (kind === 'bike' ? 0.65 : 0);
+      actor.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(actor);
+      if (!bounds.isEmpty()) actors.push({ actor, bounds, size: bounds.getSize(new THREE.Vector3()), center: bounds.getCenter(new THREE.Vector3()) });
+    }
+    const gap = 0.3, width = actors.reduce((sum, item) => sum + item.size.x, 0) + Math.max(0, actors.length - 1) * gap;
+    let x = -width / 2;
+    for (const { actor, bounds, size, center } of actors) {
+      actor.position.set(x + size.x / 2 - center.x, -bounds.min.y, -center.z);
+      root.add(actor); x += size.x + gap;
+    }
+    facingYaw = 0; home.yaw = 0.55; home.pitch = 0.12; view.yaw = home.yaw; view.pitch = home.pitch; auto = true;
+    fit();
+    const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+    floor.scale.set(Math.max(1, size.x * 1.2), Math.max(1, size.z * 1.2), 1);
+    resize(); place(); renderer.render(scene, camera);
+  }
+
+  function dispose() { alive = false; cancelAnimationFrame(raf); ro.disconnect(); clear(); floor.geometry.dispose(); floor.material.map.dispose(); floor.material.dispose(); renderer.dispose(); renderer.forceContextLoss(); dom.remove(); }
 
   function info() {
     root.updateMatrixWorld(true);
@@ -267,7 +295,7 @@ function create(el) {
     return { canvas: [dom.width, dom.height], parts: root.children.length, box: [box.min.toArray(), box.max.toArray()], cam: camera.position.toArray() };
   }
 
-  return { load, resetView, dispose, info, view, el };
+  return { load, loadScene, resetView, dispose, info, view, el };
 }
 
 if (typeof window !== 'undefined') {

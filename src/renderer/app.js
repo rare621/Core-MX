@@ -1028,11 +1028,11 @@ async function openPost(summary, { install = false } = {}) {
     const action = d.shop ? (d.modelInstalled ? `<span class="have">${icon('check')}Model installed</span>` : `<button class="btn btn-primary" data-install-required="${esc(d.url)}">${icon('cart')}Buy / download</button>`)
       : p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
-      : installed ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
+      : (d.installed ?? installed) ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
       : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}Install</button>`;
     return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
       <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${d.shop ? 'Shop' : mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
-      ${action}<div class="download-inline" data-download-progress hidden></div></div>`;
+      ${action}${d.modelDependencies?.length ? `<div class="download-requirements">${d.modelDependencies.map((dep) => `<div><b>${esc(dep.label)}</b><span class="${dep.installed ? 'ok-text' : 'muted'}">${dep.installed ? 'Installed' : 'Required model not installed'}</span>${dep.installed || !dep.url ? '' : dependencyButton(dep)}</div>`).join('')}</div>` : ''}<div class="download-inline" data-download-progress hidden></div></div>`;
   }).join('') : `<div class="notice warn">${icon('alert')}<div>No download links found on this page. Open it on the site to check.</div></div>`;
 
   $('.modal-body', m).innerHTML = `<div class="post">
@@ -1046,7 +1046,8 @@ async function openPost(summary, { install = false } = {}) {
       <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
-      ${(p.modelDependencies || []).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>Base model: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''} — this add-on is ready to use.` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : d.unidentified ? 'The listing does not identify the model. Download for review to check the files before installing.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? dependencyButton(d) : `<button class="btn btn-sm" data-find-required="${i}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
+      ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap').length > 1 ? '<p class="muted">Choose the model swap for your bike and downloaded paint variant. The linked versions are alternatives.</p>' : ''}
+      ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap' || p.downloads.filter((dl) => !dl.shop).length <= 1).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>${d.kind === "bikeSwap" ? "Required bike model swap" : "Base model"}: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''}${d.kind === 'bikeSwap' && !d.active ? ' — select it under Rider → Bike → Appearance before riding.' : ' — ready to use.'}` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : d.unidentified ? 'The listing does not identify the model. Download for review to check the files before installing.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? dependencyButton(d) : `<button class="btn btn-sm" data-find-required="${(p.modelDependencies || []).indexOf(d)}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
       ${p.needsModelNotice && needsModelWarning(p) && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
       ${(p.dependencies || []).some((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)) ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.filter((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)).map((d) => dependencyButton(d, d.label)).join('')}</div></div>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
@@ -1111,6 +1112,7 @@ async function openPost(summary, { install = false } = {}) {
 }
 
 function needsModelWarning(p) {
+  if (p.modelDependencies?.some((d) => d.kind === 'bikeSwap' && d.installed !== true)) return true;
   if (p.installKind === 'bikePaint' || p.kind === 'bikePaint' || (p.categories || []).some((c) => [37, 51, 361].includes(Number(c)))) return false;
   if (p.modelDependencies?.length && p.modelDependencies.every((d) => d.installed === true) && !p.missingModelTextures?.length) return false;
   return p.gearKind === 'paint' || !!p.needsModelNotice || !!p.modelDependencies?.length || !!p.missingModelTextures?.length;
@@ -1140,6 +1142,7 @@ function warnBeforePaintInstall(p, staged = false) {
 }
 
 async function startDownload(p, dl) {
+  p = { ...p, modelDependencies: dl.modelDependencies ?? p.modelDependencies, dependencies: dl.modelDependencies?.length ? dl.modelDependencies : p.dependencies };
   const requireReview = needsModelWarning(p);
   if (requireReview && !await warnBeforePaintInstall(p)) return false;
   const id = await api.invoke('jobs:start', {
@@ -1376,13 +1379,14 @@ async function openReview(id) {
     const missingModels = (p.requiredModels || []).filter((r) => r.kind !== 'bike' && !r.installed && !r.included);
     const dependencyHelp = missingModels.map((r) => `<button class="btn btn-sm" data-act="paint-get" data-name="${esc(r.name)}">${icon('search')}Find ${esc(r.name)} model</button>`).join('') + (p.dependencies || []).filter((d) => d.url).map((d) => dependencyButton(d, d.label)).join('');
     const bikeHelp = p.bikeCompatibility?.messages.length ? `<div class="notice ${p.bikeCompatibility.blocked ? 'warn' : 'info'}">${icon(p.bikeCompatibility.blocked ? 'alert' : 'info')}<div>${p.bikeCompatibility.messages.map(esc).join('<br>')}</div></div>` : '';
-    const warn = bikeHelp + p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
+    const swapHelp = (p.dependencies || []).filter((d) => d.kind === 'bikeSwap').map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model swap: ${esc(d.label)}</b><div>${d.installed ? 'Installed. Select this appearance on the matching bike before riding.' : 'This paint needs the matching model swap. Buy or install that model before using the paint.'}</div>${d.url ? dependencyButton(d) : ''}</div></div>`).join('');
+    const warn = swapHelp + bikeHelp + p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
     const waiting = p.needsPaintTarget || p.needsRiderTarget;
     const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || e.bikeMatch?.message || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${e.bikeMatch?.status === 'missing' ? 'Bike mod not installed' : e.bikeMatch?.status === 'incompatible' ? 'Incompatible bike' : waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
-    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Add this livery to <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the bike this livery was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
+    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Install for <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the base bike this download was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
       <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
     $('#rvSummary', m).textContent = waiting ? `Choose ${bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
-    $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : bikeTarget ? 'Install livery' : 'Install'}`;
+    $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : p.kind === 'bikeSwap' ? 'Install model swap' : bikeTarget ? 'Install livery' : 'Install'}`;
     $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || p.needsRiderTarget || p.bikeCompatibility?.blocked || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
   };
   draw(j);
@@ -1437,7 +1441,7 @@ const riderDirty = () => S.rider.selectionDirty || Object.keys(S.rider.drafts[ri
 const SLOT_ICONS = { bikePaint: 'paint', rider: 'rider', helmet: 'helmet', helmetPaint: 'paint', gogglesPaint: 'goggles', suitPaint: 'shirt', protection: 'shield', protectionPaint: 'paint', glovesPaint: 'glove', boots: 'boot', bootsPaint: 'paint' };
 const PAINT_SLOTS = new Set(['bikePaint', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'protectionPaint', 'glovesPaint', 'bootsPaint']);
 // Choosing a new model resets the paints that belonged to the old one.
-const RESETS = { rider: ['suitPaint', 'glovesPaint'], helmet: ['helmetPaint', 'gogglesPaint'], boots: ['bootsPaint'], protection: ['protectionPaint'] };
+const RESETS = { bikeAppearance: ['bikePaint'], rider: ['suitPaint', 'glovesPaint'], helmet: ['helmetPaint', 'gogglesPaint'], boots: ['bootsPaint'], protection: ['protectionPaint'] };
 
 function gearBrand(value) {
   const text = String(value || '').replace(/[_-]/g, ' ').replace(/\d{4}/g, ' ');
@@ -1518,11 +1522,11 @@ function drawBike(c) {
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
       <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame && !riderDirty() ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
-      <div class="bike-livery-card"><div class="section-title">Appearance</div><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
+      <div class="bike-livery-card"><div class="section-title">Appearance</div><button class="slot" data-slot="bikeAppearance"><span class="slot-ico">${icon("bike")}</span><span class="slot-txt"><span class="slot-l">Model</span><span class="slot-v">${esc(lo.appearances?.find((o) => o.id === lo.current.bikeAppearance)?.title || "Default bike")}</span></span><span class="slot-n">${lo.options.bikeAppearance?.length || 1} choices ${icon("chevron")}</span></button><p class="muted" style="font-size:12px">Preview a model swap, then Apply. This appearance applies to this bike in every profile.</p><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
       <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button><p class="muted" style="font-size:12px">Only tyre sets declared by this bike are listed.${lo.invalidTyres ? ' Your previous choice is incompatible. Apply to reset it to the bike default.' : ''}</p></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
     </div></div></div></div>`;
   mountProfileControls();
-  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || ''); R.bikeModelKey = key;
+  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikeAppearance || '') + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || ''); R.bikeModelKey = key;
   const attach = async () => {
     if (R.bikeModelKey !== key || !$('#bikeStage')) return;
     if (!R.bikeViewer) { const host = document.createElement('div'); host.className = 'stage-canvas'; R.bikeViewer = window.RiderViewer.create(host); }
@@ -1686,7 +1690,7 @@ document.addEventListener('click', (e) => {
   if (!t || S.view !== 'rider') return;
   const lo = S.rider.lo;
   const slot = lo.slots.find((s) => s.id === t.dataset.slot);
-  const opts = lo.options[slot.id].map((v) => ({ value: v, label: prettyValue(slot.id, v) }));
+  const opts = lo.options[slot.id].map((v) => ({ value: v, label: slot.id === 'bikeAppearance' ? lo.appearances.find((o) => o.id === v)?.title || 'Default bike' : prettyValue(slot.id, v) }));
   if (PAINT_SLOTS.has(slot.id) && !opts.some((o) => o.value === '')) opts.unshift({ value: '', label: 'Default', sub: 'The standard paint' });
   const withPics = ['helmet', 'boots', 'protection'].includes(slot.id);
   const render = withPics ? (o) => { const gi = gearItem(slot.id, o.value); return `<span class="opt-img thumb">${gi && gi.hasImage ? thumbHtml(gi) : `<span class="slot-ico" style="width:100%;height:100%">${icon(SLOT_ICONS[slot.id])}</span>`}</span>`; } : null;
@@ -2398,24 +2402,42 @@ document.addEventListener('click', async (e) => {
 S.appUpdate = { phase: 'idle' };
 function appUpdateHtml() {
   const update = S.appUpdate;
-  const text = { idle: 'Checks Google Drive every time you open the app.', checking: 'Checking Google Drive…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, ready: `${esc(update.version || '')} is ready. It will install when you close the app.`, error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
+  const text = { idle: 'Checks Google Drive every time you open the app.', checking: 'Checking Google Drive…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, available: 'An update is available. Choose Install update in the dialog.', ready: 'The update is downloaded and ready to install.', error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
   return `<p>${text || ''}</p>${update.phase === 'downloading' ? `<progress max="100" value="${Number(update.percent) || 0}" style="width:100%"></progress>` : ''}<button class="btn" data-act="app-update-check" ${['checking', 'downloading'].includes(update.phase) ? 'disabled' : ''}>${icon('refresh')}Check now</button>${update.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Restart to update</button>' : ''}`;
 }
+let updateDialog = null, skippedUpdate = '', updateAccepted = false, updateRestarting = false;
 function drawAppUpdate() {
   const box = $('#appUpdates'); if (box) box.innerHTML = appUpdateHtml();
-  let overlay = $('#appUpdateOverlay');
-  if (!['downloading', 'ready'].includes(S.appUpdate.phase)) { overlay?.remove(); return; }
-  if (!overlay) { overlay = document.createElement('div'); overlay.id = 'appUpdateOverlay'; overlay.className = 'app-update-overlay'; document.body.append(overlay); }
-  overlay.innerHTML = `<b>${icon('download')}App update</b>${S.appUpdate.phase === 'ready' ? `<span>${esc(S.appUpdate.version)} is ready</span><button class="btn btn-sm btn-primary" data-act="app-update-install">Restart to update</button>` : `<span>Downloading ${esc(S.appUpdate.version)} · ${Math.round(S.appUpdate.percent || 0)}%</span><progress max="100" value="${Number(S.appUpdate.percent) || 0}"></progress>`}`;
+  $('#appUpdateOverlay')?.remove();
+  const u = S.appUpdate;
+  if (!['available', 'downloading', 'ready', 'installing', 'error'].includes(u.phase)) return;
+  if (!updateDialog && (u.phase === 'error' || skippedUpdate === u.version)) return;
+  if (!updateDialog) updateDialog = modal({ title: 'MX Bikes Manager update', body: '', foot: '<span></span>', onClose: () => { skippedUpdate = S.appUpdate.version; updateAccepted = false; updateDialog = null; } });
+  const raw = Array.isArray(u.notes) ? u.notes.map((n) => n.note || '').join('\n') : u.notes || '';
+  // Release notes come from a remote manifest: display text, never execute HTML.
+  const notes = new DOMParser().parseFromString(raw, 'text/html').body.textContent;
+  const labels = { available: 'An update is available', downloading: 'Downloading update', ready: 'Ready to install', installing: 'Installing update — the app will close and reopen', error: 'Update failed' };
+  $('.modal-body', updateDialog).innerHTML = '<h3>' + esc(u.version || '') + ' · ' + labels[u.phase] + '</h3><div style="white-space:pre-wrap;line-height:1.7;margin:16px 0">' + esc(notes || 'Improvements and fixes for MX Bikes Manager.') + '</div>' + (u.phase === 'downloading' ? '<progress style="width:100%" max="100" value="' + (Number(u.percent) || 0) + '"></progress><p>' + Math.round(u.percent || 0) + '% downloaded</p>' : '') + (u.error ? '<p class="sync-warning">' + esc(u.error) + '</p>' : '') + (u.phase === 'ready' && riderDirty() ? '<p>Apply or Revert your Rider preview before installing this update.</p>' : '');
+  $('.modal-foot', updateDialog).innerHTML = (u.phase === 'installing' ? '' : '<button class="btn" data-close>' + (u.phase === 'available' ? 'Skip' : 'Later') + '</button>') + (u.phase === 'available' ? '<button class="btn btn-primary" data-act="app-update-download">Install update</button>' : u.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Install & reopen</button>' : u.phase === 'error' ? '<button class="btn btn-primary" data-act="app-update-check">Retry</button>' : '');
+  if (u.phase === 'ready' && updateAccepted && !riderDirty()) restartForUpdate();
+}
+async function restartForUpdate() {
+  if (updateRestarting) return;
+  if (riderDirty()) { toast('Apply or Revert your Rider preview before restarting to update.', 'info', 6000); return; }
+  updateRestarting = true;
+  try { await api.invoke('app:installUpdate'); }
+  catch (err) { updateAccepted = false; updateRestarting = false; toast(esc(cleanErr(err)), 'err', 6000); }
 }
 api.on('app:update', (state) => { S.appUpdate = state; drawAppUpdate(); });
 document.addEventListener('click', async (e) => {
   const action = e.target.closest('[data-act]')?.dataset.act;
-  if (action === 'app-update-check') { S.appUpdate = { ...S.appUpdate, phase: 'checking' }; drawAppUpdate(); try { S.appUpdate = await api.invoke('app:checkUpdates'); drawAppUpdate(); } catch (err) { toast(esc(cleanErr(err)), 'err'); } }
-  if (action === 'app-update-install') {
-    if (riderDirty()) { toast('Apply or Revert your Rider preview before restarting to update.', 'info', 6000); return; }
-    try { await api.invoke('app:installUpdate'); } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+  if (action === 'app-update-check') { skippedUpdate = ''; S.appUpdate = { ...S.appUpdate, phase: 'checking' }; drawAppUpdate(); try { S.appUpdate = await api.invoke('app:checkUpdates'); drawAppUpdate(); } catch (err) { toast(esc(cleanErr(err)), 'err'); } }
+  if (action === 'app-update-download') {
+    if (riderDirty()) { toast('Apply or Revert your Rider preview first so it is not lost when the app restarts.', 'info', 6000); return; }
+    updateAccepted = true;
+    try { S.appUpdate = await api.invoke('app:downloadUpdate'); drawAppUpdate(); } catch (err) { updateAccepted = false; toast(esc(cleanErr(err)), 'err'); }
   }
+  if (action === 'app-update-install') { updateAccepted = true; await restartForUpdate(); }
 });
 S.settingsTab = 'general';
 function settingsTabs() {
@@ -2731,6 +2753,7 @@ const onLibraryChanged = debounce(async () => {
   S.gearThumbs.clear();
   await refreshInstalledIds(); await rescan(true);
   for (const refresh of openPostRefreshers) refresh().catch(() => {});
+  S.friendDialog?.refresh(true);
   if (typeof checkFriendTrackJoin === 'function') checkFriendTrackJoin().catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
   if (S.view === 'rider') { S.rider.bikes = null; renderRider($('#content')); }
   S.packs = null;

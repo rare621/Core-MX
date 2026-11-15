@@ -54,7 +54,14 @@ async function readIn(f, rel) {
   if (!f) return null;
   rel = String(rel).replace(/\\/g, '/').replace(/^\.\//, '');
   if (rel.split('/').some((part) => part === '..') || /^[\/]|:|\0/.test(rel)) return null;
+  if (f.kind === 'overlay') {
+    const key = Object.keys(f.files).find((name) => name.toLowerCase() === rel.toLowerCase());
+    if (!key) return null;
+    const file = f.files[key], stat = await fsp.stat(file);
+    return { buf: await fsp.readFile(file), key: file + '@' + stat.mtimeMs, path: file };
+  }
   if (f.kind === 'dir') {
+    if (f.exclude?.some((name) => name.toLowerCase() === rel.toLowerCase())) return null;
     const p = path.join(f.dir, ...rel.split('/'));
     try { const st = await fsp.stat(p); if (st.isFile()) return { buf: await fsp.readFile(p), key: p + '@' + st.mtimeMs, path: p }; } catch {}
     // Archives and Windows folders are case-insensitive in the game; tests and

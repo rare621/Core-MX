@@ -39,7 +39,8 @@ test('reconciliation resets completed download jobs and preserves failed-to-dele
   let state = { removed: { files: ['gone.pnt'] }, kept: { files: ['locked.pnt'] } };
   const done = { status: 'done', installed: ['gone.pnt'] }, partial = { status: 'done', installed: ['gone.pnt', 'locked.pnt'] };
   const emitted = [];
-  const context = vm.createContext({ require: () => ({ ...records, missingFiles: async () => { state = { ...state, replacement: { files: ['new.pnt'] } }; return new Set(['gone.pnt']); } }), store: { get: () => state, update: (_, fn) => { state = fn(state); } }, modsDir: () => 'mods', disabledDir: () => 'disabled', jobs: new Map([['done', done], ['partial', partial]]), emitJob: (job) => emitted.push(job) });
+  const installKey = () => '';
+  const context = vm.createContext({ installKey, bikeSwaps: { hasRecord: () => false }, require: () => ({ ...records, missingFiles: async () => { state = { ...state, replacement: { files: ['new.pnt'] } }; return new Set(['gone.pnt']); } }), store: { get: () => state, update: (_, fn) => { state = fn(state); } }, modsDir: () => 'mods', disabledDir: () => 'disabled', jobs: new Map([['done', done], ['partial', partial]]), emitJob: (job) => emitted.push(job) });
   vm.runInContext(source.slice(source.indexOf('async function reconcileInstallRecords('), source.indexOf('async function deleteRiderModel(')), context);
   await context.reconcileInstallRecords();
   assert.equal(state.removed, undefined); assert.ok(state.kept); assert.ok(state.replacement);

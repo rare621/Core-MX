@@ -387,6 +387,7 @@ async function post(id) {
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
   const details = listingRequirements(html, p.content && p.content.rendered || '', summary);
+  details.dependencies = require('./download-dependencies').enrich(details.dependencies, downloads, p.content && p.content.rendered || '');
   const needsModelNotice = !summary.categories.includes(365) && details.needsModelNotice;
   return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description: description + (details.instructions ? '<h3>Mod instructions</h3>' + sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : ''), downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
 }

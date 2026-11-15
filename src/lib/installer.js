@@ -16,6 +16,7 @@ const DOC_EXT = /\.(txt|md|pdf|url|html?|jpe?g|png|webp|gif|bmp|mp4|mov|docx?|rt
 const KINDS = {
   track:           { label: 'Track', base: (o) => `tracks/${o.trackType || 'motocross'}` },
   bike:            { label: 'Bike', base: () => 'bikes' },
+  bikeSwap:        { label: 'Bike model swap (appearance)', base: () => 'bikes', paintModels: () => 'bikes' },
   bikePaint:       { label: 'Bike livery (paint)', base: () => 'bikes', paintModels: () => 'bikes' },
   riderKit:        { label: 'Rider kit (jersey & pants)', base: (o) => `${o.gear}/paints`, loosePnt: (o) => `${o.gear}/paints` },
   gloves:          { label: 'Gloves', base: (o) => `${o.gear}/gloves`, loosePnt: (o) => `${o.gear}/gloves` },
@@ -133,6 +134,8 @@ function plan(files, ctx, opts = {}) {
 
   let kind = opts.kind || ((!ctx.categories || !ctx.categories.length) && ctx.kindHint) || kindFromCategories(ctx.categories);
   let autoKind = !opts.kind;
+  const visualBikeFiles = files.some((f) => /\.edf$/i.test(f.rel)) && !files.some((f) => /\.(engn|geom)$/i.test(f.rel));
+  if (autoKind && visualBikeFiles && (kind === 'bike' || files.some((f) => /(?:^|\/)bikes\//i.test(f.rel)) || /model[\s_-]*swap/i.test(text + ' ' + (ctx.categoryNames || []).join(' ')))) kind = 'bikeSwap';
   if (autoKind) {
     if (PAINT_OF[kind] && !hasPkz && hasPnt) kind = PAINT_OF[kind];
     else if (MODEL_OF[kind] && hasPkz && !hasPnt) kind = MODEL_OF[kind];
@@ -259,6 +262,9 @@ function plan(files, ctx, opts = {}) {
         }
       }
     }
+    if (!dest && kind === 'bikeSwap' && o.paintTarget && require('./bike-swaps').visual(fname)) {
+      dest = `bikes/${o.paintTarget}/${segs.join('/')}`; how = 'model-swap';
+    }
     // 3) Loose paints
     if (!dest && /\.pnt$/i.test(fname)) {
       if (paintModelsDir) {
@@ -283,6 +289,9 @@ function plan(files, ctx, opts = {}) {
     // mixed packs. A global selector must not redirect a different bike's paint.
     const bikeMatch = bikeMatches.get(f.rel);
     if (bikeMatch) { dest = bikeMatch.target ? `bikes/${bikeMatch.target}/paints/${fname}` : null; how = 'bike-match'; }
+    if (kind === 'bikeSwap' && dest && !require('./bike-swaps').visual(dest) && !/\.pnt$/i.test(dest)) {
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'not-appearance' }); continue;
+    }
     let status;
     if (dest) {
       dest = dest.replace(/\/+/g, '/').replace(/^\//, '');
@@ -298,7 +307,7 @@ function plan(files, ctx, opts = {}) {
   }
 
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
-  const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => /\.pnt$/i.test(e.rel) && !e.dest);
+  const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest);
   const installable = entries.filter((e) => e.dest).length;
   const bikeBlocked = [...bikeMatches.values()].some((result) => ['missing', 'incompatible'].includes(result.status));
   const bikeResults = [...bikeMatches.values()];
@@ -330,7 +339,7 @@ function plan(files, ctx, opts = {}) {
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
   const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title' && !bikeBlocked && [...bikeMatches.values()].every((result) => result.status === 'match')
     && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && (kind === 'bikePaint' || !ctx.unreadablePaints?.length)
-    && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
+    && kind !== 'bikeSwap' && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
 
   return {

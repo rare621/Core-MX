@@ -34,6 +34,7 @@ api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
   if (S.friendDialog) S.friendDialog.progress();
+  if (st?.paintSync?.at && st.paintSync.at !== previous?.paintSync?.at && !st.paintSync.busy) S.friendDialog?.refresh();
   const key = (s) => JSON.stringify([s?.service, s?.plugin, s?.paintSync?.enabled, s?.paintSync?.error, s?.paintSync?.at, s?.paintSync?.friends]);
   if (S.friendsPanel?.body && key(previous) !== key(st)) renderFriends(S.friendsPanel.body);
   const overlay = $('#friendsSyncOverlay'); if (overlay) overlay.innerHTML = friendProgressHtml();
@@ -381,8 +382,35 @@ function paidModsSummary(items) {
 
 async function openFriendDetails(friend) {
   let outfit = null, loading = true, error = null, syncing = false;
+  let viewer = null, previewKey = null, previewRevision = 0, refreshRun = null;
+  const preview = document.createElement('section');
+  preview.className = 'friend-preview';
+  preview.innerHTML = `<div class="friend-preview-heading"><b>Rider & bike</b><button class="btn btn-sm" data-preview-reset>${icon('refresh')}Reset view</button></div><div class="friend-preview-stage"><div data-friend-canvas></div><div class="friend-preview-state" role="status"></div></div><div class="friend-preview-note muted" role="status"></div><small class="muted">Drag to turn · scroll to zoom · double-click to reset</small>`;
+  const disposePreview = () => { previewRevision++; if (viewer) viewer.dispose(); viewer = null; };
+  const renderPreview = async () => {
+    if (!outfit || !m.isConnected) return;
+    const key = JSON.stringify([outfit.bike, outfit.equipped, outfit.items?.map((item) => [item.slot, item.sha256, item.state]), outfit.unavailable]);
+    if (previewKey === key) return;
+    previewKey = key; disposePreview();
+    const revision = previewRevision, state = $('.friend-preview-state', preview), note = $('.friend-preview-note', preview);
+    state.hidden = false; state.innerHTML = '<span class="spinner"></span>Loading shared setup…'; note.textContent = '';
+    try {
+      const scene = await api.invoke('online:friendPreview', friend.code);
+      if (!m.isConnected || revision !== previewRevision) return;
+      note.textContent = (scene.warnings || []).join(' ');
+      if (!scene.rider && !scene.bike) { state.textContent = scene.pending ? 'Sync or install the required gear to see this setup.' : '3D preview unavailable for this setup.'; return; }
+      if (!window.RiderViewer) throw new Error('The 3D viewer has not loaded. Reopen this friend to try again.');
+      viewer = window.RiderViewer.create($('[data-friend-canvas]', preview));
+      viewer.loadScene(scene); state.hidden = true;
+    } catch (err) {
+      if (!m.isConnected || revision !== previewRevision) return;
+      if (viewer) viewer.dispose(); viewer = null;
+      state.textContent = '3D preview unavailable'; note.textContent = cleanErr(err);
+    }
+  };
   const m = modal({ title: esc(friend.name), body: '<div class="loadmore"><div class="spinner"></div></div>', foot: `<span class="grow"></span><button class="btn" data-close>Close</button><button class="btn btn-primary" data-sync-friend>${icon('download')}Sync equipped gear</button>`,
-    onClose: () => { if (S.friendDialog && S.friendDialog.modal === m) S.friendDialog = null; } });
+    onClose: () => { disposePreview(); if (S.friendDialog && S.friendDialog.modal === m) S.friendDialog = null; } });
+  $('[data-preview-reset]', preview).addEventListener('click', () => viewer?.resetView());
   const drawProgress = () => { const box = $('[data-friend-progress]', m); if (box) box.innerHTML = friendProgressHtml(); };
   const draw = () => {
     if (!m.isConnected) return;
@@ -399,16 +427,23 @@ async function openFriendDetails(friend) {
       return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
     $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Riding session — server not reported')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(outfit.bikeName || outfit.bike || '')} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
+    const list = $('.friend-gear-list', m);
+    if (list) { list.before(preview); renderPreview(); }
     const button = $('[data-sync-friend]', m);
     button.disabled = loading || syncing || !outfit || !S.live.status?.service.connected;
     button.innerHTML = syncing ? '<span class="spinner"></span>Syncing…' : `${icon('download')}Sync equipped gear`;
   };
-  const refresh = async () => {
-    try { outfit = await api.invoke('online:friendLoadout', friend.code); error = null; }
-    catch (e) { error = cleanErr(e); }
-    loading = false; draw();
+  const refresh = (forcePreview = false) => {
+    if (forcePreview) previewKey = null;
+    if (refreshRun || !m.isConnected) return refreshRun;
+    refreshRun = (async () => {
+      try { outfit = await api.invoke('online:friendLoadout', friend.code); error = null; }
+      catch (e) { error = cleanErr(e); }
+      loading = false; draw();
+    })().finally(() => { refreshRun = null; });
+    return refreshRun;
   };
-  S.friendDialog = { id: friend.code, modal: m, progress: drawProgress, redraw: draw };
+  S.friendDialog = { id: friend.code, modal: m, progress: drawProgress, redraw: draw, refresh };
   $('[data-sync-friend]', m).addEventListener('click', async () => {
     syncing = true; error = null; draw();
     try {

@@ -1,0 +1,64 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { create, safe } = require('../src/lib/bike-swaps');
+test('swap previews leave the bike intact; switching and uninstall restore originals and preserve paints/physics', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-swap-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const mods = path.join(root, 'mods'), bike = 'MX2OEM_2023_Test_250', dir = path.join(mods, 'bikes', bike);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(dir + '.pkz', 'base');
+  await fs.writeFile(path.join(dir, 'bike.edf'), 'original');
+  await fs.writeFile(path.join(dir, 'physics.geom'), 'physics');
+  let running = false;
+  const manager = create({ root: () => path.join(root, 'cache'), modsDir: () => mods, isGameRunning: async () => running, trash: (file) => fs.rename(file, file + '.trashed') });
+  const install = async (title) => {
+    const abs = path.join(root, title + '.edf'); await fs.writeFile(abs, title);
+    return (await manager.install({ entries: [{ abs, dest: `bikes/${bike}/bike.edf` }] }, { title, link: 'https://mxbikes-shop.com/downloads/' + title, recordKey: title }))[0].id;
+  };
+  const a = await install('swap-a'), b = await install('swap-b');
+  assert.equal(await fs.readFile(path.join(dir, 'bike.edf'), 'utf8'), 'original');
+  assert.equal(await fs.readFile(manager.preview(bike, a).swapFiles['bike.edf'], 'utf8'), 'swap-a');
+  assert.equal(manager.status('https://mxbikes-shop.com/downloads/swap-a/').installed, true);
+  await manager.select(bike, a); assert.equal(await fs.readFile(path.join(dir, 'bike.edf'), 'utf8'), 'swap-a');
+  const peer = manager.shared(bike);
+  assert.equal(await fs.readFile(manager.sharedPreview(bike, peer).swapFiles['bike.edf'], 'utf8'), 'swap-a');
+  assert.equal(manager.sharedPreview(bike, { error: 'Model swap required [' + '0'.repeat(64) + ']' }), null);
+  assert.equal(await fs.readFile(manager.preview(bike, '').swapFiles['bike.edf'], 'utf8'), 'original');
+  running = true; await assert.rejects(manager.select(bike, b), /Close MX Bikes/); running = false;
+  await manager.select(bike, b); assert.equal(await fs.readFile(path.join(dir, 'bike.edf'), 'utf8'), 'swap-b');
+  await manager.removeRecord('swap-b'); assert.equal(await fs.readFile(path.join(dir, 'bike.edf'), 'utf8'), 'original');
+  assert.equal(await fs.readFile(path.join(dir, 'physics.geom'), 'utf8'), 'physics');
+  assert.equal(manager.list(bike).active, '');
+  await manager.select(bike, a); await fs.writeFile(path.join(dir, 'bike.edf'), 'manual edit');
+  await assert.rejects(manager.select(bike, ''), /outside the manager/);
+  assert.equal(await fs.readFile(path.join(dir, 'bike.edf'), 'utf8'), 'manual edit');
+});
+test('swap destinations reject traversal and absolute paths', () => {
+  for (const rel of ['../x', 'C:/x', 'bikes/../../x', '/x']) assert.throws(() => safe(os.tmpdir(), rel), /Invalid/);
+});
+test('creator-specific model names must match gfx references before a swap is accepted', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-swap-refs-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const bike = 'Bike', dir = path.join(root, 'bikes', bike); await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'gfx.cfg'), '; example = unused.edf\nchassis { model = bike.hrc } // old.hrc');
+  await fs.writeFile(path.join(dir, 'bike.hrc'), 'level0 { scene = bike.edf }');
+  await fs.writeFile(path.join(dir, 'bike.edf'), 'base');
+  const abs = path.join(root, 'incoming.edf'); await fs.writeFile(abs, 'swap');
+  const { validateReferences } = require('../src/lib/bike-swaps');
+  await assert.rejects(validateReferences({ entries: [{ abs, dest: 'bikes/Bike/wrong-name.edf' }] }, root), /filename does not match/);
+  await validateReferences({ entries: [{ abs, dest: 'bikes/Bike/bike.edf' }] }, root);
+});
+test('installer recognizes visual-only swaps without treating them as complete new bikes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-swap-plan-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const bike = 'MX1OEM_2023_Test_450'; await fs.mkdir(path.join(root, 'bikes'), { recursive: true }); await fs.writeFile(path.join(root, 'bikes', bike + '.pkz'), 'base');
+  const { plan } = require('../src/lib/installer');
+  const files = [{ rel: `bikes/${bike}/bike.edf` }, { rel: `bikes/${bike}/gfx.cfg` }];
+  const result = plan(files, { modsDir: root, categories: [45] });
+  assert.equal(result.kind, 'bikeSwap'); assert.equal(result.confident, false); assert.equal(result.counts.unresolved || 0, 0);
+  const loose = plan([{ rel: 'bike.edf' }, { rel: 'gfx.cfg' }], { modsDir: root, title: 'Model swap' }, { paintTarget: bike });
+  assert.equal(loose.kind, 'bikeSwap'); assert.equal(loose.entries[0].dest, `bikes/${bike}/bike.edf`);
+  const full = plan([...files, { rel: `bikes/${bike}/${bike}.geom` }], { modsDir: root, categories: [45] });
+  assert.equal(full.kind, 'bike');
+});
