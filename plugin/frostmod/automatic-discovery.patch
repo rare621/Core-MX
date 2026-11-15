@@ -1,5 +1,5 @@
 diff --git a/src/frostmod.cpp b/src/frostmod.cpp
-index f9c0116..156bf45 100644
+index f9c0116..a3544cb 100644
 --- a/src/frostmod.cpp
 +++ b/src/frostmod.cpp
 @@ -17,6 +17,7 @@
@@ -10,7 +10,7 @@ index f9c0116..156bf45 100644
  #include <cstdarg>
  #include <string>
  #include <deque>
-@@ -1776,28 +1777,62 @@ bool g_srvVerbose = false;
+@@ -1776,28 +1777,60 @@ bool g_srvVerbose = false;
  // label; when false the hook is a read-only PREVIEW (logs [srv] but hides nothing).
  bool g_sbHideEnabled = true;
  
@@ -38,10 +38,9 @@ index f9c0116..156bf45 100644
 -        Log("[masterlist] published %zu server(s) for MXB App", g_mlLast.size());
 +// MXB Manager patch: capture rows without filesystem work on the game thread.
 +static std::mutex g_mlMutex;
-+static std::vector<frostmod::masterlist::Row> g_mlPass, g_mlPending;
++static frostmod::masterlist::ObservedRows g_mlRows;
 +static HANDLE g_mlStop = nullptr, g_mlThread = nullptr;
 +static std::string g_mlFile;
-+static ULONGLONG g_mlSeen = 0;
 +
 +static DWORD WINAPI MasterListWorker(LPVOID) {
 +    std::vector<frostmod::masterlist::Row> last;
@@ -54,12 +53,11 @@ index f9c0116..156bf45 100644
 +        ULONGLONG seen;
 +        {
 +            std::lock_guard<std::mutex> lock(g_mlMutex);
-+            rows = g_mlPending.empty() ? g_mlPass : g_mlPending;
-+            g_mlPending.clear();
-+            seen = g_mlSeen;
++            rows = g_mlRows.Snapshot(GetTickCount64());
++            seen = g_mlRows.lastSeen;
 +        }
 +        const auto now = GetTickCount64();
-+        if (!seen || now - seen > 2000 || (rows == last && now - written < 60000)) continue;
++        if (!seen || (rows == last && (now - seen > 2000 || now - written < 60000))) continue;
 +        const uint64_t ms = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
 +            std::chrono::system_clock::now().time_since_epoch()).count();
 +        const std::string text = frostmod::masterlist::Serialize(rows, ms);
@@ -95,21 +93,19 @@ index f9c0116..156bf45 100644
      }
  }
  
-@@ -1840,6 +1875,13 @@ extern "C" bool SB_SuppressRow(uint64_t index, void* gameRsp) {
+@@ -1840,6 +1873,11 @@ extern "C" bool SB_SuppressRow(uint64_t index, void* gameRsp) {
  
      char name[128] = "";
      SafeCopyStr(base + mxb::SBE_NAME, name, sizeof(name));           // name @ +0x86
 +    {
 +        std::lock_guard<std::mutex> lock(g_mlMutex);
-+        if (index == 0) { g_mlPending = g_mlPass; g_mlPass.clear(); }
-+        frostmod::masterlist::AddRow(g_mlPass, reinterpret_cast<const uint8_t*>(raw), n, name);
-+        g_mlSeen = GetTickCount64();
++        g_mlRows.Observe(reinterpret_cast<const uint8_t*>(raw), n, name, GetTickCount64());
 +    }
 +
  
      frostmod::serverfilter::ServerInfo si;
      si.name       = name;
-@@ -6937,6 +6979,11 @@ bool InstallHook(void* target, void* detour, void** original, const char* name)
+@@ -6937,6 +6975,11 @@ bool InstallHook(void* target, void* detour, void** original, const char* name)
  }
  
  // ===========================================================================
@@ -121,7 +117,7 @@ index f9c0116..156bf45 100644
  // GHS CLOSE GUARD  -  the one crash-to-desktop we can stop from in here
  //
  // A player's own crash line pinned it: closing an already-closed GHS handle is a
-@@ -9053,7 +9100,7 @@ DWORD WINAPI Init(LPVOID) {
+@@ -9053,7 +9096,7 @@ DWORD WINAPI Init(LPVOID) {
              Log("[filter] not available on %s - the server browser offsets are MX Bikes' "
                  "and have not been ported.", g_game->display);
          else if (fflag[0] && GetFileAttributesA(fflag) != INVALID_FILE_ATTRIBUTES)
@@ -130,7 +126,7 @@ index f9c0116..156bf45 100644
          else
              Log("[filter] rules loaded (inert). Run frostmod.exe --filter-servers to "
                  "install the read-only dump hook and preview the server list ([srv]).");
-@@ -9165,6 +9212,7 @@ static void PinSelf() {
+@@ -9165,6 +9208,7 @@ static void PinSelf() {
  
  // ---- teardown (src/unload.h has the order and why) -------------------------------------------
  static void TdStopThreads(bool canBlock) {
@@ -138,8 +134,60 @@ index f9c0116..156bf45 100644
      MsgFeedStop(canBlock);   // no-op in the plugin copy, which never started one
      MdStop(canBlock);
      // Init can sit up to 30 s waiting for the scanner; g_unloading already stops it hooking.
+diff --git a/src/masterlist.h b/src/masterlist.h
+index c77fe86..7abeef2 100644
+--- a/src/masterlist.h
++++ b/src/masterlist.h
+@@ -25,6 +25,8 @@
+ #include <cstdio>
+ #include <string>
+ #include <vector>
++#include <map>
++#include <algorithm>
+ 
+ namespace frostmod {
+ namespace masterlist {
+@@ -104,5 +106,38 @@ inline std::string Serialize(const std::vector<Row>& rows, uint64_t unixMs) {
+     return out;
+ }
+ 
++// MXB Manager: callbacks arrive in small batches, not one complete browser pass.
++// Keep a bounded, expiring address book for this process; never append file history.
++class ObservedRows {
++    struct Entry { Row row; uint64_t at; };
++    std::map<std::string, Entry> entries;
++    uint64_t ttl;
++    size_t limit;
++public:
++    uint64_t lastSeen = 0;
++    explicit ObservedRows(uint64_t ttlMs = 6ULL * 3600 * 1000, size_t maxRows = kMaxRows)
++        : ttl(ttlMs), limit(maxRows) {}
++    void Observe(const uint8_t* raw, size_t len, const char* name, uint64_t now) {
++        std::string address;
++        const std::string clean = CleanName(name);
++        if (!limit || clean.empty() || !DecodeAddress(raw, len, address)) return;
++        if (!entries.count(address) && entries.size() >= limit) {
++            const auto oldest = std::min_element(entries.begin(), entries.end(),
++                [](const auto& a, const auto& b) { return a.second.at < b.second.at; });
++            entries.erase(oldest);
++        }
++        entries[address] = Entry{Row{address, clean}, now};
++        lastSeen = now;
++    }
++    std::vector<Row> Snapshot(uint64_t now) {
++        std::vector<Row> rows;
++        for (auto it = entries.begin(); it != entries.end();) {
++            if (now < it->second.at || now - it->second.at >= ttl) it = entries.erase(it);
++            else { rows.push_back(it->second.row); ++it; }
++        }
++        return rows;
++    }
++};
++
+ } // namespace masterlist
+ } // namespace frostmod
 diff --git a/src/version.h b/src/version.h
-index 35d3533..3bb22bd 100644
+index 35d3533..2c49053 100644
 --- a/src/version.h
 +++ b/src/version.h
 @@ -2,4 +2,4 @@
@@ -147,4 +195,4 @@ index 35d3533..3bb22bd 100644
  // frostmod.exe console.
  #pragma once
 -#define FROSTMOD_VERSION "0.52.0"
-+#define FROSTMOD_VERSION "0.52.0-mxbm.1"
++#define FROSTMOD_VERSION "0.52.0-mxbm.2"

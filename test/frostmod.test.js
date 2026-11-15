@@ -31,7 +31,7 @@ test('bundled discovery plugin verifies and installs offline, preserves an exist
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-discovery-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const result = await frost.installBundled(path.join(__dirname, '..'), root);
-  assert.equal(result.version, 'v0.52.0-mxbm.1');
+  assert.equal(result.version, 'v0.52.0-mxbm.2');
   assert.equal((await fs.stat(frost.flagPath(root))).size, 0);
   assert.match(await fs.readFile(path.join(root, 'plugins/frostmod-licenses/LICENSE.txt'), 'utf8'), /Frostn1/);
   await fs.writeFile(frost.pluginPath(root), 'user-installed newer plugin');
