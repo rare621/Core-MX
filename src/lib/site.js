@@ -49,20 +49,21 @@ function contentKindFromInstructions(text) {
 function listingRequirements(html, description = '', listing = {}) {
   const $ = cheerio.load(html);
   const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
+  const declared = dependenciesFromHtml($('#dependencies, .mod-dependencies, [data-mod-dependencies]').map((_, el) => $.html(el)).get().join('\n'));
   $('nav,header,footer,aside,script,style,.related,.comments-area,.stuff,.quick-links').remove();
   const content = description || $('.nd-desc, .mod-description, [data-mod-description]').first().html() || $('.entry-content').first().html() ||
     (!/<(?:html|body)\b/i.test(html) ? $('body').html() : '') || '';
   const combined = content + '\n' + instructions;
   const needsModelNotice = needsCustomModel(combined);
-  const dependencies = dependenciesFromHtml(combined);
+  const dependencies = declared.length ? declared : dependenciesFromHtml(combined);
   // A lot of creators state the required base model in plain text instead of
   // linking it. Treat that as a dependency too, so an add-on can be checked
   // against the user's installed models before it is downloaded.
-  for (const dependency of dependenciesFromText(combined)) {
+  for (const dependency of declared.length ? [] : dependenciesFromText(combined)) {
     if (!dependencies.some((d) => d.label.toLowerCase() === dependency.label.toLowerCase() ||
       /hoodie/i.test(dependency.label) && /hoodie/i.test(d.label + d.url))) dependencies.push(dependency);
   }
-  if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
+  if (!declared.length && needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
   // Generic body-paint instructions do not identify a compatible custom body.
   // Flag this uncertainty without guessing a creator or marking stock kits as add-ons.
   if (!dependencies.length && /hoodie/i.test(listing.title || '') &&
@@ -379,7 +380,7 @@ async function post(id) {
     if (!url) return;
     const flag = $el.find('.container-flag').text().replace(/\s+/g, ' ').trim();
     const fname = $el.find('.filename').text().replace(/\s+/g, ' ').trim();
-    downloads.push({ url, flag, label: fname && fname !== url ? fname : '', host: hostOf(url) });
+    downloads.push({ url, flag, label: fname && fname !== url ? fname : '', host: hostOf(url), shop: shopProduct(url)?.shop || null });
   });
   const betas = $('p.betas').first().text().replace(/\s+/g, ' ').trim();
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
@@ -392,19 +393,21 @@ async function post(id) {
 
 function dependenciesFromHtml(html) {
   const $ = cheerio.load(html), found = [];
-  const add = (url, label) => {
+  const add = (url, label, declared = false) => {
     try {
       const u = new URL(url.replace(/[).,;]+$/, ''));
       if (!/^https?:$/.test(u.protocol) || !/^(?:www\.)?(?:mxb-mods\.com|mxbikes-shop\.com|shop\.mxb-hub\.com)$/.test(u.hostname) || /\.(webp|png|jpe?g|gif|psd)$/i.test(u.pathname)) return;
       if (/\/(?:category|categories|tag|tags|product-category|author|creators?|page|my-account|login|register|wp-login\.php)(?:\/|$)/i.test(u.pathname) || u.pathname === '/') return;
-      if (!found.some((x) => x.url === u.href)) found.push({ label: (label || decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || 'Required model').replace(/-/g, ' ')).slice(0, 100), url: u.href });
+      u.hash = ''; u.search = ''; u.pathname = u.pathname.replace(/\/?$/, '/');
+      if (!found.some((x) => x.url === u.href)) found.push({ label: (label || decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || 'Required model').replace(/-/g, ' ')).slice(0, 100), url: u.href, ...(declared ? { declared: true } : {}) });
     } catch {}
   };
   $('a[href]').each((_, a) => {
     const url = $(a).attr('href'), label = $(a).text().trim();
+    const declared = $(a).closest('#dependencies, .mod-dependencies, [data-mod-dependencies]').length > 0;
     const context = $(a).closest('p,li,div').text();
-    if (!label || !/require|need|model|link to|based on|made.*for/i.test(context)) return;
-    add(url, label);
+    if (!label || !(declared || /require|need|model|link to|based on|made.*for/i.test(context) || shopProduct(url) && /paints?(?:\s+pack)?\s+for/i.test(context))) return;
+    add(url, label, declared);
   });
   $('p,li').each((_, el) => {
     const context = $(el).text();
@@ -435,4 +438,15 @@ async function postBySlug(slug) {
   return json[0] ? post(json[0].id) : null;
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements };
+function shopProduct(address) {
+  try {
+    const u = new URL(address);
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    const shop = host === 'mxbikes-shop.com' && /^\/downloads\/[^/]+\/?$/.test(u.pathname) ? 'mxbs'
+      : host === 'shop.mxb-hub.com' && /^\/product\/[^/]+\/?$/.test(u.pathname) ? 'hub' : null;
+    return shop ? { shop, link: `https://${host}${u.pathname.replace(/\/?$/, '/')}` } : null;
+  } catch { return null; }
+}
+
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct };

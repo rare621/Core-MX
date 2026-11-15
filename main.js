@@ -73,6 +73,13 @@ function modelTerms(value) {
   return [...new Set(String(value || '').toLowerCase().replace(/([a-z])([0-9])/g, '$1 $2').replace(/([0-9])([a-z])/g, '$1 $2').split(/[^a-z0-9]+/).filter((term) => (term.length >= 3 || /^\d+$/.test(term)) && !ignored.has(term)))];
 }
 function matchingModel(names, dependency) {
+  if (dependency.declared) {
+    const declaredTerms = modelTerms(dependency.label);
+    if (declaredTerms.length >= 3 && declaredTerms.some((term) => !/^\d+$/.test(term))) {
+      const exact = names.find((name) => { const terms = new Set(modelTerms(name)); return declaredTerms.every((term) => terms.has(term)); });
+      if (exact) return exact;
+    }
+  }
   const wanted = modelTerms(`${dependency.label || ''} ${dependency.url || ''}`);
   if (wanted.length < 2) return null;
   return names.find((name) => {
@@ -95,7 +102,7 @@ async function dependencyStatus(dependency, records, catalog) {
   if (dependency.unidentified) return { installed: null };
   const key = dependencyKey(dependency.url);
   const recorded = key && records.some((record) => dependencyKey(record.link) === key && record.files.some((file) => /\.(pkz|edf)$/i.test(file) && !file.startsWith('game:') && fs.existsSync(path.join(modsDir(), file))));
-  const kind = dependencyModelKind(dependency);
+  const kind = dependency.kind || dependencyModelKind(dependency);
   if (recorded) return { installed: true, kind };
   if (!kind || !catalog) return { installed: null, kind };
   const name = matchingModel(catalog[({ helmets: 'helmet', protections: 'protection' })[kind] || kind] || [], dependency);
@@ -133,6 +140,7 @@ const graphicsManager = graphicsPackages.create({
 let lastScan = { items: [] };
 const jobs = new Map();
 const browserJobs = new Map(); // webContents id -> job id
+const shopDownloads = new Map(); // product page behind a shop popup's downloads
 
 // ---------- paths ----------
 function userDir() { return store.get('settings').gameUserDir; }
@@ -672,7 +680,8 @@ function setupDownloadsSession() {
     let j = jobId && jobs.get(jobId);
     if (!j) {
       // A download started in a shop/sign-in window (e.g. right after buying): install it too.
-      j = newJob({ title: item.getFilename().replace(/\.[^.]+$/, ''), url: null });
+      const product = wc && shopDownloads.get(wc.id);
+      j = newJob({ title: item.getFilename().replace(/\.[^.]+$/, ''), url: null, ...(product ? { link: product.link, shopKey: product.link } : {}) });
       send('jobs:started', j.id);
     }
     const dir = path.join(j.stageDir, 'dl');
@@ -836,7 +845,8 @@ function registerIpc() {
     }
     const records = Object.values(store.get('installs'));
     const paintListing = post.categories.some((c) => [127, 126, 135, 35, 309].includes(c)) && !post.categories.some((c) => [313, 343, 344, 365].includes(c));
-    const dependencyCandidates = post.dependencies.filter((d) => /model|helmet|boot|hoodie|protection|rider|instinct/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url));
+    const dependencyCandidates = post.dependencies.filter((d) => d.declared || /model|helmet|boot|hoodie|protection|rider|instinct/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url))
+      .map((d) => d.declared && !dependencyModelKind(d) ? { ...d, kind: ({ helmetPaint: 'helmets', bootPaint: 'boots', protectionPaint: 'protections' })[post.installKind] } : d);
     if (paintListing || post.needsModelNotice || dependencyCandidates.some((d) => d.inferred)) {
       const catalog = await gearAssets.catalog({ modsDir: modsDir(), rider: 'default_mx', stockPkz: stockRiderPkz() }, {}).catch(() => null);
       post.modelDependencies = await Promise.all(dependencyCandidates.map(async (d) => ({ ...d, ...await dependencyStatus(d, records, catalog) })));
@@ -847,6 +857,9 @@ function registerIpc() {
       const matching = models.find((m) => m.textures.includes('abhoodie'));
       const unverified = models.some((m) => m.unverified && /^(?:ab[ _-]?hoodie|rider[ _-]+hoodie[ _-]+abdesigns)$/i.test(m.name));
       post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: matching ? true : unverified ? null : false, matchedName: matching?.name }];
+    }
+    for (const download of post.downloads) if (download.shop) {
+      download.modelInstalled = post.modelDependencies?.some((d) => dependencyKey(d.url) === dependencyKey(download.url) && d.installed === true) || false;
     }
     return post;
   });
@@ -985,11 +998,17 @@ function registerIpc() {
   handle('shops:signIn', (id) => signInWindow(id));
   handle('shops:open', (id, url) => {
     const shop = shops.SHOPS[id];
-    if (!shop || !String(url).startsWith(shop.url)) return;
+    let address; try { address = new URL(url); } catch { return; }
+    if (!shop || !/^https?:$/.test(address.protocol) || address.hostname.replace(/^www\./, '') !== new URL(shop.url).hostname) return;
+    address.hostname = new URL(shop.url).hostname; address.protocol = 'https:';
     const win = new BrowserWindow({ width: 1200, height: 860, parent: mainWin, autoHideMenuBar: true, backgroundColor: '#111', title: shop.name, webPreferences: { partition: 'persist:mxb', contextIsolation: true, sandbox: true } });
+    const contentsId = win.webContents.id;
+    const rememberProduct = (page) => { const product = site.shopProduct(page); if (product?.shop === id) shopDownloads.set(contentsId, product); };
+    rememberProduct(address.href);
+    win.webContents.on('did-navigate', (_event, page) => rememberProduct(page));
     win.webContents.setWindowOpenHandler(({ url: u }) => { win.loadURL(u); return { action: 'deny' }; });
-    win.on('closed', () => send('shops:changed', { id }));
-    win.loadURL(url);
+    win.on('closed', () => { shopDownloads.delete(contentsId); send('shops:changed', { id }); });
+    win.loadURL(address.href);
   });
 
   // ---- game settings, quick start, launching / joining ----
