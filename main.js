@@ -402,11 +402,11 @@ function jobView(j) {
     createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.equipCandidates, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
-      paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable,
+      paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable, bikeCompatibility: p.bikeCompatibility,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
       requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget, requiresModelWarning: p.requiresModelWarning,
-      entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size })),
+      entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size, bikeMatch: e.bikeMatch })),
       totalEntries: p.entries.length,
     },
   };
@@ -487,7 +487,7 @@ async function doInstall(j, opts) {
     if (j.relocateKey) {
       if (await profile.isGameRunning()) throw new Error('Close MX Bikes before moving installed files');
       if (j.plan.root === 'game') throw new Error('Graphics packages stay in the game folder; manage them in Graphics');
-      if (!j.plan.installable || j.plan.needsPaintTarget || j.plan.needsRiderTarget) throw new Error('Choose a destination first');
+      if (!j.plan.installable || j.plan.needsPaintTarget || j.plan.needsRiderTarget || j.plan.bikeCompatibility?.blocked) throw new Error('Choose a compatible destination first');
       const changes = await recentInstalls.relocatePlan(j.plan, modsDir(), j.abort.signal);
       store.update('installs', (all) => Object.fromEntries(Object.entries(all).map(([key, rec]) => [key, { ...rec, ...(key === j.relocateKey ? { kind: j.plan.kind, installOptions: j.plan.options } : {}), files: rec.files.map((rel) => changes.get(rel) || rel) }])));
       for (const other of jobs.values()) if (other.installed) other.installed = other.installed.map((rel) => changes.get(rel) || rel);

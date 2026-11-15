@@ -175,6 +175,9 @@ test('bike liveries never request a model warning, even when selecting a bike or
   assert.equal(choose.kind, 'bikePaint'); assert.equal(choose.requiresModelWarning, false);
   assert.equal(choose.needsPaintTarget, true);
   assert.ok(!choose.warnings.some((w) => /could not be inspected|required model/i.test(w)));
+  const missing = installer.plan(files, context, { kind: 'bikePaint', paintTarget: 'FixtureBike' });
+  assert.equal(missing.entries[0].dest, null); assert.equal(missing.bikeCompatibility.blocked, true);
+  await fs.mkdir(path.join(mods, 'bikes')); await fs.writeFile(path.join(mods, 'bikes/FixtureBike.pkz'), 'model');
   const selected = installer.plan(files, context, { kind: 'bikePaint', paintTarget: 'FixtureBike' });
   assert.equal(selected.requiresModelWarning, false);
   assert.equal(selected.entries[0].dest, 'bikes/FixtureBike/paints/Fixture.pnt');
