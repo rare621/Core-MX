@@ -2498,7 +2498,7 @@ document.addEventListener('click', async (e) => {
       if (!(await confirmBox('Delete mod', `Move <b>${esc(it.title)}</b> (${fmtSize(it.size)}) to the Recycle Bin?${riderNote}<div class="mono muted" style="margin-top:8px">${it.parts.map(esc).join('<br>')}</div>`, 'Move to Recycle Bin', true))) return;
       const r = await api.invoke('library:trash', [it.id]);
       if (r.errors.length) toast(esc(r.errors.join('\n')), 'err', 6000); else toast('Moved to Recycle Bin', 'ok');
-      closeDrawer(); await rescan(true);
+      closeDrawer(); await refreshInstalledIds(); await rescan(true);
       break;
     }
     case 'find-image': openImagePicker(it); break;
@@ -2509,6 +2509,7 @@ document.addEventListener('click', async (e) => {
     case 'paint-delete': {
       if (!(await confirmBox('Delete paint', 'Move this paint to the Recycle Bin?', 'Delete', true))) return;
       await api.invoke('library:trashFile', a.dataset.path);
+      await refreshInstalledIds();
       a.closest('.paint').remove();
       rescan(true);
       break;
@@ -2529,7 +2530,7 @@ document.addEventListener('click', async (e) => {
       if (!(await confirmBox('Delete mods', `Move <b>${sel.length}</b> mod(s) (${fmtSize(size)}) to the Recycle Bin?${sel.some((i) => i.group === 'rider' && i.sub === 'riders') ? '<p>Deleting a rider model includes its gear folder. Profiles using it switch to the default rider, with backups.</p>' : ''}`, 'Move to Recycle Bin', true))) return;
       const r = await api.invoke('library:trash', [...S.selected]);
       if (r.errors.length) toast(esc(r.errors.slice(0, 4).join('<br>')), 'err', 7000); else toast(`Moved ${sel.length} mod(s) to the Recycle Bin`, 'ok');
-      S.selected.clear(); await rescan(true);
+      S.selected.clear(); await refreshInstalledIds(); await rescan(true);
       break;
     }
     case 'rider-pick-bike': {

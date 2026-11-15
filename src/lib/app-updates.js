@@ -6,6 +6,7 @@ function create({ updater, packaged, version, notify = () => {} }) {
   }
   let state = { phase: packaged ? 'idle' : 'development', current: version }, checking = null, started = false, progressAt = 0;
   const publish = (patch) => { state = { ...state, ...patch }; notify({ ...state }); };
+  const errorMessage = (error, fallback) => error?.code === 'DRIVE_UPDATE' ? error.message : fallback;
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
   updater.allowPrerelease = false;
@@ -19,12 +20,12 @@ function create({ updater, packaged, version, notify = () => {} }) {
     progressAt = Date.now(); publish({ phase: 'downloading', percent: Math.min(100, Math.max(0, Number(info.percent) || 0)) });
   });
   updater.on('update-downloaded', (info) => publish({ phase: 'ready', version: info.version, percent: 100, error: '' }));
-  updater.on('error', () => { if (state.phase !== 'ready') publish({ phase: 'error', error: 'Could not download the Google Drive update. Check your connection, folder sharing, and try again.' }); });
+  updater.on('error', (error) => { if (state.phase !== 'ready') publish({ phase: 'error', error: errorMessage(error, 'Could not download the Google Drive update. Check your connection, folder sharing, and try again.') }); });
   async function check() {
     if (!packaged || state.phase === 'ready' || state.phase === 'downloading') return { ...state };
     if (!checking) checking = Promise.resolve().then(async () => {
       try { const result = await updater.checkForUpdates(); result?.downloadPromise?.catch(() => {}); }
-      catch { if (state.phase !== 'ready') publish({ phase: 'error', error: 'Could not check Google Drive for updates. The shared folder needs latest.yml and its matching setup EXE.' }); }
+      catch (error) { if (state.phase !== 'ready') publish({ phase: 'error', error: errorMessage(error, 'Could not check Google Drive for updates. Check your connection and try again.') }); }
       return { ...state };
     }).finally(() => { checking = null; });
     return checking;

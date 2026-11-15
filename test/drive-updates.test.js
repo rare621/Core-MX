@@ -21,5 +21,18 @@ test('Drive file records parse as data and missing manifests report actionable e
   const html = `AF_initDataCallback({key: 'ds:3', data:[["manifest12345",null,"latest.yml"]], sideChannel: {}});`;
   assert.equal(folderFiles(html).get('latest.yml'), 'manifest12345');
   const provider = new DriveProvider({ fetch: async () => new Response('<html>Empty folder</html>') }, {}, {});
-  await assert.rejects(provider.getLatestVersion(), /Upload latest.yml/);
+  await assert.rejects(provider.getLatestVersion(), /Could not find latest.yml/);
+});
+
+test('Drive decorated file labels retain the exact visible filenames and detect duplicate copies', () => {
+  const row = (id, name, type) => `<div data-id="${id}" role="row" aria-label="${name} ${type} Shared"><div role="gridcell"><div data-id="${id}" data-tooltip="${name} ${type}"><span><strong>${name}</strong></span></div><span>Shared</span></div><div role="gridcell">12:00</div></div>`;
+  const html = row('manifest12345', 'latest.yml', 'Binary') + row('installer12345', name, 'Unknown');
+  assert.deepEqual([...folderFiles(html)], [['manifest12345', 'latest.yml'], ['installer12345', name]].map(([id, n]) => [n, id]));
+  assert.throws(() => folderFiles(html + row('othermanifest12345', 'latest.yml', 'Binary')), /Duplicate latest.yml/);
+  assert.equal(folderFiles(row('wrongmanifest12345', 'latest.yml.txt', 'Text')).size, 0);
+});
+
+test('Drive reports the exact missing installer instead of blaming valid manifest uploads', async () => {
+  const provider = new DriveProvider({ fetch: async (url) => new Response(url.includes('/folders/') ? '<div data-id="manifest12345">latest.yml</div>' : `version: 1.0.10\nfiles:\n  - url: ${name}\n    sha512: ${Buffer.alloc(64).toString('base64')}`) }, {}, {});
+  await assert.rejects(provider.getLatestVersion(), (error) => error.code === 'DRIVE_UPDATE' && error.message.includes(name));
 });
