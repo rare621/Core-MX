@@ -57,7 +57,7 @@ THE SOFTWARE.
 ```
 # Bundled FrostMod
 
-The Windows setup includes FrostMod v0.52.0-mxbm.1 `frostmod.dlo`, built from v0.52.0 with the included automatic-discovery patch, from https://github.com/Frostn1/frostmod/releases/tag/v0.52.0 for server-address discovery. Copyright (c) 2026 Frostn1, MIT licensed. It also includes MinHook (BSD 2-Clause) and its disassembler notices.
+The Windows setup includes FrostMod v0.52.0-mxbm.2 `frostmod.dlo`, built from v0.52.0 with the included automatic-discovery patch, from https://github.com/Frostn1/frostmod/releases/tag/v0.52.0 for server-address discovery. Copyright (c) 2026 Frostn1, MIT licensed. It also includes MinHook (BSD 2-Clause) and its disassembler notices.
 
 The full notices are distributed in `resources/plugin/frostmod/LICENSE.txt`, `MINHOOK-LICENSE.txt` and `NOTICE.txt`, and copied next to the game plugin under `plugins/frostmod-licenses` when installed. Source, pinned release metadata and license texts are in this repository's `plugin/frostmod` directory. FrostMod includes additional live-reload and gameplay/overlay features; Settings → Plugins can remove or reinstall it.
 

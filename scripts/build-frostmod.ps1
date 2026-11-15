@@ -36,5 +36,9 @@ try {
   if ($LASTEXITCODE) { throw 'Masterlist test compilation failed' }
   & ./.tmp/frostmod-masterlist-test.exe
   if ($LASTEXITCODE) { throw 'Masterlist tests failed' }
+  zig c++ -target x86_64-windows-gnu -std=c++17 -I "$source/src" plugin/frostmod/masterlist-cache.test.cpp -o .tmp/frostmod-cache-test.exe
+  if ($LASTEXITCODE) { throw 'Cache test compilation failed' }
+  & ./.tmp/frostmod-cache-test.exe
+  if ($LASTEXITCODE) { throw 'Cache tests failed' }
   Write-Output 'Built .tmp/frostmod-fixed.dll. Verify before updating the bundled binary and release.json.'
 } finally { Pop-Location }
