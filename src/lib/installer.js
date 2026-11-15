@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { isBodyPaint } = require('./paint-compat');
 const layout = require('./rider-layout');
+const bikeLivery = require('./bike-livery');
 
 const TRACK_TYPES = ['motocross', 'supercross', 'enduro', 'supermoto'];
 const TOP = new Set(['bikes', 'tracks', 'rider', 'tyres', 'misc']);
@@ -159,13 +160,21 @@ function plan(files, ctx, opts = {}) {
   const lowerSet = new Set(files.map((f) => f.rel.toLowerCase()));
   const pkzBases = new Set(files.filter((f) => /\.pkz$/i.test(f.rel)).map((f) => path.posix.basename(f.rel).slice(0, -4).toLowerCase()));
   const installedInBase = new Set(listModels(modsDir, base).map((n) => n.toLowerCase()));
+  const bikeRequirements = new Map(files.filter((f) => /\.pnt$/i.test(f.rel) && (paintModelsDir === 'bikes' || /(?:^|\/)bikes\/[^/]+\/paints\//i.test(f.rel))).map((f) => [f.rel, bikeLivery.requirement(f.rel, ctx.title)]));
+  const bikeModels = bikeRequirements.size ? [...new Set([...listModels(modsDir, 'bikes'), ...files.filter((f) => /(?:^|\/)bikes\/[^/]+\.pkz$/i.test(f.rel) || base === 'bikes' && /\.pkz$/i.test(f.rel)).map((f) => path.posix.basename(f.rel).slice(0, -4))])] : [];
+  const bikeMatches = new Map([...bikeRequirements].map(([rel, req]) => [rel, bikeLivery.resolve(req, bikeModels, opts.paintTarget)]));
+  const bikeTargetChecks = bikeModels.map((name) => ({ name, status: [...bikeRequirements.values()].some((req) => bikeLivery.compare(req, name) === 'incompatible') ? 'incompatible' : [...bikeRequirements.values()].every((req) => bikeLivery.compare(req, name) === 'match') ? 'match' : 'unknown' }));
 
   let paintModels = [];
   let paintGuess = null;
   if (paintModelsDir) {
     const incoming = [...new Set(files.filter((f) => /\.pkz$/i.test(f.rel)).map((f) => path.posix.basename(f.rel).slice(0, -4)))];
     paintModels = [...new Set([...listModels(modsDir, paintModelsDir), ...incoming])].sort((a, b) => a.localeCompare(b));
-    if (!o.paintTarget && !opts.requirePaintTarget) {
+    if (paintModelsDir === 'bikes') {
+      const targets = [...bikeMatches.values()].map((result) => result.target);
+      if (!o.paintTarget && !opts.requirePaintTarget && targets.length && targets.every((target) => target && target === targets[0])) { o.paintTarget = targets[0]; paintGuess = 'bike-match'; }
+      else if (o.paintTarget) paintGuess = 'user';
+    } else if (!o.paintTarget && !opts.requirePaintTarget) {
       // model named in archive paths?
       const pathHit = files.map((f) => f.rel.split('/').find((s) => paintModels.some((m) => m.toLowerCase() === s.toLowerCase()))).find(Boolean);
       if (pathHit) { o.paintTarget = paintModels.find((m) => m.toLowerCase() === pathHit.toLowerCase()); paintGuess = 'path'; }
@@ -198,7 +207,7 @@ function plan(files, ctx, opts = {}) {
     const lsegs = segs.map((s) => s.toLowerCase());
     const fname = segs[segs.length - 1];
     let dest = null, how = '';
-    if (ctx.relocate && /\.pnt$/i.test(fname)) {
+    if (ctx.relocate && /\.pnt$/i.test(fname) && !bikeRequirements.has(f.rel)) {
       if (paintModelsDir && o.paintTarget) dest = `${paintModelsDir}/${o.paintTarget}/${kind === 'goggles' ? 'goggles' : 'paints'}/${fname}`;
       else if (loosePntDir && !needsRiderTarget) dest = `${loosePntDir}/${fname}`;
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status: !dest ? 'unresolved' : fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new', how: 'relocate' });
@@ -270,6 +279,10 @@ function plan(files, ctx, opts = {}) {
       dest = needsRiderTarget ? null : `${modern ? `rider/riders/${riderTarget || 'default_mx'}` : 'rider'}/paints/${fname}`;
       how = 'paint-content';
     }
+    // Validate every livery independently, including structured archives and
+    // mixed packs. A global selector must not redirect a different bike's paint.
+    const bikeMatch = bikeMatches.get(f.rel);
+    if (bikeMatch) { dest = bikeMatch.target ? `bikes/${bikeMatch.target}/paints/${fname}` : null; how = 'bike-match'; }
     let status;
     if (dest) {
       dest = dest.replace(/\/+/g, '/').replace(/^\//, '');
@@ -281,12 +294,15 @@ function plan(files, ctx, opts = {}) {
       status = !dest ? 'unresolved' : fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new';
     } else if (DOC_EXT.test(fname)) status = 'skip';
     else status = 'unresolved';
-    entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how });
+    entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how, ...(bikeMatch ? { bikeMatch } : {}) });
   }
 
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
   const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => /\.pnt$/i.test(e.rel) && !e.dest);
   const installable = entries.filter((e) => e.dest).length;
+  const bikeBlocked = [...bikeMatches.values()].some((result) => ['missing', 'incompatible'].includes(result.status));
+  const bikeResults = [...bikeMatches.values()];
+  const bikeCompatibility = { targets: bikeTargetChecks, messages: [...new Set(bikeResults.map((result) => result.message))], blocked: bikeBlocked, multiple: bikeResults.every((result) => result.target) && new Set(bikeResults.map((result) => result.target)).size > 1 };
   const warnings = [];
   const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
   if (!installable && !awaitingTarget) warnings.push('Choose the content type or destination folder to continue.');
@@ -312,7 +328,7 @@ function plan(files, ctx, opts = {}) {
 
   // Everything placed by the archive's own folder structure counts as certain even without a known type.
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
-  const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title'
+  const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title' && !bikeBlocked && [...bikeMatches.values()].every((result) => result.status === 'match')
     && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && (kind === 'bikePaint' || !ctx.unreadablePaints?.length)
     && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
@@ -321,7 +337,7 @@ function plan(files, ctx, opts = {}) {
     kind, kindLabel: mixedGear ? 'Mixed rider gear paints' : K.label, autoKind, base: gameRoot ? 'MX Bikes install folder' : base, root: gameRoot ? 'game' : 'mods',
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
-    options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess,
+    options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess, bikeCompatibility,
     entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
     requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included && !r.installed) || needsPaintTarget || needsRiderTarget || riderModels.some((r) => r.name === riderTarget && r.unverified)), dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
@@ -330,6 +346,7 @@ function plan(files, ctx, opts = {}) {
 }
 
 async function apply(p, rootDir, { signal, rollbackDir } = {}) {
+  if (p.bikeCompatibility?.blocked) throw new Error(p.bikeCompatibility.messages.join(' '));
   const written = [], journal = [];
   let temporary = null, keepRecovery = false;
   const check = () => { if (signal?.aborted) throw new Error('Cancelled'); };
