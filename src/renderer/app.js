@@ -986,9 +986,15 @@ function isMxbModelPage(url) {
 }
 function dependencyButton(d, label) {
   const internal = isMxbModelPage(d.url);
-  return `<button class="btn btn-sm" ${internal ? 'data-install-required' : 'data-open'}="${esc(d.url)}">${icon(internal ? 'download' : 'external')}${esc(label || (internal ? 'Install model' : 'Open model page'))}</button>`;
+  const shop = dependencyShop(d.url);
+  return `<button class="btn btn-sm" ${internal || shop ? 'data-install-required' : 'data-open'}="${esc(d.url)}">${icon(internal ? 'download' : shop ? 'cart' : 'external')}${esc(label || (internal ? 'Install model' : shop ? 'Buy / download model' : 'Open model page'))}</button>`;
+}
+function dependencyShop(url) {
+  try { const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase(); return host === 'mxbikes-shop.com' ? 'mxbs' : host === 'shop.mxb-hub.com' ? 'hub' : null; } catch { return null; }
 }
 async function installDependency(url) {
+  const shop = dependencyShop(url);
+  if (shop) return api.invoke('shops:open', shop, url);
   if (!isMxbModelPage(url)) return api.invoke('open:external', url);
   const summary = await api.invoke('site:resolvePost', url);
   return openPost(summary, { install: true });
@@ -1019,12 +1025,13 @@ async function openPost(summary, { install = false } = {}) {
   const hasUpdate = installed && updateFor(p.id, p.modified);
   const dls = p.downloads.length ? p.downloads.map((d, i) => {
     const mode = p.paid ? 'browser' : hostMode(d);
-    const action = p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
+    const action = d.shop ? (d.modelInstalled ? `<span class="have">${icon('check')}Model installed</span>` : `<button class="btn btn-primary" data-install-required="${esc(d.url)}">${icon('cart')}Buy / download</button>`)
+      : p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
       : installed ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
       : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}Install</button>`;
     return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
-      <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
+      <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${d.shop ? 'Shop' : mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
       ${action}<div class="download-inline" data-download-progress hidden></div></div>`;
   }).join('') : `<div class="notice warn">${icon('alert')}<div>No download links found on this page. Open it on the site to check.</div></div>`;
 
@@ -1059,7 +1066,7 @@ async function openPost(summary, { install = false } = {}) {
   openPostRefreshers.add(refresh);
   draw();
   if (install && !p.paid && !haveMod({ postId: p.id, title: p.title, urls: p.downloads.map((d) => d.url) })) {
-    if (p.downloads.length === 1) startDownload(p, p.downloads[0]).catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
+    if (p.downloads.length === 1) (p.downloads[0].shop ? installDependency(p.downloads[0].url) : startDownload(p, p.downloads[0])).catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
     else if (p.downloads.length > 1) toast('Choose which model download to install below.', 'info', 4000);
   }
   $('.modal-body', m).addEventListener('click', async (e) => {

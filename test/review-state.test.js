@@ -37,10 +37,13 @@ test('Ranked keeps addresses tied to the correct lobby and ignores invalid IPs',
   assert.equal(result.lobbies[1].track, 'Track B');
 });
 
-test('free dependency actions use the in-app installer while store links remain external', () => {
+test('free dependency actions use the in-app installer and store links use the shop popup', () => {
   const context = vm.createContext({ URL, esc: (s) => s, icon: () => '' });
   vm.runInContext(app.slice(app.indexOf('function isMxbModelPage('), app.indexOf('async function installDependency(')), context);
   assert.match(context.dependencyButton({ url: 'https://mxb-mods.com/helmet/' }), /data-install-required/);
-  assert.match(context.dependencyButton({ url: 'https://mxbikes-shop.com/downloads/hoodie/' }), /data-open/);
+  assert.match(context.dependencyButton({ url: 'https://mxbikes-shop.com/downloads/hoodie/' }), /data-install-required/);
+  assert.equal(context.dependencyShop('https://mxbikes-shop.com/downloads/hoodie/'), 'mxbs');
+  assert.equal(context.dependencyShop('https://shop.mxb-hub.com/product/helmet/'), 'hub');
+  assert.equal(context.dependencyShop('https://mxbikes-shop.com.attacker.test/downloads/hoodie/'), null);
   assert.equal(context.isMxbModelPage('https://mxb-mods.com.attacker.test/helmet/'), false);
 });

@@ -47,6 +47,13 @@ test('plain-text base model requirements are retained for add-on checks', () => 
   const module = { exports: {} };
   const context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch: async () => new Response('') } } : require(name) });
   vm.runInContext(fs.readFileSync(sitePath, 'utf8'), context);
+  const explicit = module.exports.listingRequirements('<html><body><nav><a href="https://mxb-mods.com/category/boots/">Boot Models</a></nav><section class="nd-desc"><p>Requires a different guessed model.</p></section><div class="stuff"><div id="dependencies"><h3>Mod dependencies</h3><p>This mod by insane is needed:</p><a href="https://mxb-mods.com/2021-6d-atr-2/"><div><p><b>2021 6D ATR-2</b></p></div></a></div></div></body></html>');
+  assert.deepEqual(JSON.parse(JSON.stringify(explicit.dependencies)), [{ label: '2021 6D ATR-2', url: 'https://mxb-mods.com/2021-6d-atr-2/', declared: true }]);
+  const shopDependency = module.exports.listingRequirements('<p>Replica FXR 4 Paint Pack for the LC Creations <a href="https://mxbikes-shop.com/downloads/6-helmet/">6D Helmet</a>, available on the shop.</p>');
+  assert.equal(shopDependency.dependencies[0].url, 'https://mxbikes-shop.com/downloads/6-helmet/');
+  assert.equal(module.exports.shopProduct(shopDependency.dependencies[0].url).shop, 'mxbs');
+  assert.equal(module.exports.shopProduct('https://mxbikes-shop.com.attacker.test/downloads/6-helmet/'), null);
+  assert.equal(module.exports.shopProduct('https://mxbikes-shop.com/checkout/'), null);
   const result = module.exports.listingRequirements('<p>2026 Fox MXoN Boot Pack made to work on the Aeffertz Fox Instinct 2.0 FREE on MXBMods.</p>');
   assert.equal(result.needsModelNotice, true);
   assert.deepEqual(JSON.parse(JSON.stringify(result.dependencies)), [{ label: 'Aeffertz Fox Instinct 2.0 FREE', url: '', inferred: true }]);
