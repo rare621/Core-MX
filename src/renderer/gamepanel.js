@@ -22,7 +22,15 @@ function renderGame(c) {
 async function renderRide(c) {
   const st = await api.invoke('game:settings').catch(() => null);
   const info = (st && st.values.info) || {};
-  if (!S.ride.bike) S.ride.bike = (st && st.values.currentBike) || info.bikeid || null;
+  const R = S.rider;
+  if (!riderDirty()) {
+    R.profile = st?.profile || R.profile;
+    R.bike = st?.values.currentBike || info.bikeid || R.bike;
+  }
+  S.ride.bike = R.bike || null;
+  let loadout = null;
+  if (R.profile && R.bike) loadout = await api.invoke('rider:loadout', R.profile, R.bike, R.drafts[riderDraftKey()] || {}).catch(() => null);
+  if (S.view !== 'game' || S.gameTab !== 'ride') return;
   if (!S.ride.track) S.ride.track = (st && st.values.ui && st.values.ui.race_track) || null;
   const bike = S.ride.bike && bikeItem(S.ride.bike);
   const track = S.ride.track && S.items.find((i) => i.group === 'tracks' && i.name === S.ride.track);
@@ -37,6 +45,7 @@ async function renderRide(c) {
         ${tile('bike', bike, bike ? bike.title : (S.ride.bike || 'Choose a bike'), bike ? [bike.cc && (bike.cc === 'Electric' ? 'Electric' : `${bike.cc}cc`), bike.bikeClass].filter(Boolean).join(' · ') : '')}
         ${tile('track', track, track ? track.title : (S.ride.track || 'Choose a track'), track ? (track.info && track.info.author) || track.label : '')}
       </div>
+      <div class="set-card ride-outfit"><h3>Rider setup${riderDirty() ? ' · Preview changes' : ''}</h3><p>Uses the same bike, livery, tyres and outfit as the Rider page.</p>${loadout ? `<div class="tags">${loadout.slots.map((slot) => { const value = loadout.current[slot.id]; const choice = (loadout.options[slot.id] || []).find((o) => (typeof o === 'string' ? o : o.value) === value); return `<span class="tag">${esc(slot.label)}: ${esc(typeof choice === 'object' ? choice.label : choice || value || (slot.id === 'protection' ? 'None' : 'Default'))}</span>`; }).join('')}</div>` : ''}<button class="btn btn-sm" data-ride-outfit>${icon('rider')}Customize rider & bike</button></div>
       <div class="ride-go">
         <button class="btn btn-primary ride-btn" data-act="ride-go">${icon('play')}Ride</button>
         <div class="muted" style="font-size:13px">Sets this bike and track in your game, then opens MX Bikes — choose <b>Single Player</b> and your bike and track are already set. Your outfit for this bike comes from the <b>Rider</b> tab.</div>
@@ -83,12 +92,13 @@ function gridPicker({ title, items, current, meta, onPick, facets = [] }) {
 }
 
 document.addEventListener('click', async (e) => {
+  if (e.target.closest('[data-ride-outfit]')) { S.riderTab = 'outfit'; go('rider'); return; }
   const p = e.target.closest('[data-ride-pick]');
   if (p) {
     if (p.dataset.ridePick === 'bike') {
       bikePicker({
         current: S.ride.bike,
-        onPick: (v) => { S.ride.bike = v; renderRide($('#content')); },
+        onPick: (v) => { S.rider.bike = v; S.rider.selectionDirty = true; S.rider.bikes = null; renderRide($('#content')); },
       });
     } else {
       gridPicker({
@@ -102,12 +112,20 @@ document.addEventListener('click', async (e) => {
   }
   const go2 = e.target.closest('[data-act="ride-go"]');
   if (go2) {
+    if (go2.disabled) return;
+    go2.disabled = true;
     try {
       if (!S.ride.bike || !S.ride.track) { toast('Choose a bike and a track first', 'err'); return; }
+      if (riderDirty()) {
+        if (!await confirmBox('Apply rider setup & ride?', 'Apply the bike, livery, tyres and outfit currently previewed on the Rider page, then launch MX Bikes?', 'Apply & ride')) return;
+        await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {});
+        delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.bikes = null;
+      }
       await api.invoke('game:quickStart', { bike: S.ride.bike, track: S.ride.track });
       await api.invoke('game:launch');
       toast('Starting MX Bikes — choose <b>Single Player</b> — your bike and track are already set', 'ok', 4500);
     } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+    finally { if (go2.isConnected) go2.disabled = false; }
   }
 });
 

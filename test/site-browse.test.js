@@ -58,4 +58,11 @@ test('plain-text base model requirements are retained for add-on checks', () => 
   assert.equal(listing.needsModelNotice, true);
   assert.equal(listing.dependencies.length, 1);
   assert.match(listing.dependencies[0].url, /rider-hoodie-abdesigns/);
+  const generic = '<div id="instructions">Put PNT files in mods/rider/riders/*rider model*/paints.</div>';
+  const unknown = module.exports.listingRequirements(generic, '', { title: 'Hoodie crt', categories: [35] });
+  assert.equal(unknown.needsModelNotice, true);
+  assert.equal(unknown.dependencies[0].unidentified, true);
+  assert.equal(unknown.dependencies[0].url, '');
+  const stock = module.exports.listingRequirements(generic, '', { title: 'Royal Polar', categories: [35] });
+  assert.equal(stock.needsModelNotice, false);
 });

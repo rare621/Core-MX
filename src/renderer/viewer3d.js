@@ -123,6 +123,7 @@ export function renderThumbnail(model, framing = 'full', size = 320) {
       radius = model.handCloseup ? size3.length() / 2 : Math.max(0.105, size3.y * 0.065); yaw = 1.0; pitch = 0.1;
     }
     if (framing === 'feet') { yaw = 0.75; pitch = 0.25; }
+    yaw += model.previewYaw || 0;
     const dist = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * 1.12;
     camera.position.set(target.x + dist * Math.sin(yaw) * Math.cos(pitch), target.y + dist * Math.sin(pitch), target.z + dist * Math.cos(yaw) * Math.cos(pitch));
     camera.lookAt(target);
@@ -183,6 +184,7 @@ function create(el) {
 
   const view = { yaw: 0.55, pitch: 0.12, dist: 3.1, target: new THREE.Vector3(0, 0.95, 0) };
   const home = { ...view, target: view.target.clone() };
+  let facingYaw = 0;
   let auto = true;
   function place() {
     const cp = Math.cos(view.pitch);
@@ -227,13 +229,12 @@ function create(el) {
   }
   const ro = new ResizeObserver(resize); ro.observe(el); resize();
 
-  let raf = 0, last = performance.now(), alive = true;
-  function frame(now) {
+  let raf = 0, alive = true;
+  function frame() {
     if (!alive) return;
     const modal = document.querySelector('.modal-wrap:last-child');
-    if (!el.isConnected || document.hidden || modal && !modal.contains(el)) { last = now; raf = requestAnimationFrame(frame); return; }
-    const dt = Math.min(0.05, (now - last) / 1000); last = now;
-    if (auto && !drag) view.yaw += dt * 0.25;
+    if (!el.isConnected || document.hidden || modal && !modal.contains(el)) { raf = requestAnimationFrame(frame); return; }
+    // Start at a stable front three-quarter angle; drag to inspect other sides.
     place();
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
@@ -249,6 +250,10 @@ function create(el) {
 
   function load(model) {
     clear();
+    const nextFacing = model.previewYaw || 0;
+    view.yaw += nextFacing - facingYaw;
+    facingYaw = nextFacing;
+    home.yaw = 0.55 + facingYaw;
     addModel(model, root, owned);
     fit();
     resize(); place(); renderer.render(scene, camera); // draw now, don't wait for the next frame

@@ -129,6 +129,7 @@ test('custom hoodie paints require a compatible rider instead of silently instal
   context.riderModels.push({ name: 'AB-HOODIE', textures: ['rider', 'abhoodie'] });
   const compatible = installer.plan(files, context);
   assert.equal(compatible.needsRiderTarget, false);
+  assert.equal(compatible.requiresModelWarning, false);
   assert.equal(compatible.entries[0].dest, 'rider/riders/AB-HOODIE/paints/Essentials.pnt');
   const dir = path.join(mods, 'rider', 'riders', 'default_mx', 'paints'); await fs.mkdir(dir, { recursive: true }); await fs.writeFile(path.join(dir, 'Essentials.pnt'), bytes);
   await assert.rejects(paintCompat.validateRiderPaint({ modsDir: mods, current: { rider: 'default_mx', suitPaint: 'Essentials' } }), /matching rider model/);

@@ -60,6 +60,18 @@ function tempFile(t, buf) {
   const file = path.join(dir, 'asset.pkz'); fs.writeFileSync(file, buf);
   return file;
 }
+test('compatibility inspection recognizes an owned bound rider without opening its archive to sync', async (t) => {
+  const file = tempFile(t, Buffer.from('unused'));
+  const root = path.dirname(file), dir = path.join(root, 'rider', 'riders');
+  fs.mkdirSync(dir, { recursive: true });
+  const pkg = path.join(dir, 'Owned Hoodie.pkz');
+  fs.writeFileSync(pkg, sealed(zip({ 'rider.edf': sealed(require('./helpers/assets').model('hoodie'), false, true) }), true, true));
+  const models = await require('../src/lib/paint-compat').riderModels(root);
+  const hoodie = models.find((m) => m.name === 'Owned Hoodie');
+  assert.ok(hoodie);
+  assert.notEqual(hoodie.unverified, true);
+  await assert.rejects(openArchive(pkg), /Account-bound/);
+});
 
 test('owned local previews read bound packages without enabling ordinary readers or their caches', async (t) => {
   const original = Buffer.from('local preview fixture');

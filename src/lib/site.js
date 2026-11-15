@@ -46,7 +46,7 @@ function contentKindFromInstructions(text) {
   if (/(?:^|\s)mods\/bikes\b/.test(value)) return 'liveries';
   return null;
 }
-function listingRequirements(html, description = '') {
+function listingRequirements(html, description = '', listing = {}) {
   const $ = cheerio.load(html);
   const instructions = $('#instructions, .mod-instructions, [data-mod-instructions]').first().html() || '';
   $('nav,header,footer,aside,script,style,.related,.comments-area,.stuff,.quick-links').remove();
@@ -63,6 +63,13 @@ function listingRequirements(html, description = '') {
       /hoodie/i.test(dependency.label) && /hoodie/i.test(d.label + d.url))) dependencies.push(dependency);
   }
   if (needsModelNotice && /ab\s*designs?[^.!?]{0,40}hoodie|ab.?hoodie/i.test(decode(combined)) && !dependencies.some((d) => /rider-hoodie-abdesigns/.test(d.url))) dependencies.push({ label: 'ABDesigns Hoodie rider model', url: 'https://mxb-mods.com/rider-hoodie-abdesigns/' });
+  // Generic body-paint instructions do not identify a compatible custom body.
+  // Flag this uncertainty without guessing a creator or marking stock kits as add-ons.
+  if (!dependencies.length && /hoodie/i.test(listing.title || '') &&
+      /rider\/riders\/\*rider model\*\/paints/i.test(decode(combined).replace(/\\/g, '/')) &&
+      (listing.categories || []).some((id) => [35, 52, 309].includes(Number(id)))) {
+    dependencies.push({ label: 'Matching hoodie rider model', url: '', unidentified: true });
+  }
   return { needsModelNotice: needsModelNotice || dependencies.length > 0, dependencies, instructions, contentKind: contentKindFromInstructions(combined) };
 }
 const requirementCache = new Map();
@@ -77,7 +84,7 @@ async function enrichListing(post, signal) {
     try {
       const response = await net.fetch(post.link, { headers: { 'User-Agent': UA }, signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
       if (!response.ok) throw new Error('Instructions unavailable');
-      const details = listingRequirements(await response.text());
+      const details = listingRequirements(await response.text(), '', post);
       const result = { needsModelNotice: details.needsModelNotice, contentKind: details.contentKind, ...(details.needsModelNotice ? { gearKind: 'paint' } : {}) };
       requirementCache.set(post.id, { result, at: Date.now() });
       while (requirementCache.size > 200) requirementCache.delete(requirementCache.keys().next().value);
@@ -378,7 +385,7 @@ async function post(id) {
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
-  const details = listingRequirements(html, p.content && p.content.rendered || '');
+  const details = listingRequirements(html, p.content && p.content.rendered || '', summary);
   const needsModelNotice = !summary.categories.includes(365) && details.needsModelNotice;
   return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description: description + (details.instructions ? '<h3>Mod instructions</h3>' + sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : ''), downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
 }

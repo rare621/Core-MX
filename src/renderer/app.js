@@ -980,16 +980,41 @@ document.addEventListener('click', (e) => {
   }
 });
 
-async function openPost(summary) {
+const openPostRefreshers = new Set();
+function isMxbModelPage(url) {
+  try { const u = new URL(url); return /^https?:$/.test(u.protocol) && /^(www\.)?mxb-mods\.com$/i.test(u.hostname) && /^\/[^/]+\/?$/.test(u.pathname); } catch { return false; }
+}
+function dependencyButton(d, label) {
+  const internal = isMxbModelPage(d.url);
+  return `<button class="btn btn-sm" ${internal ? 'data-install-required' : 'data-open'}="${esc(d.url)}">${icon(internal ? 'download' : 'external')}${esc(label || (internal ? 'Install model' : 'Open model page'))}</button>`;
+}
+async function installDependency(url) {
+  if (!isMxbModelPage(url)) return api.invoke('open:external', url);
+  const summary = await api.invoke('site:resolvePost', url);
+  return openPost(summary, { install: true });
+}
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-install-required]');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try { await installDependency(button.dataset.installRequired); }
+  catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+  finally { if (button.isConnected) button.disabled = false; }
+});
+async function openPost(summary, { install = false } = {}) {
+  let refresh;
   const m = modal({
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
     foot: `<span class="grow">mxb-mods.com</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
+    onClose: () => openPostRefreshers.delete(refresh),
   });
   let p;
   try { p = await api.invoke('site:post', summary.id); }
   catch (e) { $('.post > div:last-child', m).innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(e.message)}</div></div>`; return; }
   if (!m.isConnected) return;
+  const draw = () => {
+  const scroll = $('.modal-body', m).scrollTop;
   const installed = haveMod({ postId: p.id, title: p.title, urls: p.downloads.map((d) => d.url) });
   const hasUpdate = installed && updateFor(p.id, p.modified);
   const dls = p.downloads.length ? p.downloads.map((d, i) => {
@@ -1014,16 +1039,29 @@ async function openPost(summary) {
       <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
-      ${(p.modelDependencies || []).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>Base model: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''} — this add-on is ready to use.` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}Open model page</button>` : `<button class="btn btn-sm" data-find-required="${i}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
+      ${(p.modelDependencies || []).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>Base model: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''} — this add-on is ready to use.` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : d.unidentified ? 'The listing does not identify the model. Download for review to check the files before installing.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? dependencyButton(d) : `<button class="btn btn-sm" data-find-required="${i}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
       ${p.needsModelNotice && needsModelWarning(p) && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
-      ${(p.dependencies || []).some((d) => d.url) ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.filter((d) => d.url).map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('')}</div></div>` : ''}
-      ${installed ? `<button class="btn btn-danger btn-sm" data-post-remove>${icon('trash')}Delete installed files</button>` : ''}
+      ${(p.dependencies || []).some((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)) ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.filter((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)).map((d) => dependencyButton(d, d.label)).join('')}</div></div>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
       ${p.paid ? `<div class="notice warn">${icon('alert')}<div>This is a paid mod — buy it from the creator's store, then drag the downloaded file onto this window to install it.</div></div>` : ''}
-      <div class="section-title">Downloads</div>
+      <div class="post-download-heading"><div class="section-title">Downloads</div>${installed ? `<button class="btn btn-danger btn-sm" data-post-remove>${icon('trash')}Delete installed files</button>` : ''}</div>
       <div class="dl-list">${dls}</div>
     </div></div>`;
   refreshInlineDownloads(m);
+  $('.modal-body', m).scrollTop = scroll;
+  };
+  let revision = 0;
+  refresh = async () => {
+    const request = ++revision;
+    const fresh = await api.invoke('site:post', summary.id);
+    if (m.isConnected && request === revision) { p = fresh; draw(); }
+  };
+  openPostRefreshers.add(refresh);
+  draw();
+  if (install && !p.paid && !haveMod({ postId: p.id, title: p.title, urls: p.downloads.map((d) => d.url) })) {
+    if (p.downloads.length === 1) startDownload(p, p.downloads[0]).catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
+    else if (p.downloads.length > 1) toast('Choose which model download to install below.', 'info', 4000);
+  }
   $('.modal-body', m).addEventListener('click', async (e) => {
     const findRequired = e.target.closest('[data-find-required]');
     if (findRequired) {
@@ -1075,18 +1113,20 @@ function warnBeforePaintInstall(p, staged = false) {
   return new Promise((resolve) => {
     let settled = false;
     const dependencies = p.modelDependencies || [];
-    const page = dependencies.find((d) => d.installed !== true && d.url)?.url || dependencies.find((d) => d.url)?.url || p.link;
+    const modelPage = dependencies.find((d) => d.installed !== true && d.url)?.url || dependencies.find((d) => d.url)?.url;
+    const page = modelPage || p.link;
+    const unidentified = dependencies.some((d) => d.unidentified);
     const missing = dependencies.some((d) => d.installed === false) || !!p.missingModelTextures?.length;
     const m = modal({
       title: missing ? 'Required model is missing' : 'Check the required model first', size: 'sm',
-      body: `<div class="notice warn">${icon('alert')}<div><b>This download does not supply the required model.</b><p>Paint files change how an existing model looks. They will not work properly until you have the matching model installed.</p></div></div>${dependencies.length ? `<div class="friend-gear-list">${dependencies.map((d) => `<div class="friend-gear-row"><div><b>${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing' : 'Not yet verified'}</div></div></div>`).join('')}</div>` : '<p class="muted">The matching model has not been confirmed. Check the creator’s instructions before continuing.</p>'}<p class="muted">${staged ? 'Check the chosen model and destinations in the install review before continuing.' : 'Continue downloads the files for review. It will not install them automatically.'}</p>`,
-      foot: `<button class="btn" data-close>Cancel</button>${page ? `<button class="btn" data-required-page>${icon('external')}${dependencies.some((d) => d.url) ? 'Open model page' : 'Read instructions'}</button>` : ''}<button class="btn btn-primary" data-continue-paint>${staged ? 'Install reviewed files' : 'Continue to review'}</button>`,
+      body: `<div class="notice warn">${icon('alert')}<div><b>${unidentified ? 'The compatible rider model is not named on this listing.' : 'These paints need a matching model.'}</b><p>Paint files change how an existing model looks. They will not work properly until you have the matching model installed.</p></div></div>${dependencies.length ? `<div class="friend-gear-list">${dependencies.map((d) => `<div class="friend-gear-row"><div><b>${esc(d.label)}</b><div>${d.installed ? 'Installed' : d.installed === false ? 'Missing' : 'Not yet verified'}</div></div></div>`).join('')}</div>` : '<p class="muted">The matching model has not been confirmed. Check the creator’s instructions before continuing.</p>'}<p class="muted">${staged ? 'The files are downloaded but not installed. Choose the matching model in the next step.' : 'Continue downloads the files for review. It will not install them automatically.'}</p>`,
+      foot: `<button class="btn" data-close>Cancel</button>${page ? `<button class="btn" data-required-page>${icon(isMxbModelPage(page) ? 'download' : 'external')}${isMxbModelPage(page) && dependencies.some((d) => d.url) ? 'Install model' : dependencies.some((d) => d.url) ? 'Open model page' : 'Read instructions'}</button>` : ''}<button class="btn btn-primary" data-continue-paint>Continue to review</button>`,
       onClose: () => { if (!settled) resolve(false); },
     });
     const finish = (choice) => { settled = true; m.close(); resolve(choice); };
     $('[data-continue-paint]', m).addEventListener('click', () => finish(true));
     $('[data-required-page]', m)?.addEventListener('click', async () => {
-      try { await api.invoke('open:external', page); finish(false); }
+      try { finish(false); if (modelPage) await installDependency(page); else await api.invoke('open:external', page); }
       catch (e) { toast(esc(cleanErr(e)), 'err', 5000); }
     });
   });
@@ -1133,7 +1173,11 @@ function refreshInlineDownloads(root = document) {
     if (!job || job.filesDeleted || job.status === 'done') {
       box.hidden = true; box.replaceChildren();
       const button = $('[data-dl], [data-own-file]', row);
-      if (button && job?.filesDeleted) { button.disabled = false; button.textContent = 'Install'; delete button.dataset.inlineReview; }
+      if (button && job) {
+        button.disabled = !job.filesDeleted;
+        button.textContent = job.filesDeleted ? 'Install' : 'Installed';
+        delete button.dataset.inlineReview;
+      }
       continue;
     }
     box.hidden = false; box.innerHTML = inlineDownloadHtml(job);
@@ -1258,9 +1302,19 @@ const UPLOAD_TYPES = [
   { id: 'custom', label: 'Something else', icon: 'folder', hint: 'choose the folder' },
 ];
 let reviewOpen = null;
-function openReview(id) {
+const reviewWarnings = new Set(), pendingReviews = new Set();
+async function openReview(id) {
   const j = S.jobs.get(id);
-  if (!j || !j.plan) return;
+  if (!j || !j.plan || pendingReviews.has(id)) return;
+  if (j.plan.requiresModelWarning && !j.modelWarningAccepted && !reviewWarnings.has(id)) {
+    pendingReviews.add(id);
+    try {
+      const dependencies = (j.plan.requiredModels || []).filter((r) => !r.included).map((r) => ({ label: r.name, installed: r.installed }));
+      if (!await warnBeforePaintInstall({ link: j.link || j.url, modelDependencies: dependencies }, true)) return;
+      reviewWarnings.add(id);
+    } finally { pendingReviews.delete(id); }
+    if (S.jobs.get(id)?.status !== 'review') return;
+  }
   if (reviewOpen) reviewOpen.close();
   let opts = { ...(j.plan.options || {}), kind: j.plan.kind };
   let paintModelInfo = j.plan.paintModelInfo || [];
@@ -1313,11 +1367,11 @@ function openReview(id) {
     }
     if (p.kind === 'custom') ctl.push(`<div class="field"><label>Folder inside mods/</label><input class="input" data-opt="customDir" list="dirsList" placeholder="e.g. bikes/MY_BIKE/paints" value="${esc(p.options.customDir || '')}"><datalist id="dirsList">${['bikes', 'tracks/motocross', 'tracks/supercross', 'rider/paints', 'rider/helmets', 'rider/boots', 'rider/gloves', 'rider/protections', 'tyres', 'misc'].map((d) => `<option value="${d}">`).join('')}</datalist></div>`);
     const missingModels = (p.requiredModels || []).filter((r) => r.kind !== 'bike' && !r.installed && !r.included);
-    const dependencyHelp = missingModels.map((r) => `<button class="btn btn-sm" data-act="paint-get" data-name="${esc(r.name)}">${icon('search')}Find ${esc(r.name)} model</button>`).join('') + (p.dependencies || []).map((d) => `<button class="btn btn-sm" data-open="${esc(d.url)}">${icon('external')}${esc(d.label)}</button>`).join('');
+    const dependencyHelp = missingModels.map((r) => `<button class="btn btn-sm" data-act="paint-get" data-name="${esc(r.name)}">${icon('search')}Find ${esc(r.name)} model</button>`).join('') + (p.dependencies || []).filter((d) => d.url).map((d) => dependencyButton(d, d.label)).join('');
     const warn = p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
     const waiting = p.needsPaintTarget || p.needsRiderTarget;
     const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
-    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Add this livery to <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the bike this livery was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}${warn}
+    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Add this livery to <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the bike this livery was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
       <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
     $('#rvSummary', m).textContent = waiting ? `Choose ${bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
     $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : bikeTarget ? 'Install livery' : 'Install'}`;
@@ -1363,10 +1417,6 @@ function openReview(id) {
     const current = S.jobs.get(id) || j;
     const p = current.plan;
     e.target.disabled = true;
-    if (p.kind !== 'bikePaint' && p.requiresModelWarning && !current.modelWarningAccepted) {
-      const dependencies = (p.requiredModels || []).filter((r) => !r.included).map((r) => ({ label: r.name, installed: r.installed, url: p.dependencies?.[0]?.url }));
-      if (!await warnBeforePaintInstall({ title: current.title, link: current.link || current.url, modelDependencies: dependencies }, true)) { e.target.disabled = false; return; }
-    }
     try { await api.invoke('jobs:install', id, opts); m.close(); }
     catch (error) { e.target.disabled = false; toast(esc(cleanErr(error)), 'err', 5000); }
   });
@@ -2651,6 +2701,7 @@ api.on('jobs:review', (id) => {
 const onLibraryChanged = debounce(async () => {
   S.gearThumbs.clear();
   await refreshInstalledIds(); await rescan(true);
+  for (const refresh of openPostRefreshers) refresh().catch(() => {});
   if (typeof checkFriendTrackJoin === 'function') checkFriendTrackJoin().catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
   if (S.view === 'rider') { S.rider.bikes = null; renderRider($('#content')); }
   S.packs = null;

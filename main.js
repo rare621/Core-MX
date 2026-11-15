@@ -92,6 +92,7 @@ function dependencySearchScore(candidate, dependency) {
   return hits * 10 - Math.max(0, available.size - hits);
 }
 async function dependencyStatus(dependency, records, catalog) {
+  if (dependency.unidentified) return { installed: null };
   const key = dependencyKey(dependency.url);
   const recorded = key && records.some((record) => dependencyKey(record.link) === key && record.files.some((file) => /\.(pkz|edf)$/i.test(file) && !file.startsWith('game:') && fs.existsSync(path.join(modsDir(), file))));
   const kind = dependencyModelKind(dependency);
@@ -230,7 +231,7 @@ function decorate(items) {
     it.favorite = favs.has(it.key.toLowerCase());
     for (const part of it.parts) {
       const p = part.toLowerCase();
-      const hit = idx.find(([f]) => f === p || (f.startsWith(p + '/') && !/\/(paints|goggles)\//.test(f.slice(p.length))));
+      const hit = idx.find(([f]) => require('./src/lib/install-image').ownsInstallFile(p, f));
       if (hit) { it.post = { id: hit[1].postId, title: hit[1].title, link: hit[1].link, image: hit[1].image, installedAt: hit[1].installedAt }; break; }
     }
     it.hasImage = it.customImage || !!(it.post && it.post.image) || !!(it.info && it.info.pic);
@@ -602,7 +603,15 @@ async function rankedServerDetails(name) {
   // The details view starts after the site's BACK button
   const start = raw.lines.findIndex((l) => l === 'BACK');
   const lines = start >= 0 ? raw.lines.slice(start + 1) : raw.lines;
-  return { name, ...ranked.parseDetails(lines, raw.imgs), lines: lines.slice(0, 200) };
+  const details = ranked.parseDetails(lines, raw.imgs);
+  const addresses = await knownServerAddresses();
+  for (const lobby of details.lobbies) {
+    if (lobby.address) continue;
+    const fullName = `MXB-Ranked.com | ${name} | ${lobby.region} | #${lobby.id}`;
+    const matches = [...(addresses.get(serverNameKey(fullName)) || [])];
+    if (matches.length === 1) lobby.address = matches[0];
+  }
+  return { name, ...details, lines: lines.slice(0, 200) };
 }
 
 // Opens the shop's own login page in an app window; resolves once the site sets its signed-in cookie.
@@ -776,6 +785,13 @@ function registerIpc() {
     const seen = new Set();
     return { posts: posts.filter((p) => !seen.has(p.image) && seen.add(p.image)) };
   });
+  handle('site:resolvePost', async (address) => {
+    const url = new URL(address);
+    if (!/^https?:$/.test(url.protocol) || !/^(www\.)?mxb-mods\.com$/i.test(url.hostname) || !/^\/[^/]+\/?$/.test(url.pathname)) throw new Error('This is not an MXB Mods listing.');
+    const post = await site.postBySlug(url.pathname.replace(/^\/|\/$/g, ''));
+    if (!post) throw new Error('That model listing could not be found.');
+    return post;
+  });
   handle('site:post', async (id) => {
     const post = await site.post(id), rec = store.get('installs')[id];
     post.installKind = installer.kindFromCategories(post.categories);
@@ -788,9 +804,9 @@ function registerIpc() {
         try { files.push({ rel, abs, size: (await fsp.stat(abs)).size }); } catch {}
       }
       const info = await paintCompat.inspect(files, modsDir(), stockRiderPkz(), rec.kind || 'custom');
+      if (info.dependencies.length) post.dependencies = [...post.dependencies.filter((d) => !d.unidentified && !info.dependencies.some((x) => dependencyKey(x.url) === dependencyKey(d.url))), ...info.dependencies];
       if (info.bodyPaintTextures.length && !info.riderModels.some((m) => info.bodyPaintTextures.every((t) => m.textures.includes(t)))) {
         post.missingModelTextures = info.bodyPaintTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t));
-        post.dependencies = [...post.dependencies, ...info.dependencies];
       }
     }
     const records = Object.values(store.get('installs'));
@@ -803,7 +819,9 @@ function registerIpc() {
     const hoodie = post.dependencies.find((d) => /\/rider-hoodie-abdesigns\/?(?:[?#].*)?$/.test(d.url));
     if (hoodie) {
       const models = await paintCompat.riderModels(modsDir(), stockRiderPkz());
-      post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: models.some((m) => m.textures.includes('abhoodie') || m.unverified && /^(?:ab[ _-]?hoodie|rider[ _-]+hoodie[ _-]+abdesigns)$/i.test(m.name)) }];
+      const matching = models.find((m) => m.textures.includes('abhoodie'));
+      const unverified = models.some((m) => m.unverified && /^(?:ab[ _-]?hoodie|rider[ _-]+hoodie[ _-]+abdesigns)$/i.test(m.name));
+      post.modelDependencies = [...(post.modelDependencies || []).filter((d) => d.url !== hoodie.url), { label: 'AB-HOODIE rider model', url: hoodie.url, installed: matching ? true : unverified ? null : false, matchedName: matching?.name }];
     }
     return post;
   });
@@ -958,7 +976,7 @@ function registerIpc() {
   handle('game:join', async (address) => {
     const addr = game.validAddress(address);
     if (!addr) throw new Error('That address should look like 123.45.67.89:54210');
-    if (await profile.isGameRunning()) throw new Error('MX Bikes is already running — leave your current session (or close the game) first.');
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes, then click Join again to connect directly to this server.');
     const exe = paths.findGameExe(store.get('settings').gameInstallDir);
     if (!exe) throw new Error("Couldn't find mxbikes.exe — set the game install folder in Settings.");
     game.launch(exe, ['-directconnect', addr]);
