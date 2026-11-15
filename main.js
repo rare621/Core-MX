@@ -497,13 +497,12 @@ async function doInstall(j, opts) {
       const written = (await installer.apply(j.plan, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir(), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') })).map((w) => (j.plan.root === 'game' ? 'game:' : '') + w);
       if (!written.length) throw new Error('Nothing was installed: no file had a destination.');
       recordInstall(j, written);
-      j.installed = written; j.equipCandidates = equipInstalled.choices(written);
+      j.installed = written; j.equipCandidates = await equipInstalled.choicesFromFiles(written, modsDir());
       j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}`; emitJob(j);
       return written;
     };
     const written = j.plan.root === 'game' ? await graphicsManager.install(j.plan, installKey(j, j.plan.entries.filter((e) => e.dest).map((e) => 'game:' + e.dest)), applyAndRecord) : await applyAndRecord();
     j.installed = written;
-    j.equipCandidates = equipInstalled.choices(written);
     if (j.sourceArchive) {
       const entries = j.plan.entries.filter((e) => written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest));
       j.sourceVerified = !j.plan.counts.unresolved && await filesMatch(entries, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir());
@@ -936,34 +935,39 @@ function registerIpc() {
     return jobView(j);
   });
   handle('jobs:install', (id, opts) => { const j = jobs.get(id); if (j && j.files) doInstall(j, opts || j.opts || {}); });
-  async function equipContext(id, index) {
+  async function equipContext(id, index, target = {}) {
     const j = jobs.get(id), choice = j?.equipCandidates?.[index];
     if (!choice || j.status !== 'done') throw new Error('This installed item is no longer available');
-    const name = (await profile.listProfiles(profUserDir())).last; if (!name) throw new Error('Create an MX Bikes rider profile first');
-    const prof = await profile.readProfile(profUserDir(), name), bike = choice.bike || profile.currentBike(prof);
+    const name = target.profile || (await profile.listProfiles(profUserDir())).last; if (!name) throw new Error('Create an MX Bikes rider profile first');
+    const prof = await profile.readProfile(profUserDir(), name), bike = choice.bike || target.bike || profile.currentBike(prof);
     if (!bike) throw new Error('Choose your current bike in the Rider page first');
-    const lo = await profile.loadout(modsDir(), prof, bike, stockRiderPkz());
+    if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
+    const base = draftProfile(prof, bike, target.changes || {});
+    const lo = await profile.loadout(modsDir(), base, bike, stockRiderPkz());
     const changes = equipInstalled.changesFor(choice, lo.current);
-    const preview = structuredClone(prof);
-    for (const [slot, value] of Object.entries(changes)) {
-      const desc = profile.SLOTS.find((s) => s.id === slot); if (!desc) continue;
-      const key = desc.key === 'protectionModel' ? changes.protection || lo.current.protection : bike;
-      preview.sections[desc.section] ||= { values: {} }; preview.sections[desc.section].values[key] = value;
-    }
+    const preview = draftProfile(base, bike, changes);
     const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
-    return { name, bike, choice, lo: next, current: lo.current };
+    if (choice.slot === 'bikePaint') {
+      const bikeDir = await profile.findBikeDir(modsDir(), bike);
+      const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
+      next.options.bikePaint = [...new Set([...next.options.bikePaint, ...packed])];
+    }
+    const preferred = equipInstalled.availablePaints(choice, next.options[choice.slot] || []);
+    if (choice.paints.length && !preferred.length) throw new Error('The installed paints could not be found for this model. Refresh your Rider library and check the install location.');
+    next.current[choice.slot] = preferred[0] || '';
+    return { name, bike, choice, lo: next, current: lo.current, preferred };
   }
-  handle('jobs:equipContext', async (id, index) => { const ctx = await equipContext(id, index); return { profile: ctx.name, bike: ctx.bike, slot: ctx.choice.slot, lo: ctx.lo, preferred: ctx.choice.paints }; });
-  handle('jobs:equip', async (id, index, paint = '') => {
-    const ctx = await equipContext(id, index);
+  handle('jobs:equipContext', async (id, index, target) => { const ctx = await equipContext(id, index, target); return { profile: ctx.name, bike: ctx.bike, slot: ctx.choice.slot, lo: ctx.lo, preferred: ctx.preferred }; });
+  handle('jobs:equip', async (id, index, paint = '', target) => {
+    const ctx = await equipContext(id, index, target);
     if (paint !== '' && !(ctx.lo.options[ctx.choice.slot] || []).includes(paint)) throw new Error('Choose an installed paint for this item');
-    if (paint !== '' && ctx.choice.paints?.length && !ctx.choice.paints.includes(paint)) throw new Error('Choose a paint from this download');
+    if (paint !== '' && !ctx.preferred.includes(paint)) throw new Error('Choose a paint from this download');
     const changes = equipInstalled.changesFor(ctx.choice, ctx.current, paint);
     const next = { ...ctx.current, ...changes };
     if (changes.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next });
-    const values = Object.entries(changes).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.protection : ctx.bike, value]; });
-    if (ctx.choice.kind === 'bike') { const cls = await installedBikeCategory(ctx.bike); values.push(['info', 'bikeid', ctx.bike]); if (cls) values.push(['info', 'class', cls], ['category', cls, ctx.bike]); }
-    await profile.writeValues(profUserDir(), ctx.name, values); online?.syncPaints().catch(() => {}); return true;
+    // Equipping from Get Mods edits the same preview as the Rider page.
+    // Only Rider's Apply action writes/activates a game profile.
+    return { profile: ctx.name, bike: ctx.bike, changes };
   });
   handle('jobs:cancel', (id) => {
     const j = jobs.get(id);

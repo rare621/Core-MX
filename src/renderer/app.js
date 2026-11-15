@@ -1485,7 +1485,7 @@ async function renderRider(c) {
   }
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Rider</h2><span class="sub">Pick your gear for each bike</span></div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
   try {
-    if (!R.profile) { const p = await api.invoke('rider:profiles'); if (request !== R.renderRequest) return; R.profiles = p.profiles; R.profile = p.last; R.activeProfile = p.last; }
+    if (!R.profile || !R.profiles.length) { const p = await api.invoke('rider:profiles'); if (request !== R.renderRequest) return; R.profiles = p.profiles; R.profile ||= p.last; R.activeProfile = p.last; }
     if (!R.profile) {
       c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('rider')}<h3>No game profile yet</h3><div>Start MX Bikes once to create your rider profile, then come back here.</div></div></div></div>`;
       return;
@@ -1759,11 +1759,11 @@ function gearPicker(slot, opts, lo, config = {}) {
   const brands = [...new Set(opts.map(optionBrand))].sort();
   let closed = false, running = false, io = null;
   const queue = [];
-  let pendingSelection = current;
+  let pendingSelection = opts.some((o) => o.value === current) ? current : (opts[0]?.value || '');
   const m = modal({
     title: esc(config.title || slot.label), size: 'lg',
     body: `<div class="search wide" style="margin-bottom:14px">${icon('search')}<input id="gpQ" placeholder="Search ${opts.length} options…" spellcheck="false"></div><div class="picker-filters"><label><span>Brand</span><select id="gpBrand"><option value="">All brands</option>${brands.map((b) => `<option>${esc(b)}</option>`).join('')}</select></label></div><div class="picker-count" id="gearCount"></div><div id="gpGrid" class="gear-grid"></div>`,
-    foot: config.confirmSelection ? '<button class="btn" data-close>Skip</button><button class="btn btn-primary" data-confirm-gear>Equip selected</button>' : slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
+    foot: config.confirmSelection ? '<button class="btn" data-close>Skip</button><button class="btn btn-primary" data-confirm-gear>Use in preview</button>' : slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
     onClose: () => { closed = true; if (io) io.disconnect(); if (!config.picked) config.onClose?.(); },
   });
   $('[data-confirm-gear]', m)?.addEventListener('click', () => { config.picked = true; m.close(); config.onPick(pendingSelection); });
@@ -2624,6 +2624,23 @@ document.addEventListener('keydown', (e) => {
 api.on('rider:changed', async ({ active }) => { const profiles = await api.invoke('rider:profiles'); S.rider.profiles = profiles.profiles; if (!riderDirty()) { S.rider.profile = active; S.rider.bike = null; S.rider.saveState = ''; } S.rider.bikes = null; S.gearThumbs.clear(); if (S.view === 'rider') renderRider($('#content')); });
 const equipQueue = [];
 let equipPromptBusy = false;
+function installedEquipTarget(choice) {
+  const R = S.rider, bike = choice.bike || R.bike;
+  return { profile: R.profile, bike, changes: { ...(R.drafts[`${R.profile}|${bike}`] || {}) } };
+}
+async function equipInstalledPreview(job, index, paint, target) {
+  // Merge into the chosen profile/bike draft, including edits made before
+  // installing. Do not write a separate saved-game outfit behind the preview.
+  const result = await api.invoke('jobs:equip', job.id, index, paint, target);
+  const R = S.rider, key = `${result.profile}|${result.bike}`;
+  R.drafts[key] = { ...(R.drafts[key] || {}), ...result.changes };
+  if (R.profile !== result.profile || R.bike !== result.bike) R.selectionDirty = true;
+  R.profile = result.profile; R.bike = result.bike;
+  R.lo = null; R.bikes = null; R.saveState = 'Preview changes';
+  S.gearThumbs.clear();
+  if (S.view === 'rider') await renderRider($('#content'));
+  toast('Added to your Rider preview. Click Apply on the Rider page to save it to the game.', 'ok', 6000);
+}
 async function offerEquip(job) {
   equipQueue.push(job); if (equipPromptBusy) return; equipPromptBusy = true;
   try {
@@ -2638,14 +2655,14 @@ async function offerEquip(job) {
         const preview = (index) => {
           if (!previews.has(index)) previews.set(index, (async () => {
             if (choices[index].slot === 'bikePaint' || !window.RiderViewer) return j.image;
-            const ctx = await api.invoke('jobs:equipContext', j.id, index), paint = ctx.preferred?.[0] || '';
+            const ctx = await api.invoke('jobs:equipContext', j.id, index, installedEquipTarget(choices[index])), paint = ctx.preferred?.[0] || '';
             const model = await api.invoke('rider:thumbModel', ctx.profile, ctx.bike, ctx.slot, paint, ctx.lo.current);
             if (model.unreadable?.includes(ctx.slot)) return j.image;
             return await window.RiderViewer.thumb(model, GEAR_FRAMING[ctx.slot] || 'full', 320);
           })().catch(() => j.image));
           return previews.get(index);
         };
-        const m = modal({ title: 'Installed — use it now?', size: 'sm', body: `<p><b>${esc(j.title)}</b> is installed.</p><p class="muted">Equip it now, customize its paints, or leave it for later. Close MX Bikes before applying.</p><button class="equip-item-btn" data-equip-choice><span class="equip-item-preview"></span><span><b>${esc(choices[0].label)}</b><small>${esc(label(choices[0]))}</small></span>${icon('chevron')}</button>`, foot: '<button class="btn" data-close>Skip</button><button class="btn" data-equip-installed="customize">Customize first</button><button class="btn btn-primary" data-equip-installed="now">Equip now</button>', onClose: () => { if (!choosing) resolve(); } });
+        const m = modal({ title: 'Installed — use it now?', size: 'sm', body: `<p><b>${esc(j.title)}</b> is installed.</p><p class="muted">Add it to the rider you’re customizing, choose its paints, or skip for now. Use Apply on the Rider page to save your preview to the game.</p><button class="equip-item-btn" data-equip-choice><span class="equip-item-preview"></span><span><b>${esc(choices[0].label)}</b><small>${esc(label(choices[0]))}</small></span>${icon('chevron')}</button>`, foot: '<button class="btn" data-close>Skip</button><button class="btn" data-equip-installed="customize">Customize first</button><button class="btn btn-primary" data-equip-installed="now">Use in preview</button>', onClose: () => { if (!choosing) resolve(); } });
         const drawChoice = async () => {
           const revision = ++previewRevision, button = $('[data-equip-choice]', m);
           button.querySelector('b').textContent = choices[selectedIndex].label; button.querySelector('small').textContent = label(choices[selectedIndex]);
@@ -2662,18 +2679,21 @@ async function offerEquip(job) {
         $$('[data-equip-installed]', m).forEach((button) => button.addEventListener('click', async (e) => {
           const index = selectedIndex; e.target.disabled = true;
           try {
-            const ctx = await api.invoke('jobs:equipContext', j.id, index);
+            const target = installedEquipTarget(choices[index]);
+            const ctx = await api.invoke('jobs:equipContext', j.id, index, target);
+            target.profile = ctx.profile; target.bike = ctx.bike;
             // A post-install Customize action must never reopen the player's
             // entire library.  `preferred` is built from exactly the files
             // written by this job; retain only those names which the selected
-            // model exposes.  A model-only download has no paint to choose,
-            // so it gets its default rather than unrelated existing paints.
+            // model exposes, including paints inside this download's PKZ.
+            // Never add unrelated paints already present in the library.
             const available = ctx.lo.options[ctx.slot] || [];
             const downloaded = [...new Set(ctx.preferred || [])].filter((value) => available.includes(value));
-            const values = downloaded.length ? [...new Set(['', ...downloaded])] : [ctx.lo.current[ctx.slot] || ''];
+            const values = downloaded.length ? downloaded : [''];
+            if (choices[index].hasModel && !values.includes('')) values.unshift('');
             const options = values.map((value) => ({ value, label: prettyValue(ctx.slot, value) }));
             const equip = async (paint) => {
-              try { await api.invoke('jobs:equip', j.id, index, paint); toast('Equipped in your game profile', 'ok'); S.rider.lo = null; }
+              try { await equipInstalledPreview(j, index, paint, target); }
               catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
               finally { resolve(); }
             };
