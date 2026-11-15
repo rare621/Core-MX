@@ -178,9 +178,11 @@ function parseDetails(lines, imgs) {
     const lob = l.match(/^([A-Z]{2,5}) #(\d+)$/);
     if (lob) {
       const lobby = { region: lob[1], id: lob[2], status: null, time: null, track: null, players: null };
-      for (let j = i + 1; j < Math.min(lines.length, i + 7); j++) {
+      for (let j = i + 1; j < Math.min(lines.length, i + 20); j++) {
         const x = lines[j].trim();
-        if (/^[A-Z]{2,5} #\d+$/.test(x)) break;
+        if (/^[A-Z]{2,5} #\d+$/.test(x) || /^(?:Tracks|Track List|Track Rotation|BACK)$/i.test(x)) break;
+        const address = x.match(/\b(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})\b/);
+        if (address && address[1].split('.').every((v) => Number(v) <= 255) && Number(address[2]) <= 65535) lobby.address = address[0];
         if (x.startsWith('Status:')) lobby.status = x.replace('Status:', '').trim();
         else if (/^-\s*\S/.test(x)) lobby.time = x.replace(/^-\s*/, '');
         else if (x.startsWith('Current Track:')) lobby.track = x.replace('Current Track:', '').trim();

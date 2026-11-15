@@ -216,7 +216,7 @@ async function openRankedServer(name) {
   if (!m.isConnected) return;
   const have = (t) => trackInstalled(t);
   const missing = d.tracks.filter((t) => !have(t.name));
-  const lobbyName = (l) => `MXB-Ranked.com | ${name} | ${l.region}`;
+  const lobbyName = (l) => `MXB-Ranked.com | ${name} | ${l.region} | #${l.id}`;
   $('.modal-body', m).innerHTML = `
     ${s.image ? `<div class="gallery-main" style="aspect-ratio:21/8;margin-bottom:14px"><img src="${esc(s.image)}" data-keep="1" style="object-fit:cover"></div>` : ''}
     <div class="muted" style="margin-bottom:10px">${esc(s.description || '')}</div>
@@ -227,7 +227,7 @@ async function openRankedServer(name) {
     <div class="glist">${d.lobbies.map((l, i) => `<div class="rk-race"><div class="rk-pos" style="min-width:60px">${esc(l.region)}</div>
       <div class="rk-race-t"><div class="t">${esc(l.track || '—')}</div><div class="m">${esc(l.status || '')}${l.time ? ` · ${esc(l.time)}` : ''}</div></div>
       <div class="m">${icon('user')}${esc(l.players || '')}</div>
-      <button class="btn btn-sm btn-primary" data-rk-join="${i}">${icon('play')}Join</button></div>`).join('') || '<div class="rk-race muted">No lobbies running right now.</div>'}</div>
+      <button class="btn btn-sm btn-primary" data-rk-join="${i}" title="${l.address ? esc(l.address) : 'Address unavailable — find this lobby in the game'}">${icon('play')}${l.address ? 'Join server' : 'Find in game'}</button></div>`).join('') || '<div class="rk-race muted">No lobbies running right now.</div>'}</div>
     <div class="section-title">Tracks${missing.length ? ` · ${missing.length} not installed` : ' · all installed'}</div>
     <div class="glist">${d.tracks.map((t) => `<div class="rk-race"><div class="rk-race-t"><div class="t">${esc(t.name)}</div><div class="m">Difficulty ${esc(t.difficulty || '—')}${t.bonus ? ` · MXP bonus ${esc(t.bonus)}` : ''}</div></div>
       ${have(t.name) ? `<span class="have">${icon('check')}Installed</span>` : `<button class="btn btn-sm" data-rk-get="${esc(t.name)}">${icon('search')}Get track</button>`}</div>`).join('')}</div>`;
@@ -235,6 +235,12 @@ async function openRankedServer(name) {
     const jb = e.target.closest('[data-rk-join]');
     if (jb) {
       const l = d.lobbies[Number(jb.dataset.rkJoin)];
+      if (l.address) {
+        jb.disabled = true;
+        try { await joinServer(l.address, { name: lobbyName(l), track: l.track }); }
+        finally { if (jb.isConnected) jb.disabled = false; }
+        return;
+      }
       if (missing.length && !(await window.confirmBox('Missing tracks', `You don't have <b>${missing.map((t) => esc(t.name)).join(', ')}</b>. Join anyway?`, 'Join anyway'))) return;
       navigator.clipboard.writeText(lobbyName(l));
       try { await api.invoke('game:launch'); } catch {}

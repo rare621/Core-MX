@@ -5,6 +5,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { model, zip } = require('./helpers/assets');
 const { build } = require('../src/lib/rider3d');
+test('armour attaches to the chest marker even when custom skin weights bind it at the pelvis; neck and helmet bindings stay intact', () => {
+  const { attachmentMatrix } = require('../src/lib/rider3d');
+  const matrix = (y) => [1,0,0,0, 0,1,0,y, 0,0,1,0, 0,0,0,1];
+  const skeleton = { bones: { riderRIG_armour: matrix(0.927), riderRIG_Spine4: matrix(1.227), riderRIG_Head: matrix(1.5) }, locals: { riderRIG_armour: matrix(0.001) } };
+  assert.equal(attachmentMatrix(skeleton, 'riderRIG_armour')[7], 1.228);
+  assert.equal(attachmentMatrix(skeleton, 'riderRIG_Spine4')[7], 1.227);
+  assert.equal(attachmentMatrix(skeleton, 'riderRIG_Head')[7], 1.5);
+});
 
 function fixture(t) {
   const modsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mxb-reader-'));

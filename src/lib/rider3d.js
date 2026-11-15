@@ -119,6 +119,14 @@ const mul = (a, b) => {
   for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) for (let k = 0; k < 4; k++) o[r * 4 + c] += a[r * 4 + k] * b[k * 4 + c];
   return o;
 };
+function attachmentMatrix({ bones, locals }, name) {
+  if (!name) return null;
+  const parent = name.toLowerCase() === 'riderrig_armour' ? 'riderRIG_Spine4' : null;
+  // Armour is an attachment marker, even when a custom export gives it skin
+  // weights. Its inverse bind can belong to the pelvis; use its chest parent.
+  if (parent && bones[parent] && locals[name]) return mul(bones[parent], locals[name]);
+  return bones[name] || bones[parent] || null;
+}
 
 // stockPkz: <install>/rider.pkz. gd: gear folder for the rider model (profile.gearDir). lo.current: loadout values.
 // only: which parts to build ('body', 'helmet', 'boots', 'protection'); texMax: texture size cap
@@ -150,15 +158,7 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   if (!body && customBody) throw new Error(`Preview unavailable for ${riderName}. Its installed model could not be read. No substitute rider is shown.`);
   if (!body) throw new Error("Couldn't find the rider model (rider.edf) — is the game folder set in Settings?");
   const { bones, locals } = cached(modelCache, 'skel:' + bodyChain.map((f) => f.key).join('|') + bodyFile, () => edf.parseSkeleton(body.buf), 8);
-  const boneMat = (name) => {
-    if (!name) return null;
-    if (bones[name]) return bones[name];
-    // Marker bones (e.g. riderRIG_armour) bind no mesh: place them from their parent.
-    const parentOf = { riderrig_armour: 'riderRIG_Spine4' };
-    const p = parentOf[name.toLowerCase()];
-    if (p && bones[p] && locals[name]) return mul(bones[p], locals[name]);
-    return bones[p] || null;
-  };
+  const boneMat = (name) => attachmentMatrix({ bones, locals }, name);
   if (want('body')) {
   const suitPaint = await loadPaint(await gearAssets.subchain(bodyRoots, 'paints'), cur.suitPaint ? cur.suitPaint + '.pnt' : null);
   const glovePaint = await loadPaint(await gearAssets.subchain(bodyRoots, 'gloves'), cur.glovesPaint ? cur.glovesPaint + '.pnt' : null)
@@ -244,7 +244,11 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
 
   const wrist = boneMat('riderRIG_LeftWrist');
   const focus = wrist ? { hands: [wrist[3], wrist[7] - 0.065, wrist[11]] } : {};
-  return { parts: parts.filter(Boolean), textures, focus, warnings, unreadable, ms: Date.now() - t0 };
+  // The spine's local Y axis points forward in the rider rig. Some custom
+  // exports face -Z instead of +Z; compensate the camera, not the gear mesh.
+  const spine = bones.riderRIG_Spine4;
+  const previewYaw = spine && Math.hypot(spine[1], spine[9]) > 0.5 ? Math.atan2(-spine[1], spine[9]) : 0;
+  return { parts: parts.filter(Boolean), textures, focus, previewYaw, warnings, unreadable, ms: Date.now() - t0 };
 }
 
-module.exports = { build, parseCfg, sources: { chainOf, readChain }, buildPart };
+module.exports = { build, parseCfg, sources: { chainOf, readChain }, buildPart, attachmentMatrix };

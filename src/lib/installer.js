@@ -293,7 +293,7 @@ function plan(files, ctx, opts = {}) {
   if ((counts.unresolved || 0) > awaitingTarget) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
   if (counts.overwrite) warnings.push(`${counts.overwrite} file(s) already exist and will be replaced.`);
   if (kind !== 'bikePaint' && ctx.unreadablePaints?.length) warnings.push('Some paints could not be inspected. Check the creator’s required model and target folder before installing.');
-  if (needsRiderTarget) warnings.push(`These are paints for a different rider model (${bodyTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t)).join(', ') || 'custom rider'}). Install the matching model, then choose it below. Paints do not include the model.`);
+  if (needsRiderTarget) warnings.push(`These are paints for a different rider model (${bodyTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t)).join(', ') || 'custom rider'}). Install the matching model, then select it. Paints do not include the model.`);
   const required = new Map();
   for (const entry of entries.filter((e) => e.dest && /\.pnt$/i.test(e.dest))) {
     const match = entry.dest.match(/^(.*?\/(helmets|boots|protections)\/[^/]+)\/(?:paints|goggles)\//i) || entry.dest.match(/^(bikes\/[^/]+)\/paints\//i);
@@ -323,7 +323,7 @@ function plan(files, ctx, opts = {}) {
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
     options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess,
     entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
-    requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included) || needsPaintTarget || showRiderTarget), dependencies: ctx.dependencies || [],
+    requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included && !r.installed) || needsPaintTarget || needsRiderTarget || riderModels.some((r) => r.name === riderTarget && r.unverified)), dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
     trackTypes: TRACK_TYPES,
   };

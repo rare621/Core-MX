@@ -2,13 +2,16 @@ const fs = require('fs/promises');
 const path = require('path');
 const pnt = require('./pnt');
 const edf = require('./edf');
-const { decodeBlob } = require('./assetread');
+const { decodeBlob, withLocalPreview } = require('./assetread');
 const { chainOf, readChain, listFiles } = require('./asset-sources');
 const gear = require('./gear-assets');
 
 const clean = (names) => [...new Set(names.filter((n) => !edf.isCompanionTexture(n)).map((n) => n.toLowerCase()))];
 const cache = new Map();
 async function riderModels(modsDir, stockPkz) {
+  return withLocalPreview(() => readRiderModels(modsDir, stockPkz));
+}
+async function readRiderModels(modsDir, stockPkz) {
   const root = path.join(modsDir, 'rider', 'riders');
   const names = new Set(['default_mx', 'default_sm']);
   for (const e of await fs.readdir(root, { withFileTypes: true }).catch(() => [])) if (e.isDirectory() || /\.pkz$/i.test(e.name)) names.add(e.name.replace(/\.pkz$/i, ''));
