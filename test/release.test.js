@@ -14,7 +14,7 @@ test('release service origins are validated', () => {
   }
 });
 
-test('installer inherits the configured IP unless the build overrides it', async (t) => {
+test('installer inherits the HTTPS service and migration aliases unless the build overrides it', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-release-config-'));
   const previous = process.env.MXB_SERVICE_URL;
   t.after(async () => {
@@ -24,12 +24,12 @@ test('installer inherits the configured IP unless the build overrides it', async
   });
   await fs.mkdir(path.join(root, 'plugin'));
   await fs.writeFile(path.join(root, 'plugin', 'mxbm_presence.dlo'), 'test plugin');
-  await fs.writeFile(path.join(root, 'online.config.json'), JSON.stringify({ serviceUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'] }));
+  await fs.writeFile(path.join(root, 'online.config.json'), JSON.stringify({ serviceUrl: 'https://coremx.app', previousServiceUrls: ['http://67.84.130.214:60000', 'http://192.168.0.38:60000'] }));
   process.env.MXB_SERVICE_URL = '';
   const context = { packager: { projectDir: root } };
   const generated = path.join(root, 'build', 'generated', 'online.config.json');
   await prepareResources(context);
-  assert.deepEqual(JSON.parse(await fs.readFile(generated, 'utf8')), { serviceUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'] });
+  assert.deepEqual(JSON.parse(await fs.readFile(generated, 'utf8')), { serviceUrl: 'https://coremx.app', previousServiceUrls: ['http://67.84.130.214:60000', 'http://192.168.0.38:60000'] });
   process.env.MXB_SERVICE_URL = 'https://service.example';
   await prepareResources(context);
   assert.deepEqual(JSON.parse(await fs.readFile(generated, 'utf8')), { serviceUrl: 'https://service.example' });

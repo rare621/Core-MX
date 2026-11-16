@@ -186,3 +186,25 @@ test('legacy rate-limit errors without Retry-After wait a minute; simultaneous l
   await Promise.all(Array.from({ length: 25 }, () => f.client.syncFriends()));
   assert.equal(calls, 2);
 });
+
+// The bundled HTTPS endpoint is an alias of the same account database, never a fallback.
+test('bundled HTTPS migration keeps existing credentials and never calls the public IP', async t => {
+  const bundled = require('../online.config.json');
+  assert.equal(bundled.serviceUrl, 'https://coremx.app');
+  assert.ok(bundled.previousServiceUrls.includes('http://67.84.130.214:60000'));
+  for (const legacyUrl of bundled.previousServiceUrls) {
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => { calls.push({ url, options }); return new Response('{}'); });
+    const f = fixture({ defaultUrl: bundled.serviceUrl, previousServiceUrls: bundled.previousServiceUrls });
+    f.set({ url: legacyUrl });
+    await f.client.connect();
+    assert.equal(f.config().url, bundled.serviceUrl);
+    assert.equal(f.config().token, 'fixture-token');
+    assert.equal(f.config().id, 'fixture-account');
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every(c => c.url.startsWith('https://coremx.app/v1/')));
+    assert.ok(!calls.some(c => c.url.endsWith('/v1/register')));
+    assert.equal(calls[0].options.headers.authorization, 'Bearer fixture-token');
+    t.mock.restoreAll();
+  }
+});
