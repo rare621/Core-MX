@@ -1149,6 +1149,9 @@ function registerIpc() {
   });
   handle('online:paintSync', (on) => online.setPaintSync(on));
   handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
+  handle('online:serverRiders', (server) => online.serverRiders(String(server || '').slice(0, 64)));
+  handle('online:syncServerRiders', (server, ids) => online.syncServerRiders(String(server || '').slice(0, 64), Array.isArray(ids) ? ids.map(String).slice(0, 32) : []));
+  handle('online:serverShare', (on) => online.setServerShare(on));
   const friendPreviewLoadouts = new Map();
   handle('online:friendLoadout', async (friendId) => {
     const outfit = await online.friendLoadout(friendId);

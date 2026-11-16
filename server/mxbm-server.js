@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 5;
+const VERSION = 6;
 
 const SERVER_TTL = 2 * 60 * 1000;    // live rows only: the manager reports every 30 seconds
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
@@ -59,6 +59,13 @@ const isSteamId = (v) => /^7656119\d{10}$/.test(String(v || ''));
 const isAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || '')) && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(String(v));
 const hash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const serverKey = (name) => str(name, 64).toLowerCase();
+// Rider names in game often carry team tags ("CaptiveDuck | CRMX"); compare on words.
+const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function nameOnList(steamName, riderNames) {
+  const n = normName(steamName);
+  if (n.length < 3) return false;
+  return riderNames.some((r) => r === n || (' ' + r + ' ').includes(' ' + n + ' '));
+}
 // A path inside a mods folder that a paint file may be written to: relative, no "..", ends in .pnt.
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => x === '..' || x === '' || x === '.') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
 function storeSize() { let n = 0; for (const f of fs.readdirSync(FILES)) { try { n += fs.statSync(path.join(FILES, f)).size; } catch {} } return n; }
@@ -234,6 +241,33 @@ const routes = {
       out.push({ id, name: u.name, ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
     }
     return [200, { loadouts: out }];
+  },
+  // Outfits of other app users riding on the same server, friends or not. A user is "on" the
+  // server when their own plugin reports it, or when their Steam name matches a name in that
+  // server's rider list (for riders with the app but no plugin). Respects both share switches.
+  'POST /v1/server-riders': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const name = str(body.server, 64);
+    if (!name) return [400, { error: 'server name required' }];
+    const key = serverKey(name), now = Date.now();
+    const srv = db.servers[key] && now - db.servers[key].lastSeen < SERVER_TTL ? db.servers[key] : null;
+    const riderNames = (srv?.riders || []).map((r) => normName(r.name)).filter(Boolean);
+    const out = [];
+    for (const [id, u] of Object.entries(db.users)) {
+      if (id === me.id || !u.loadout || u.sharePaints === false || u.shareServer === false) continue;
+      const p = presence.get(id);
+      const here = !!(p && now - p.at < ONLINE_TTL && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
+      const byName = !here && nameOnList(u.name, riderNames);
+      if (!here && !byName) continue;
+      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
+      if (out.length >= 32) break;
+    }
+    return [200, { loadouts: out }];
+  },
+  'POST /v1/servershare': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    me.user.shareServer = body.share !== false; save();
+    return [200, { ok: true }];
   },
   'POST /v1/paintshare': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];

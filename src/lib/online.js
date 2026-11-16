@@ -181,6 +181,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       game: { running: gameRunning },
       presence: current,
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError },
+      serverShare: c.serverShare !== false,
       paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
     };
   }
@@ -297,9 +298,41 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return { removed: n, status: status() };
   }
 
+  // Riders on the same server who use the app (plugin report or Steam name on the rider list).
+  async function serverRiderLoadouts(server) {
+    if (!cfg().token) throw new Error('Go online first to see riders on this server');
+    const health = await call('GET', '/v1/health');
+    if (health.version < 6) throw new Error('Update the online server (mxbm-online-service.zip) to sync gear from riders on a server');
+    return (await call('POST', '/v1/server-riders', { server })).loadouts || [];
+  }
+  async function serverRiders(server) {
+    const loadouts = await serverRiderLoadouts(server);
+    const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
+    return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
+  }
+  async function syncServerRiders(server, ids) {
+    const wanted = new Set(ids || []);
+    if (paintRun) await paintRun.catch(() => {});
+    const loadouts = (await serverRiderLoadouts(server)).filter((l) => wanted.has(l.id));
+    if (!loadouts.length) return [];
+    paint.busy = true; onChange(status());
+    try {
+      const received = { ...(cfg().received || {}) };
+      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
+      setCfg({ received });
+      if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
+      return results;
+    } finally { paint.busy = false; paint.progress = null; onChange(status()); }
+  }
+  async function setServerShare(on) {
+    setCfg({ serverShare: !!on });
+    if (cfg().token) await call('POST', '/v1/servershare', { share: !!on }).catch(() => {});
+    return status();
+  }
+
   function noteJoin(address) { setCfg({ lastJoin: { address, at: Date.now() } }); }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }) };
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }) };
 }
 
 module.exports = { create, PLUGIN, STATE_FILE };

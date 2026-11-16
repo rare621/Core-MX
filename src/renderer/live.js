@@ -138,6 +138,58 @@ async function drawLiveServers(refresh) {
   if (qi) qi.addEventListener('input', () => { S.allSrv.q = qi.value; clearTimeout(drawLiveServers.t); drawLiveServers.t = setTimeout(() => drawLiveServers().then(() => { const n = $('#allSrvQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), 200); });
 }
 
+// Joining a live server: if other app users are riding there (their plugin reports it, or
+// their Steam name is on the server's rider list), offer to download their free gear first
+// so their bikes and outfits show up in game. Then the usual track check and join.
+async function joinLiveServer(s) {
+  const join = () => joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) });
+  const st = S.live.status;
+  if (!st || !st.service.connected || !s.name) return join();
+  toast('Checking riders on this server…', 'info', 2500);
+  let riders;
+  try {
+    riders = await Promise.race([api.invoke('online:serverRiders', s.name), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000))]);
+  } catch (e) {
+    if (!/timeout/.test(e.message || '')) toast(esc(cleanErr(e)), 'info', 5000);
+    return join();
+  }
+  const sizeOf = (r) => r.items.filter((it) => it.state === 'ready').reduce((n, it) => n + (it.size || 0), 0);
+  const want = riders.filter((r) => r.items.some((it) => it.state === 'ready'));
+  if (!want.length) {
+    if (riders.length) toast(`You already have the gear for ${riders.length === 1 ? esc(riders[0].name) : riders.length + ' riders'} on this server`, 'ok', 2500);
+    return join();
+  }
+  const fmt = (n) => (typeof fmtSize === 'function' ? fmtSize(n) : `${Math.round(n / 1024)} KB`);
+  const row = (r, i) => {
+    const ready = r.items.filter((it) => it.state === 'ready');
+    const paid = (r.unavailable || []).filter((u) => /paid|store-protected|account-bound/i.test(u.error || '')).length;
+    const needs = [...new Map(r.items.flatMap((it) => it.needs || []).map((n) => [`${n.kind}|${n.name}`, n])).values()];
+    return `<label class="sr-row"><input type="checkbox" data-sr="${i}" checked><span class="fr-av">${esc((r.name || '?').slice(0, 1).toUpperCase())}</span>
+      <span class="sr-txt"><b>${esc(r.name)}</b><small>${ready.length} file${ready.length === 1 ? '' : 's'} · ${fmt(sizeOf(r))}${r.bikeName || r.bike ? ` · ${esc(prettyBikeId(r.bikeName || r.bike))}` : ''}</small>
+      ${needs.length ? `<small class="sr-warn">Needs ${needs.map((n) => esc(n.name.replace(/_/g, ' '))).join(', ')} to show fully</small>` : ''}${paid ? `<small class="muted">${paid} paid item${paid > 1 ? 's' : ''} not shared</small>` : ''}</span>
+      <span class="sr-via" title="${r.via === 'name' ? 'Their Steam name matches a rider on this server' : 'Their game plugin reports this server'}">${r.via === 'name' ? 'Name match' : 'On server'}</span></label>`;
+  };
+  const m = modal({
+    title: `Riders on ${esc(s.name)}`, size: 'sm',
+    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} MX Bikes Manager. Download their gear so you see their bikes and outfits in game? Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
+    foot: `<button class="btn" data-sr-skip>Join without gear</button><span class="grow"></span><button class="btn btn-primary" data-sr-go>${icon('download')}Download & join</button>`,
+  });
+  $('[data-sr-skip]', m).addEventListener('click', () => { m.close(); join(); });
+  $('[data-sr-go]', m).addEventListener('click', async (e) => {
+    const ids = $$('[data-sr]', m).filter((c) => c.checked).map((c) => want[Number(c.dataset.sr)].id);
+    if (!ids.length) { m.close(); return join(); }
+    e.target.disabled = true; $('[data-sr-skip]', m).disabled = true;
+    const p = $('.sr-progress', m); p.hidden = false; p.innerHTML = '<div class="spinner"></div> Downloading gear…';
+    try {
+      const results = await api.invoke('online:syncServerRiders', s.name, ids);
+      const got = results.reduce((n, r) => n + r.items.filter((it) => it.state === 'downloaded').length, 0);
+      const failed = results.reduce((n, r) => n + r.items.filter((it) => it.state === 'failed').length, 0);
+      toast(`Downloaded ${got} file${got === 1 ? '' : 's'}${failed ? ` · ${failed} couldn't be downloaded` : ''}`, failed ? 'info' : 'ok', 3500);
+    } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+    m.close(); join();
+  });
+}
+
 function openLiveServer(s) {
   const tl = trackLabel(s), have = trackHave(s);
   let showAllRiders = false;
@@ -157,7 +209,7 @@ function openLiveServer(s) {
   });
   m.addEventListener('click', (e) => { if (e.target.closest('[data-live-riders-toggle]')) { showAllRiders = !showAllRiders; $('.modal-body', m).innerHTML = ridersBody(); } });
   const f = $('[data-live-mfind]', m); if (f) f.addEventListener('click', () => { m.close(); findTrack(tl); });
-  const j = $('[data-live-mjoin]', m); if (j) j.addEventListener('click', () => { m.close(); joinServer(s.address, { name: s.name, address: s.address, track: tl }); });
+  const j = $('[data-live-mjoin]', m); if (j) j.addEventListener('click', () => { m.close(); joinLiveServer(s); });
   const address = $('[data-live-maddress]', m); if (address) address.addEventListener('click', () => { m.close(); setLiveServerAddress(s); });
 }
 
@@ -292,18 +344,21 @@ async function renderFriends(c) {
   if (ps2) ps2.addEventListener('change', async () => { S.live.status = await api.invoke('online:paintSync', ps2.checked); renderFriends($('#content')); });
   const sh = $('#liveShare');
   if (sh) sh.addEventListener('change', async () => { S.live.status = await api.invoke('online:share', sh.checked); toast(sh.checked ? 'Friends can see where you ride' : 'Hidden from friends', 'ok', 1800); });
+  const ss = $('#serverShare');
+  if (ss) ss.addEventListener('change', async () => { S.live.status = await api.invoke('online:serverShare', ss.checked); toast(ss.checked ? 'Riders on your server can sync your gear' : 'Your gear is shared with friends only', 'ok', 2000); });
 }
 
 async function renderSync(c) {
   const st = await liveStatus(), ps = st?.paintSync || {}, connected = !!st?.service.connected;
-  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Online</h2>${onlineTabs()}</div><div class="scroller"><div class="fr-page"><div class="section-title">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Only currently equipped gear and the selected bike paint are shared.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div><p class="muted">Open friends and their gear from your Steam account at the bottom left.</p><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>`;
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Online</h2>${onlineTabs()}</div><div class="scroller"><div class="fr-page"><div class="section-title">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Only currently equipped gear and the selected bike paint are shared.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div><p class="muted">Open friends and their gear from your Steam account at the bottom left.</p><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>`;
   $('#paintSync', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:paintSync', e.target.checked); renderSync(c); });
   $('#liveShare', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:share', e.target.checked); renderSync(c); });
+  $('#serverShare', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:serverShare', e.target.checked); renderSync(c); });
 }
 
 function friendSettingsHtml(st) {
   const ps = st?.paintSync || {}, connected = !!st?.service.connected;
-  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
+  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
 }
 
 async function toggleFriendsPanel() {
@@ -366,7 +421,7 @@ document.addEventListener('click', async (e) => {
   if (act === 'live-friends-refresh') { await refreshLiveList('friends', true); return renderFriends($('#content')); }
   if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
   const j = e.target.closest('[data-live-join]');
-  if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) }); }
+  if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinLiveServer(s); }
   const address = e.target.closest('[data-live-address]');
   if (address) { e.stopPropagation(); const s = S.live.servers.servers[Number(address.dataset.liveAddress)]; return setLiveServerAddress(s); }
   const f = e.target.closest('[data-live-find]');
