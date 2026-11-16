@@ -6,6 +6,13 @@ const CAT_NAME = { tracks: 'Tracks', bikes: 'Bikes', liveries: 'Bike liveries', 
 const text = s => String(s || '').slice(0, 20000);
 const esc = s => text(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+function timestamp(value) {
+  if (value === null || value === undefined || value === '') return new Date().toISOString();
+  const numeric = typeof value === 'number' || /^\d+$/.test(String(value || '')) ? Number(value) : null;
+  const date = new Date(numeric === null ? value : numeric < 100000000000 ? numeric * 1000 : numeric);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
 function rawId(value) {
   const id = String(value || '').replace(/^coremx:/, '');
   return /^[A-Za-z0-9_-]{1,80}$/.test(id) ? id : null;
@@ -31,8 +38,8 @@ function normalize(m, detail = false) {
   }));
   const post = {
     id: `coremx:${id}`, coremxId: id, title: text(m.title), link: `${BASE}/#/mod/${encodeURIComponent(id)}`,
-    date: m.createdAt || m.created || m.date || new Date().toISOString(),
-    modified: m.updatedAt || m.updated || m.createdAt || new Date().toISOString(),
+    date: timestamp(m.createdAt || m.created || m.date),
+    modified: timestamp(m.updatedAt || m.updated || m.createdAt || m.created || m.date),
     categoryNames: [CAT_NAME[cat] || 'Other'], categories: CATEGORY[cat] || [], image: images[0] || null,
     excerpt: text(m.summary), paid: false, addon: !!m.addon, needsModelNotice: !!m.addon && deps.length > 0,
     version: text(m.version), dependencies: deps,

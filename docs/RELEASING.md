@@ -27,7 +27,7 @@ The setup uses an assisted per-user install, offers a destination folder, adds s
 
 ## GitHub Actions
 
-Push these source changes, then create a version tag matching `package.json`, for example `v1.0.20`. The **Windows installer** workflow tests the app, builds the installer, uploads a downloadable Actions artifact, and publishes a GitHub release with both setup filenames, the update manifest, server ZIP, and checksums. A manual workflow run builds an artifact without creating a release.
+Push these source changes, then create a version tag matching `package.json`, for example `v1.0.21`. The **Windows installer** workflow tests the app, builds the installer, uploads a downloadable Actions artifact, and publishes a GitHub release with both setup filenames, the update manifest, server ZIP, and checksums. A manual workflow run builds an artifact without creating a release.
 
 For another release, update the package version and lockfile with `npm version patch --no-git-tag-version`, update `docs/RELEASE_NOTES.md`, commit, and push the matching tag.
 
