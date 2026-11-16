@@ -1,18 +1,9 @@
-CoreMX 1.0.17 — Content manager for MX Bikes
+CoreMX 1.0.18 — Community mods in Free mods
 
-MX Bikes Manager is now CoreMX, with updated app and installer names, a new orange CMX icon with a gray helmet, and a link to coremx.app in Settings > About. Existing settings, install history, accounts and installed mods are preserved.
+Free mods now combines mods uploaded to coremx.app with MXB Mods. Search, category filters, sorting and Load more include both sources. CoreMX cards carry a source badge, and details show the uploader's description, version, game version, instructions and required mods.
 
-Website links:
-- Open the matching MXB Mods listing directly from coremx.app, including a specific download variant.
-- Open MXB Hub and MX Bikes Shop products in the app's shop popup for purchase or download.
-- Open and install or update the selected OEM pack.
-- Links wait for startup to finish; existing server join links still ask before joining.
-- Invalid download selections no longer fall back to a different file. Installed variants are skipped while other variants remain available.
+The Upload mod button opens the CoreMX upload page. The nearby website button opens the CoreMX browse page. Downloads from CoreMX use its /dl route and pass through the manager's existing download, dependency and install review flow. Website install links for local uploads open the matching mod in the app.
 
-Also includes the recent source changes:
-- Missing-track detection can offer the track and rejoin the server after installation.
-- Rider Apply can be queued while MX Bikes is running.
-- Installed game plugins update after the game closes.
-- Joining a server can offer gear sync for riders using the app, and friend removal is easier to find.
+Existing MXB Mods, Add-ons, MXB Hub and MX Bikes Shop workflows remain available. Upgrading preserves app settings and install records.
 
-Upgrade compatibility: the old setup filename is also supplied as an identical copy for older Google Drive updaters. The installed app is CoreMX in both cases.
+The update manifest still points to the identical legacy-named setup copy so existing Google Drive updaters can install CoreMX. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.18-x64.exe together to the shared Drive folder to make this version available there.

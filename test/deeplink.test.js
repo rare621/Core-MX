@@ -11,6 +11,7 @@ test('install links from the website', () => {
   assert.deepEqual(parse('mxbm://install/mxbmods/193092?file=2'), { type: 'install', source: 'mxbmods', id: 193092, file: 2 });
   assert.deepEqual(parse('mxbm://install/mxbmods/193092/?file=0'), { type: 'install', source: 'mxbmods', id: 193092, file: 0 });
   assert.deepEqual(parse('mxbm://install/hub/4411'), { type: 'install', source: 'hub', id: 4411 });
+  assert.deepEqual(parse('mxbm://install/local/17'), { type: 'install', source: 'local', id: 17 });
   assert.deepEqual(parse('MXBM://install/MXBS/77/'), { type: 'install', source: 'mxbs', id: 77 });
 });
 test('oem pack links', () => {
