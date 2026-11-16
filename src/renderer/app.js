@@ -3038,3 +3038,52 @@ function buildSettingsNav(c) {
 const renderSettingsBase = renderSettings;
 // eslint-disable-next-line no-func-assign
 renderSettings = async function (c) { await renderSettingsBase(c); if (S.view === 'settings' && (S.settingsTab || 'general') === 'general') buildSettingsNav(c); };
+
+// ---------- Missing track (from the game plugin) ----------
+// A short two-note chime so the pop-up is noticed even with the game in front.
+function chime() {
+  try {
+    const ctx = new AudioContext(), t = ctx.currentTime;
+    for (const [f, at] of [[880, 0], [1320, 0.12]]) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.type = 'sine';
+      g.gain.setValueAtTime(0.0001, t + at); g.gain.exponentialRampToValueAtTime(0.18, t + at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.35);
+      o.connect(g).connect(ctx.destination); o.start(t + at); o.stop(t + at + 0.4);
+    }
+    setTimeout(() => ctx.close(), 1000);
+  } catch {}
+}
+const SOURCE_LABEL = { 'mxb-mods': 'MXB Mods · free', hub: 'MXB Hub · shop', mxbs: 'MX Bikes Shop · shop' };
+let missingModal = null;
+api.on('missing:track', ({ track, results }) => {
+  if (missingModal) missingModal.close();
+  chime();
+  const pretty = String(track).replace(/_/g, ' ');
+  const row = (r, i) => `<div class="mt-row" data-mt="${i}"><div class="mt-img">${r.image ? `<img src="${esc(r.image)}" alt="">` : icon('track')}</div>
+    <div class="mt-txt"><b>${esc(r.title)}</b><small>${SOURCE_LABEL[r.source] || esc(r.source)}${r.price ? ` · ${esc(r.price)}` : ''}</small></div>
+    ${r.source === 'mxb-mods' ? `<button class="btn btn-primary btn-sm" data-mt-open="${i}">${icon('download')}View & install</button>` : dependencyButton({ url: r.link }, 'View in shop')}</div>`;
+  missingModal = modal({
+    title: 'Missing track', size: 'sm',
+    body: `<p style="margin-top:0">MX Bikes couldn't join because you don't have <b>${esc(pretty)}</b>.</p>
+      ${results.length ? `<div class="section-title" style="margin-top:4px">Best matches</div><div class="mt-list">${results.map(row).join('')}</div><p class="muted" style="font-size:12px">Matches are found by name; check it's the right track before installing.</p>` : `<div class="notice info">${icon('info')}<div>No match on MXB Mods, MXB Hub or MX Bikes Shop. The server's own page or Discord usually links it.</div></div>`}`,
+    foot: `<button class="btn" data-mt-search>${icon('search')}Search Get Mods</button><span class="grow"></span><button class="btn" data-close>Close</button>`,
+    onClose: () => { missingModal = null; },
+  });
+  missingModal.addEventListener('click', (e) => {
+    const open = e.target.closest('[data-mt-open]');
+    if (open) { const r = results[Number(open.dataset.mtOpen)]; missingModal.close(); openPost(r); return; }
+    if (e.target.closest('[data-mt-search]')) { missingModal.close(); if (typeof findTrack === 'function') findTrack(pretty); }
+  });
+});
+// The plugin's missing-track detection paused (game updated) or switched off (it crashed the game).
+api.on('plugin:hook', (info) => {
+  const crashed = info.state === 'disabled';
+  modal({
+    title: crashed ? 'Missing-track detection switched off' : 'Missing-track detection paused', size: 'sm',
+    body: `<div class="notice ${crashed ? 'warn' : 'info'}">${icon(crashed ? 'alert' : 'info')}<div>${crashed
+      ? 'MX Bikes crashed inside the MX Bikes Manager plugin, so missing-track detection has been switched off to keep the game stable.'
+      : 'MX Bikes has been updated, and the plugin doesn\'t recognise the new version yet, so missing-track detection is paused. Nothing in the game was changed.'}</div></div>
+      <p>It turns back on automatically when you install the next MX Bikes Manager update. Everything else (friends, live servers, gear sync) keeps working.</p>`,
+    foot: '<button class="btn btn-primary" data-close>OK</button>',
+  });
+});

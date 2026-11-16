@@ -90,6 +90,65 @@ function onlineConfig() {
     return { defaultUrl: origin(config.serviceUrl), previousServiceUrls: Array.isArray(config.previousServiceUrls) ? config.previousServiceUrls.map(origin).filter(Boolean) : [] };
   } catch { return { defaultUrl: '', previousServiceUrls: [] }; }
 }
+// ---- Missing track: the game plugin writes mxbm_missing.json when MX Bikes shows its
+// "Missing Track" window, and mxbm_hook.json with the detector's state.
+function trackQueries(id) {
+  const words = String(id || '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_\-.]+/).filter(Boolean);
+  const out = [words.join(' ')];
+  // Track ids often start with the creator's handle ("eraaks212_MNSR_Raceway").
+  if (words.length > 2 && /\d/.test(words[0])) out.push(words.slice(1).join(' '));
+  if (words.length > 3) out.push(words.slice(-2).join(' '));
+  return [...new Set(out.filter((q) => q.length >= 3))];
+}
+async function searchMissingTrack(id) {
+  const queries = trackQueries(id), found = new Map();
+  await Promise.all(queries.flatMap((q) => [
+    site.search({ query: q, tab: 'tracks', perPage: 12, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' }))).catch(() => []),
+    shops.search(ses, { shop: 'hub', query: q, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'hub' }))).catch(() => []),
+    shops.search(ses, { shop: 'mxbs', query: q, cat: 248, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'mxbs' }))).catch(() => []),
+  ].map((pr) => pr.then((items) => { for (const item of items) {
+    const score = Math.max(...queries.map((label) => dependencySearchScore(item, { label })));
+    const key = item.link || `${item.source}:${item.id}`;
+    if (score > 0 && (!found.has(key) || found.get(key).score < score)) found.set(key, { ...item, score });
+  } }))));
+  return [...found.values()].sort((a, b) => b.score - a.score).slice(0, 5);
+}
+let missingSeen = { track: '', at: 0 };
+async function onMissingTrackFile(file) {
+  let info; try { info = JSON.parse(await fsp.readFile(file, 'utf8')); } catch { return; }
+  const track = String(info.track || '').split(' - ')[0].trim().slice(0, 120);
+  if (!track || !info.at || Date.now() - info.at > 10 * 60 * 1000) return;
+  if (missingSeen.track === track && info.at - missingSeen.at < 30000) return;
+  missingSeen = { track, at: info.at };
+  const results = await searchMissingTrack(track).catch(() => []);
+  send('missing:track', { track, results, at: info.at });
+  // Get the app in front: over a borderless/windowed game it appears right away; with exclusive
+  // full screen Windows keeps it behind the game, so it flashes in the taskbar until you Alt+Tab.
+  if (mainWin && !mainWin.isDestroyed() && !mainWin.isFocused()) {
+    if (mainWin.isMinimized()) mainWin.restore();
+    mainWin.showInactive();
+    mainWin.setAlwaysOnTop(true, 'screen-saver'); mainWin.moveTop();
+    setTimeout(() => { if (mainWin && !mainWin.isDestroyed()) mainWin.setAlwaysOnTop(false); }, 1500);
+    mainWin.flashFrame(true);
+  }
+}
+async function onHookStateFile(file) {
+  let info; try { info = JSON.parse(await fsp.readFile(file, 'utf8')); } catch { return; }
+  if (!['paused', 'disabled'].includes(info.state) || /not running inside MX Bikes/i.test(info.detail || '')) return;
+  const key = `${info.state}:${info.build}`;
+  if (store.get('settings').hookNotice === key) return;
+  store.update('settings', (s) => ({ ...s, hookNotice: key }));
+  send('plugin:hook', info);
+}
+let pluginWatch = null;
+function watchPluginFiles() {
+  const dir = userDir(); if (!dir || pluginWatch === dir) return;
+  pluginWatch = dir;
+  const missing = path.join(dir, 'mxbm_missing.json'), hook = path.join(dir, 'mxbm_hook.json');
+  fs.watchFile(missing, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onMissingTrackFile(missing); });
+  fs.watchFile(hook, { interval: 3000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onHookStateFile(hook); });
+  if (fs.existsSync(hook)) onHookStateFile(hook);
+}
 function insideGame(p) {
   const g = store.get('settings').gameInstallDir;
   return !!g && path.resolve(p).toLowerCase().startsWith(path.resolve(g).toLowerCase() + path.sep);
@@ -1659,6 +1718,7 @@ app.whenReady().then(async () => {
     onChange: (st) => send('online:status', st),
   });
   online.start();
+  watchPluginFiles();
   ensureDiscoveryPlugin().catch((e) => console.warn('Address discovery setup:', e.message));
   setInterval(() => ensureDiscoveryPlugin().catch(() => {}), 30000).unref();
 });
