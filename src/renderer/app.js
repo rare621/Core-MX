@@ -323,6 +323,7 @@ function renderLibrary(c) {
         <div class="search">${icon('search')}<input id="libSearch" placeholder="Search…  (Ctrl+F)" spellcheck="false"></div>
         <button class="btn btn-icon" data-act="rescan" title="Refresh list">${icon('refresh')}</button>
         <button class="btn btn-primary" data-act="pick-files">${icon('upload')}Add mod from PC</button></div>
+      ${scope === 'mods' ? '<div class="lib-summary" id="libSummary"></div>' : ''}
       <div class="bigtabs" id="libTabs"></div>
       <div class="filters" id="libFilters"></div>
       <div class="scroller" id="libScroll"></div>
@@ -333,6 +334,31 @@ function renderLibrary(c) {
   renderLibItems();
 }
 
+// At-a-glance strip for My Mods. Each tile is a shortcut to that list.
+function drawLibSummary() {
+  const box = $('#libSummary'); if (!box) return;
+  const all = libItems();
+  const n = { total: all.length, updates: (S.updates && S.updates.length) || 0, disabled: all.filter((i) => i.disabled).length, dups: all.filter((i) => i.duplicateOf).length, fav: all.filter((i) => i.favorite).length };
+  const tile = (key, ic, value, label, hint, tone = '') => `<button class="sum-tile ${tone} ${S.lib.quick === key ? 'active' : ''}" data-libsum="${key}" ${!value && key !== 'all' && S.lib.quick !== key ? 'disabled' : ''} title="${esc(hint)}"><span class="sum-ico">${icon(ic)}</span><span class="sum-txt"><b>${value.toLocaleString()}</b><small>${label}</small></span></button>`;
+  box.innerHTML = tile('all', 'library', n.total, 'Mods installed', 'Show everything')
+    + tile('updates', 'download', n.updates, n.updates === 1 ? 'Update ready' : 'Updates ready', 'Open Downloads → Updates', n.updates ? 'accent' : '')
+    + tile('disabled', 'power', n.disabled, 'Turned off', 'Mods you switched off (the game ignores them)')
+    + tile('dups', 'dup', n.dups, 'Duplicate copies', 'Files downloaded twice; identical copies are safe to delete', n.dups ? 'warn' : '')
+    + tile('fav', 'star', n.fav, 'Favorites', 'Mods you starred');
+}
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-libsum]'); if (!t) return;
+  const key = t.dataset.libsum;
+  if (key === 'updates') { go('installed'); return; }
+  S.lib.quick = S.lib.quick === key && key !== 'all' ? 'all' : key; S.lib.limit = 150; S.selected.clear(); S.lib.f = {};
+  // The matches may be on another tab (e.g. a turned-off track while viewing bikes): jump there.
+  if (!filterItems().length) {
+    const keep = S.lib.tab;
+    const hit = LIB_TABS.mods.find((t) => t.id !== 'graphics' && (S.lib.tab = t.id, filterItems().length));
+    S.lib.tab = hit ? hit.id : keep;
+  }
+  renderLibItems(); const sc = $('#libScroll'); if (sc) sc.scrollTop = 0;
+});
 function drawLibTabs() {
   const all = libItems();
   $('#libTabs').innerHTML = LIB_TABS[S.lib.scope || 'mods'].map((t) => {
@@ -442,6 +468,7 @@ function renderLibItems() {
   }
   const xs = filterItems();
   drawLibTabs();
+  drawLibSummary();
   drawLibFilters(xs.length);
   const sc = $('#libScroll');
   if (!S.scanned) { sc.innerHTML = `<div class="grid">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`; return; }
