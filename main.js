@@ -1309,8 +1309,20 @@ function registerIpc() {
     lo.selectedInGame = lo.selectedInGame && lo.profileActive;
     return lo;
   });
+  // MX Bikes rewrites the profile when it exits, so changes made while it runs would be lost.
+  // Queue them instead and write them a few seconds after the game closes.
   handle('rider:apply', async (name, bike, changes = {}) => {
-    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before applying. Preview changes have been kept.');
+    if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
+    if (await profile.isGameRunning()) {
+      store.update('pendingApply', (all) => ({ ...(all || {}), [`${name}|${bike}`]: { name, bike, changes, at: Date.now() } }));
+      watchPendingApply();
+      return { queued: true };
+    }
+    return applyRider(name, bike, changes);
+  });
+  handle('rider:pendingApply', () => Object.values(store.get('pendingApply') || {}));
+  handle('rider:cancelPendingApply', (name, bike) => { store.update('pendingApply', (all) => { const n = { ...(all || {}) }; delete n[`${name}|${bike}`]; return n; }); return true; });
+  async function applyRider(name, bike, changes = {}) {
     if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
     const prof = await profile.readProfile(profUserDir(), name), preview = draftProfile(prof, bike, changes);
     const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
@@ -1330,7 +1342,30 @@ function registerIpc() {
     const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
     if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
     online?.syncPaints().catch(() => {}); return { saved: true };
-  });
+  }
+  let pendingWatch = null;
+  function watchPendingApply() {
+    if (pendingWatch || !Object.keys(store.get('pendingApply') || {}).length) return;
+    let closedAt = 0;
+    pendingWatch = setInterval(async () => {
+      if (await profile.isGameRunning()) { closedAt = 0; return; }
+      // Give the game a moment to finish writing its profile on exit.
+      if (!closedAt) { closedAt = Date.now(); return; }
+      if (Date.now() - closedAt < 4000) return;
+      clearInterval(pendingWatch); pendingWatch = null;
+      const queued = Object.values(store.get('pendingApply') || {});
+      store.set('pendingApply', {});
+      const results = [];
+      for (const p of queued) {
+        try { await applyRider(p.name, p.bike, p.changes); results.push({ bike: p.bike, ok: true }); }
+        catch (e) { results.push({ bike: p.bike, ok: false, error: e.message }); }
+      }
+      send('rider:pendingApplied', results);
+      send('rider:changed', { active: (await profile.listProfiles(profUserDir()).catch(() => ({}))).last });
+    }, 2000);
+    pendingWatch.unref?.();
+  }
+  watchPendingApply();
   handle('bike:model', async (name, bike, paint, texMax = 1024, previewCurrent = {}) => {
     if (typeof bike !== 'string' || /[\\/]|^\.+$/.test(bike)) throw new Error('Invalid bike name');
     if (paint == null) {
