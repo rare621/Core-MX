@@ -1,11 +1,9 @@
-Friends: view the synced rider standing beside their bike in a rotatable 3D preview, including available paints and tyres. The preview refreshes after syncing and leaves your own outfit unchanged.
+New look: the whole app has been restyled with a darker, cleaner design. The sidebar floats and is grouped into Mods, Ride and Community. Pages sit on frosted panels over a soft blurred background that changes colour by section, and a mod's own picture glows behind it while you view it. Cards, menus, dialogs and controls are all refreshed.
 
-Bike appearance: install supported visual-only model swaps for an existing bike, preview them under Rider > Bike > Appearance, then Apply. Original loose files are preserved; Default restores them. Switching resets the livery preview and requires the game to be closed.
+Get Mods no longer freezes: page parsing now runs in the background, so scrolling and clicking stay responsive while results load.
 
-Get Mods: required bike swaps appear above downloads with installed status and buy/install actions. Separate helmet downloads show their own model requirements, and one installed variant no longer marks every download installed.
+Smarter "needs another mod" checks: the app now picks the best matching installed model instead of the first loose match, and it no longer treats a different generation (for example Tech 7 vs Tech 10, or 2018 vs 2021) as installed. Rider models (such as hoodie bodies) are now checked too. Templates and other links are ignored, and tracks and whole bikes no longer show a "needs another model" warning.
 
-Updates: a dialog shows release notes with Install update and Skip. Accepted updates show download progress, then install and reopen the app. Unsaved Rider changes and active mod installs prevent an automatic restart.
+Rider > Bike: the section is now labelled Livery.
 
-Online server: retains all outfit fields, including boot paint. Replace the server program files from this release while keeping your existing server data and configuration.
-
-Also includes 1.0.13's customization-draft fixes and bike livery year/model matching. Paid creator-specific swap archives have not been verified; unsupported packed layouts require review rather than an automatic overwrite.
+Safety: delete and uninstall actions can never remove the mods folder itself, even if an install record is damaged.
