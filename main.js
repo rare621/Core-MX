@@ -60,45 +60,7 @@ function watchRiderProfiles() {
 // online.config.json next to the app: { "serviceUrl": "http://<server PC>:8787" } — the service
 // everyone's app connects to without asking.
 function stockRiderPkz() { const inst = store.get('settings').gameInstallDir; return inst ? path.join(inst, 'rider.pkz') : null; }
-function dependencyKey(url) { try { return new URL(url).pathname.split('/').filter(Boolean).pop()?.toLowerCase() || ''; } catch { return ''; } }
-function dependencyModelKind(dependency) {
-  if (dependency.kind === 'bikeSwap') return 'bikeSwap';
-  const text = `${dependency.label || ''} ${dependency.url || ''}`.toLowerCase();
-  if (/\b(?:boot|boots|instinct)\b/.test(text)) return 'boots';
-  if (/\b(?:helmet|helmets|lid)\b/.test(text)) return 'helmets';
-  if (/\b(?:protect(?:ion|or)?|chest|neck\s*brace)\b/.test(text)) return 'protections';
-  return null;
-}
-function modelTerms(value) {
-  const ignored = new Set(['free', 'model', 'mod', 'mods', 'paint', 'paints', 'boot', 'boots', 'helmet', 'helmets', 'rider', 'required', 'base', 'the', 'and', 'for', 'with', 'pack']);
-  return [...new Set(String(value || '').toLowerCase().replace(/([a-z])([0-9])/g, '$1 $2').replace(/([0-9])([a-z])/g, '$1 $2').split(/[^a-z0-9]+/).filter((term) => (term.length >= 3 || /^\d+$/.test(term)) && !ignored.has(term)))];
-}
-function matchingModel(names, dependency) {
-  if (dependency.declared) {
-    const declaredTerms = modelTerms(dependency.label);
-    if (declaredTerms.length >= 3 && declaredTerms.some((term) => !/^\d+$/.test(term))) {
-      const exact = names.find((name) => { const terms = new Set(modelTerms(name)); return declaredTerms.every((term) => terms.has(term)); });
-      if (exact) return exact;
-    }
-  }
-  const wanted = modelTerms(`${dependency.label || ''} ${dependency.url || ''}`);
-  if (wanted.length < 2) return null;
-  return names.find((name) => {
-    const candidate = new Set(modelTerms(name));
-    const hits = wanted.filter((term) => candidate.has(term));
-    const wordHits = hits.filter((term) => !/^\d+$/.test(term));
-    // Matching a brand plus a version number is too loose (many unrelated
-    // models share numbers). Prefer two descriptive words such as fox +
-    // instinct, while still allowing an exact two-term model name.
-    return wordHits.length >= 2 || (wanted.length === 2 && hits.length === wanted.length);
-  }) || null;
-}
-function dependencySearchScore(candidate, dependency) {
-  const wanted = modelTerms(dependency.label);
-  const available = new Set(modelTerms(candidate.title));
-  const hits = wanted.filter((term) => available.has(term)).length;
-  return hits * 10 - Math.max(0, available.size - hits);
-}
+const { dependencyKey, dependencyModelKind, matchingModel, dependencySearchScore, isModelRequirement } = require('./src/lib/dependency-match');
 async function dependencyStatus(dependency, records, catalog) {
   if (dependency.kind === 'bikeSwap') {
     const known = bikeSwaps.status(dependency.url);
@@ -113,6 +75,8 @@ async function dependencyStatus(dependency, records, catalog) {
   if (recorded) return { installed: true, kind };
   if (!kind || !catalog) return { installed: null, kind };
   const name = matchingModel(catalog[({ helmets: 'helmet', protections: 'protection' })[kind] || kind] || [], dependency);
+  // A model folder named differently from the listing can still be the right one when this app installed it.
+  if (!name) { const byTitle = records.find((r) => r.title && matchingModel([r.title], dependency) && r.files.some((f) => /\.(pkz|edf)$/i.test(f) && !f.startsWith('game:') && fs.existsSync(path.join(modsDir(), f)))); if (byTitle) return { installed: true, kind, matchedName: byTitle.title }; }
   return { installed: name ? true : false, kind, matchedName: name || '' };
 }
 function onlineConfig() {
@@ -208,6 +172,11 @@ function rootFor(disabled) { return disabled ? disabledDir() : modsDir(); }
 function insideRoots(p) {
   const n = path.resolve(p).toLowerCase();
   return [modsDir(), disabledDir()].some((r) => n === path.resolve(r).toLowerCase() || n.startsWith(path.resolve(r).toLowerCase() + path.sep));
+}
+// Strictly below a root: never the mods or disabled folder itself (used before deleting).
+function insideRootsStrict(p) {
+  const n = path.resolve(p).toLowerCase();
+  return [modsDir(), disabledDir()].some((r) => n.startsWith(path.resolve(r).toLowerCase() + path.sep));
 }
 function send(ch, payload) { if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(ch, payload); }
 
@@ -335,6 +304,7 @@ async function trash(ids) {
     }
     for (const part of it.parts) {
       const abs = path.join(rootFor(it.disabled), part);
+      if (!part || !insideRootsStrict(abs)) { errors.push(`${it.title}: unsafe path skipped`); continue; }
       try { await shell.trashItem(abs); } catch (e) { errors.push(`${it.title}: ${e.message}`); }
     }
   }
@@ -793,7 +763,7 @@ function registerIpc() {
     return out.sort((a, b) => a.name.localeCompare(b.name));
   });
   handle('library:trashFile', async (p) => {
-    if (!insideRoots(p)) throw new Error('Not in the mods folder');
+    if (typeof p !== 'string' || !insideRootsStrict(p)) throw new Error('Not in the mods folder');
     await shell.trashItem(p);
     await reconcileInstallRecords(); await scan(); send('library:changed', {});
   });
@@ -856,6 +826,8 @@ function registerIpc() {
     const post = await site.post(id), rec = store.get('installs')[id];
     post.installKind = installer.kindFromCategories(post.categories);
     if (post.installKind === 'bikePaint') post.needsModelNotice = false;
+    // Tracks, whole bikes and other standalone mods only keep requirements the creator declared explicitly.
+    if (site.standalone(post.categories)) post.dependencies = (post.dependencies || []).filter((d) => d.declared || d.kind === 'bikeSwap');
     if (rec) {
       const files = [];
       for (const rel of rec.files.filter((f) => /\.pnt$/i.test(f) && !f.startsWith('game:'))) {
@@ -871,10 +843,11 @@ function registerIpc() {
     }
     const records = Object.values(store.get('installs'));
     const paintListing = post.categories.some((c) => [127, 126, 135, 35, 309].includes(c)) && !post.categories.some((c) => [313, 343, 344, 365].includes(c));
-    const dependencyCandidates = post.dependencies.filter((d) => d.kind === 'bikeSwap' || d.declared || /model|helmet|boot|hoodie|protection|rider|instinct|aviator|sm10|atr.?2/i.test(d.label + ' ' + d.url) && !/psd|template/i.test(d.label + ' ' + d.url))
+    const dependencyCandidates = post.dependencies.filter(isModelRequirement)
       .map((d) => d.declared && !dependencyModelKind(d) ? { ...d, kind: ({ helmetPaint: 'helmets', bootPaint: 'boots', protectionPaint: 'protections' })[post.installKind] } : d);
     if (paintListing || post.needsModelNotice || dependencyCandidates.length) {
       const catalog = await gearAssets.catalog({ modsDir: modsDir(), rider: 'default_mx', stockPkz: stockRiderPkz() }, {}).catch(() => null);
+      if (catalog) catalog.riders = (await fsp.readdir(path.join(modsDir(), 'rider', 'riders'), { withFileTypes: true }).catch(() => [])).filter((e) => e.isDirectory() || /\.pkz$/i.test(e.name)).map((e) => e.name.replace(/\.pkz$/i, ''));
       post.modelDependencies = await Promise.all(dependencyCandidates.map(async (d) => ({ ...d, ...await dependencyStatus(d, records, catalog) })));
     }
     const hoodie = post.dependencies.find((d) => /\/rider-hoodie-abdesigns\/?(?:[?#].*)?$/.test(d.url));
@@ -942,7 +915,7 @@ function registerIpc() {
     if (bikeSwaps.hasRecord(swapKey)) {
       await bikeSwaps.removeRecord(swapKey);
       const record = store.get('installs')[swapKey];
-      for (const rel of record?.files || []) if (/\.pnt$/i.test(rel) && insideRoots(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel));
+      for (const rel of record?.files || []) if (/\.pnt$/i.test(rel) && insideRootsStrict(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel));
       store.update('installs', (all) => { const n = { ...all }; delete n[swapKey]; return n; });
       j.status = 'error'; j.error = null; j.installed = []; j.filesDeleted = true; j.note = 'Model swap removed; original bike restored'; emitJob(j); send('library:changed', {}); return;
     }
@@ -954,7 +927,7 @@ function registerIpc() {
     const removed = new Set();
     for (const file of installed) {
       const abs = file.startsWith('game:') ? path.resolve(store.get('settings').gameInstallDir, file.slice(5)) : path.resolve(modsDir(), file);
-      if (!insideRoots(abs) && !insideGame(abs)) throw new Error('File is outside the mod install folders');
+      if (!insideRootsStrict(abs) && !insideGame(abs)) throw new Error('File is outside the mod install folders');
       if (fs.existsSync(abs)) await shell.trashItem(abs);
       if (file.startsWith('game:') && fs.existsSync(abs + '.mxbm-bak')) await fsp.rename(abs + '.mxbm-bak', abs);
       removed.add(file);
@@ -1210,10 +1183,10 @@ function registerIpc() {
   handle('health:fix', async (issue) => {
     if (issue.fixId === 'disable-file') {
       const p = issue.path;
-      if (!p || !store.get('settings').gameInstallDir || !path.resolve(p).toLowerCase().startsWith(path.resolve(store.get('settings').gameInstallDir).toLowerCase())) throw new Error('Not in the game folder');
+      if (!p || !insideGame(p)) throw new Error('Not in the game folder');
       await fsp.rename(p, p + '.off');
     } else if (issue.fixId === 'trash') {
-      if (!insideRoots(issue.path)) throw new Error('Not in the mods folder');
+      if (!issue.path || !insideRootsStrict(issue.path)) throw new Error('Not in the mods folder');
       await shell.trashItem(issue.path);
     } else if (issue.fixId === 'disable-items') {
       const r = await setEnabled(issue.itemIds || [], false);
@@ -1484,11 +1457,11 @@ function registerIpc() {
     const rec = store.get('installs')[key];
     if (!rec) return;
     const resetJobs = () => { for (const j of jobs.values()) if (j.status === 'done' && (String(j.postId) === key || j.installed?.some((f) => rec.files.includes(f)))) { j.filesDeleted = true; j.installed = []; j.status = 'error'; j.error = null; j.note = 'Installed files removed'; emitJob(j); } };
-    if (bikeSwaps.hasRecord(key)) { await bikeSwaps.removeRecord(key); for (const rel of rec.files) if (/\.pnt$/i.test(rel) && insideRoots(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel)); store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; }); resetJobs(); send('library:changed', {}); return; }
+    if (bikeSwaps.hasRecord(key)) { await bikeSwaps.removeRecord(key); for (const rel of rec.files) if (/\.pnt$/i.test(rel) && insideRootsStrict(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel)); store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; }); resetJobs(); send('library:changed', {}); return; }
     if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); resetJobs(); send('library:changed', {}); return; }
     for (const f of rec.files) {
       const abs = f.startsWith('game:') ? path.join(store.get('settings').gameInstallDir, f.slice(5)) : path.join(modsDir(), f);
-      if (fs.existsSync(abs) && (insideRoots(abs) || insideGame(abs))) await shell.trashItem(abs);
+      if (f && fs.existsSync(abs) && (insideRootsStrict(abs) || insideGame(abs))) await shell.trashItem(abs);
     }
     store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; });
     resetJobs();

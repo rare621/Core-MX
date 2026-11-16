@@ -97,23 +97,34 @@ document.addEventListener('error', (e) => { if (e.target.tagName === 'IMG' && !e
 
 // ---------- rail ----------
 const VIEWS = [
-  { id: 'library', label: 'My Mods', icon: 'library' },
-  { id: 'rider', label: 'Rider', icon: 'helmet' },
-  { id: 'get', label: 'Get Mods', icon: 'globe' },
-  { id: 'packs', label: 'OEM Packs', icon: 'layers' },
-  { id: 'online', label: 'Online', icon: 'user' },
-  { id: 'graphics', label: 'Graphics', icon: 'sparkle' },
-  { id: 'game', label: 'Game', icon: 'play' },
-  { id: 'downloads', label: 'Downloads', icon: 'download' },
+  { id: 'library', label: 'My Mods', icon: 'library', group: 'Mods' },
+  { id: 'get', label: 'Get Mods', icon: 'globe', group: 'Mods' },
+  { id: 'packs', label: 'OEM Packs', icon: 'layers', group: 'Mods' },
+  { id: 'downloads', label: 'Downloads', icon: 'download', group: 'Mods' },
+  { id: 'rider', label: 'Rider', icon: 'helmet', group: 'Ride' },
+  { id: 'game', label: 'Game', icon: 'play', group: 'Ride' },
+  { id: 'graphics', label: 'Graphics', icon: 'sparkle', group: 'Ride' },
+  { id: 'online', label: 'Online', icon: 'signal', group: 'Community' },
 ];
+// Soft blurred image behind the whole window (for example the mod being viewed).
+const ambientStack = [];
+function setAmbient(url) {
+  const el = document.getElementById('ambientImg'); if (!el) return;
+  if (!url) { el.classList.remove('show'); return; }
+  const img = new Image();
+  img.onload = () => { el.style.backgroundImage = `url("${String(url).replace(/["\\]/g, '')}")`; el.classList.add('show'); };
+  img.src = url;
+}
+function pushAmbient(url) { ambientStack.push(url || null); setAmbient(url); }
+function popAmbient() { ambientStack.pop(); setAmbient(ambientStack[ambientStack.length - 1]); }
 function renderRail() {
   const active = [...S.jobs.values()].filter((j) => !['done', 'error'].includes(j.status)).length;
   const review = [...S.jobs.values()].filter((j) => j.status === 'review' || j.status === 'browser').length;
   const upd = (S.updates && S.updates.length) || 0;
   const packUpd = S.packsNeed || 0;
   const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
-  $('#rail').innerHTML = VIEWS.map((v) => btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
-    + `<button class="rail-btn rail-friends ${S.view === 'friends' ? 'active' : ''}" data-view="friends">${icon('user')}<span>Friends</span></button><div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-view="friends" title="Friends, sync & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends, sync & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
+  $('#rail').innerHTML = VIEWS.map((v, i) => (v.group !== VIEWS[i - 1]?.group ? `<div class="rail-group">${v.group}</div>` : '') + btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
+    + `<button class="rail-btn rail-friends ${S.view === 'friends' ? 'active' : ''}" data-view="friends">${icon('users')}<span>Friends</span></button><div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-view="friends" title="Friends, sync & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends, sync & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
 }
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
@@ -129,6 +140,7 @@ function go(view) {
     S.rider.modelKey = null; S.rider.bikeModelKey = null; S.rider.modelOk = false;
   }
   S.view = view;
+  document.body.dataset.view = view;
   closeDrawer();
   renderRail();
   render();
@@ -1013,8 +1025,9 @@ async function openPost(summary, { install = false } = {}) {
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
     foot: `<span class="grow">mxb-mods.com</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
-    onClose: () => openPostRefreshers.delete(refresh),
+    onClose: () => { openPostRefreshers.delete(refresh); popAmbient(); },
   });
+  pushAmbient(summary.image);
   let p;
   try { p = await api.invoke('site:post', summary.id); }
   catch (e) { $('.post > div:last-child', m).innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(e.message)}</div></div>`; return; }
@@ -1522,7 +1535,7 @@ function drawBike(c) {
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
       <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame && !riderDirty() ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
-      <div class="bike-livery-card"><div class="section-title">Appearance</div><button class="slot" data-slot="bikeAppearance"><span class="slot-ico">${icon("bike")}</span><span class="slot-txt"><span class="slot-l">Model</span><span class="slot-v">${esc(lo.appearances?.find((o) => o.id === lo.current.bikeAppearance)?.title || "Default bike")}</span></span><span class="slot-n">${lo.options.bikeAppearance?.length || 1} choices ${icon("chevron")}</span></button><p class="muted" style="font-size:12px">Preview a model swap, then Apply. This appearance applies to this bike in every profile.</p><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
+      <div class="bike-livery-card"><div class="section-title">Livery</div><button class="slot" data-slot="bikeAppearance"><span class="slot-ico">${icon("bike")}</span><span class="slot-txt"><span class="slot-l">Model</span><span class="slot-v">${esc(lo.appearances?.find((o) => o.id === lo.current.bikeAppearance)?.title || "Default bike")}</span></span><span class="slot-n">${lo.options.bikeAppearance?.length || 1} choices ${icon("chevron")}</span></button><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
       <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button><p class="muted" style="font-size:12px">Only tyre sets declared by this bike are listed.${lo.invalidTyres ? ' Your previous choice is incompatible. Apply to reset it to the bike default.' : ''}</p></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
     </div></div></div></div>`;
   mountProfileControls();

@@ -5,9 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 test('a declared numbered helmet matches installed variants without accepting another generation', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const context = vm.createContext({});
-  vm.runInContext(source.slice(source.indexOf('function modelTerms('), source.indexOf('function dependencySearchScore(')), context);
+  const context = require('../src/lib/dependency-match');
   const dependency = { declared: true, label: '2021 6D ATR-2', url: 'https://mxb-mods.com/2021-6d-atr-2/' };
   assert.equal(context.matchingModel(['2021_6d_atr2_armega'], dependency), '2021_6d_atr2_armega');
   assert.equal(context.matchingModel(['2021_6d_atr3', '2018_6d_atr2'], dependency), null);

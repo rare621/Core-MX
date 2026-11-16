@@ -1,6 +1,29 @@
 // mxb-mods.com client: WordPress REST API for listing/searching + page HTML for download links.
 const cheerio = require('cheerio');
-const { net } = require('electron');
+let electronNet = null;
+const net = { fetch: (...args) => (electronNet ||= require('electron').net).fetch(...args) };
+const { Worker, isMainThread } = require('worker_threads');
+// Heavy HTML parsing runs in a worker inside the app; tests and the worker itself parse inline.
+let parser = null, parserSerial = 0;
+function parseWorker() {
+  if (parser !== null) return parser;
+  if (!isMainThread || typeof process === 'undefined' || !process.versions.electron) return (parser = false);
+  try {
+    const worker = new Worker(require('path').join(__dirname, 'site-parse-worker.js')), pending = new Map();
+    const fail = (e) => { for (const p of pending.values()) p.reject(e); pending.clear(); parser = null; };
+    worker.on('message', ({ id, result, error }) => { const p = pending.get(id); if (!p) return; pending.delete(id); if (!pending.size) worker.unref(); error ? p.reject(new Error(error)) : p.resolve(result); });
+    worker.on('error', fail); worker.on('exit', () => fail(new Error('Parser stopped')));
+    worker.unref();
+    parser = { run: (op, args) => new Promise((resolve, reject) => { const id = ++parserSerial; pending.set(id, { resolve, reject }); worker.ref(); worker.postMessage({ id, op, args }); }) };
+  } catch { parser = false; }
+  return parser;
+}
+async function parseOff(op, args) {
+  const w = parseWorker();
+  if (w) try { return await w.run(op, args); } catch {}
+  return op === 'requirements' ? listingRequirements(...args) : args[0].map((p) => summarizePost(p, args[1]));
+}
+const summarizeAll = (rows, cats) => parseOff('summaries', [rows, cats]);
 
 const BASE = 'https://mxb-mods.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36 MXBikesManager/1.0';
@@ -29,6 +52,9 @@ const BROWSE_TABS = [
 let categoryMap = null; // id -> {name, parent}
 const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
 const ADDON_CATEGORIES = { riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], protection: [135], goggles: [380] };
+// Standalone content (tracks, whole bikes, models, sounds, graphics, packs, tools) never needs a paint base model.
+const STANDALONE = [22, 45, 304, 313, 343, 344, 365, 46, 174, 609, 130, 93, 40, 95, 382];
+const standalone = (ids) => (ids || []).some((id) => STANDALONE.includes(Number(id))) && !(ids || []).some((id) => [127, 126, 135, 35, 52, 129, 309, 534, 37, 380, 34].includes(Number(id)));
 function needsCustomModel(html) {
   const text = decode(html).replace(/\s+/g, ' ').replace(/\bno (?:other |additional |extra )?(?:mods?|models?)(?: are| is)? (?:required|needed)\b/gi, '');
   return /\b(?:requires?|needs?|must (?:have|use)|only (?:works?(?: with)?|for)|made for|for use with)\b[^.!?]{0,150}\b(?:model|rider\+|hoodie|helmet|boots?|protector)\b|\b(?:custom model|rider\+|hoodie model)\b[^.!?]{0,100}\b(?:required|needed|not included|sold separately)\b/i.test(text);
@@ -85,7 +111,7 @@ async function enrichListing(post, signal) {
     try {
       const response = await net.fetch(post.link, { headers: { 'User-Agent': UA }, signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) });
       if (!response.ok) throw new Error('Instructions unavailable');
-      const details = listingRequirements(await response.text(), '', post);
+      const details = await parseOff('requirements', [await response.text(), '', post]);
       const result = { needsModelNotice: details.needsModelNotice, contentKind: details.contentKind, ...(details.needsModelNotice ? { gearKind: 'paint' } : {}) };
       requirementCache.set(post.id, { result, at: Date.now() });
       while (requirementCache.size > 200) requirementCache.delete(requirementCache.keys().next().value);
@@ -162,7 +188,7 @@ function summarizePost(p, cats) {
     modified: p.modified,
     categories: p.categories || [],
     gearKind: gearKind(p.categories || []),
-    needsModelNotice: needsCustomModel(p.content?.rendered || p.excerpt?.rendered || ''),
+    needsModelNotice: !standalone(p.categories) && needsCustomModel(p.content?.rendered || p.excerpt?.rendered || ''),
     categoryNames: catNames,
     paid: (p.categories || []).some((c) => c === 359 || (cats[c] && cats[c].parent === 359)),
     image: pickImage(media, ['medium_large', 'medium', 'large', 'full']),
@@ -191,7 +217,7 @@ async function fetchPopular(range) {
     const slugs = ranked.slice(i, i + 50).map((r) => r.slug).join(',');
     const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,_links,_embedded' });
     const { json: posts } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
-    for (const p of posts) bySlug.set(p.slug, summarizePost(p, cats));
+    for (const p of await summarizeAll(posts, cats)) bySlug.set(p.slug, p);
   }
   const posts = ranked.map((r, i) => bySlug.get(r.slug) && { ...bySlug.get(r.slug), views: r.views, rank: i + 1 }).filter(Boolean);
   popularCache.set(range, { at: Date.now(), posts });
@@ -226,7 +252,7 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     const response = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`, deadline);
     total = Number(response.headers.get('x-wp-total') || 0);
     if (!response.json.length) { offset = total; break; }
-    const enriched = await enrichListings(response.json.map((raw) => summarizePost(raw, cats)), deadline);
+    const enriched = await enrichListings(await summarizeAll(response.json, cats), deadline);
     for (const p of enriched) {
       offset++;
       if (matches(p) && isAddonPost(p) === (scope === 'addons')) posts.push(p);
@@ -266,7 +292,7 @@ async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', pa
     const { json, headers } = await getJson(`${BASE}/wp-json/wp/v2/posts?${rest}`);
     const restTotal = Number(headers.get('x-wp-total') || 0);
     const total = xs.length + restTotal;
-    return { total: scope === 'all' ? total : 0, totalPages: Math.max(1, Math.ceil(total / perPage)), page, posts: [...top, ...(need > 0 ? scopePosts(json.map((p) => summarizePost(p, cats)), scope) : [])] };
+    return { total: scope === 'all' ? total : 0, totalPages: Math.max(1, Math.ceil(total / perPage)), page, posts: [...top, ...(need > 0 ? scopePosts(await summarizeAll(json, cats), scope) : [])] };
   }
   const params = new URLSearchParams({
     per_page: String(perPage), page: String(page), _embed: 'wp:featuredmedia',
@@ -284,7 +310,7 @@ async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', pa
     total: scope === 'all' ? Number(headers.get('x-wp-total') || 0) : 0,
     totalPages: Number(headers.get('x-wp-totalpages') || 0),
     page,
-    posts: scopePosts(json.map((p) => summarizePost(p, cats)), scope),
+    posts: scopePosts(await summarizeAll(json, cats), scope),
   };
 }
 
@@ -299,7 +325,7 @@ async function postsByIds(ids) {
       _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,_links,_embedded',
     });
     const { json } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
-    out.push(...json.map((p) => summarizePost(p, cats)));
+    out.push(...await summarizeAll(json, cats));
   }
   return out;
 }
@@ -386,9 +412,9 @@ async function post(id) {
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
   const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
-  const details = listingRequirements(html, p.content && p.content.rendered || '', summary);
+  const details = await parseOff('requirements', [html, p.content && p.content.rendered || '', summary]);
   details.dependencies = require('./download-dependencies').enrich(details.dependencies, downloads, p.content && p.content.rendered || '');
-  const needsModelNotice = !summary.categories.includes(365) && details.needsModelNotice;
+  const needsModelNotice = !summary.categories.includes(365) && !standalone(summary.categories) && details.needsModelNotice;
   return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description: description + (details.instructions ? '<h3>Mod instructions</h3>' + sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : ''), downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
 }
 
@@ -450,4 +476,4 @@ function shopProduct(address) {
   } catch { return null; }
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct };
+module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };

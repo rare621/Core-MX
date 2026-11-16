@@ -26,7 +26,7 @@ test('deleted gear clears its install record while surviving paints, disabled mo
 test('My Gear bulk deletion sends files to the Recycle Bin and refreshes records even if one deletion fails', async () => {
   const source = await fs.readFile(path.join(__dirname, '../main.js'), 'utf8');
   const recycled = [], events = []; let reconciled = 0;
-  const context = vm.createContext({ path, findItem: () => ({ title: 'Gear', parts: ['one.pnt', 'locked.pnt'] }), rootFor: () => 'mods', shell: { trashItem: async (file) => { if (file.endsWith('locked.pnt')) throw Error('locked'); recycled.push(file); } }, reconcileInstallRecords: async () => reconciled++, send: (...args) => events.push(args) });
+  const context = vm.createContext({ path, findItem: () => ({ title: 'Gear', parts: ['one.pnt', 'locked.pnt'] }), rootFor: () => 'mods', insideRootsStrict: (p) => !!path.relative('mods', p) && !path.relative('mods', p).startsWith('..'), shell: { trashItem: async (file) => { if (file.endsWith('locked.pnt')) throw Error('locked'); recycled.push(file); } }, reconcileInstallRecords: async () => reconciled++, send: (...args) => events.push(args) });
   vm.runInContext(source.slice(source.indexOf('async function trash(ids)'), source.indexOf('async function reconcileInstallRecords(')), context);
   const result = await context.trash(['gear']);
   assert.deepEqual(recycled, [path.join('mods', 'one.pnt')]);
