@@ -1708,7 +1708,11 @@ function mountProfileControls() {
   $('.save-bar')?.remove();
   if (view && riderDirty()) {
     view.classList.add('has-save-bar');
-    view.insertAdjacentHTML('beforeend', `<div class="save-bar"><span class="save-dot"></span><div><b>Unsaved changes</b><small>You're previewing. Apply saves it to the game.</small></div><button class="btn" data-act="rider-revert">Revert</button><button class="btn btn-primary" data-act="rider-apply">${icon('check')}Apply to game</button></div>`);
+    // Still the same setup that was queued? (Further edits need Apply again.)
+    const queued = S.rider.queued?.get(riderDraftKey()) === JSON.stringify(S.rider.drafts[riderDraftKey()] || {});
+    view.insertAdjacentHTML('beforeend', queued
+      ? `<div class="save-bar queued"><span class="save-dot"></span><div><b>Waiting for MX Bikes to close</b><small>This outfit is saved automatically a few seconds after you exit the game.</small></div><button class="btn" data-act="rider-cancel-queued">Cancel</button></div>`
+      : `<div class="save-bar"><span class="save-dot"></span><div><b>Unsaved changes</b><small>You're previewing. Apply saves it to the game.</small></div><button class="btn" data-act="rider-revert">Revert</button><button class="btn btn-primary" data-act="rider-apply">${icon('check')}Apply to game</button></div>`);
   }
   const select = $('#riderProfile');
   if (select) select.addEventListener('change', async (e) => { S.rider.profile = e.target.value; S.rider.selectionDirty = true; S.rider.bikes = null; S.rider.bike = null; await renderRider($('#content')); });
@@ -2624,10 +2628,20 @@ document.addEventListener('click', async (e) => {
     case 'profile-create': createProfileDialog(); break;
     case 'rider-apply': {
       a.disabled = true;
-      try { await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {}); delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
+      try {
+        const result = await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {});
+        if (result && result.queued) {
+          // The game is open: the preview stays on screen and is saved when MX Bikes closes.
+          (S.rider.queued ||= new Map()).set(riderDraftKey(), JSON.stringify(S.rider.drafts[riderDraftKey()] || {}));
+          await renderRider($('#content'));
+          toast('MX Bikes is open, so this will be saved automatically when you close the game', 'info', 5000);
+          break;
+        }
+        delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
       catch (err) { a.disabled = false; toast(esc(cleanErr(err)), 'err', 7000); } break;
     }
-    case 'rider-revert': delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
+    case 'rider-cancel-queued': await api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike); S.rider.queued?.delete(riderDraftKey()); await renderRider($('#content')); toast('Cancelled. Your preview is still here to Apply or Revert.', 'info', 3000); break;
+    case 'rider-revert': S.rider.queued?.delete(riderDraftKey()); api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike).catch(() => {}); delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
     case 'rider-refresh': if (!riderDirty()) { S.rider.profile = null; S.rider.bike = null; } S.rider.bikes = null; S.rider.modelKey = null; S.rider.bikeModelKey = null; S.gearThumbs.clear(); await renderRider($('#content')); toast('Rider and bike refreshed from the game', 'ok'); break;
     case 'profile-delete': {
       if (!await confirmBox('Delete rider profile?', `Move <b>${esc(S.rider.profile)}</b> and its saved gear and settings to the Recycle Bin? Another profile will be selected if this one is active.`, 'Delete profile', true)) break;
@@ -2771,6 +2785,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- events from main ----------
+api.on('rider:pendingApplied', (results) => {
+  for (const r of results || []) for (const key of [...(S.rider.queued?.keys() || [])]) if (key.endsWith('|' + r.bike)) { S.rider.queued.delete(key); if (r.ok) delete S.rider.drafts[key]; }
+  const bad = (results || []).filter((r) => !r.ok);
+  if (bad.length) toast(`Couldn't save your Rider changes: ${esc(bad[0].error)}`, 'err', 8000);
+  else toast('MX Bikes closed, so your Rider changes are now saved to the game', 'ok', 4500);
+});
 api.on('rider:changed', async ({ active }) => { const profiles = await api.invoke('rider:profiles'); S.rider.profiles = profiles.profiles; if (!riderDirty()) { S.rider.profile = active; S.rider.bike = null; S.rider.saveState = ''; } S.rider.bikes = null; S.gearThumbs.clear(); if (S.view === 'rider') renderRider($('#content')); });
 const equipQueue = [];
 let equipPromptBusy = false;
