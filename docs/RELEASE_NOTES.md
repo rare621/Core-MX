@@ -1,3 +1,8 @@
+## 1.0.21 — CoreMX mod details fix
+
+- Fixed a popup spinner that remained after opening a CoreMX upload. The website's numeric timestamps are converted before the details render.
+- Detail rendering errors now appear inside the popup rather than leaving it loading indefinitely.
+
 ## 1.0.20 — HTTPS online sync and community uploads
 
 - The app now sends online sync traffic to `https://coremx.app/v1/`. The website proxies those calls to the local sync service. Existing tokens and friends are retained when moving from the old service address.

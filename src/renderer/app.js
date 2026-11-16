@@ -1167,14 +1167,23 @@ async function openPost(summary, { install = false, file = null } = {}) {
   refreshInlineDownloads(m);
   $('.modal-body', m).scrollTop = scroll;
   };
+  const renderDetails = () => {
+    try { draw(); return true; }
+    catch (error) {
+      console.error('Could not render mod details', error);
+      const panel = $('.post > div:last-child', m) || $('.modal-body', m);
+      panel.innerHTML = `<div class="notice danger">${icon('alert')}<div>Could not display this mod. ${esc(error?.message || 'Try opening it again.')}</div></div>`;
+      return false;
+    }
+  };
   let revision = 0;
   refresh = async () => {
     const request = ++revision;
     const fresh = await api.invoke('site:post', summary.id);
-    if (m.isConnected && request === revision) { p = fresh; draw(); }
+    if (m.isConnected && request === revision) { p = fresh; renderDetails(); }
   };
   openPostRefreshers.add(refresh);
-  draw();
+  if (!renderDetails()) return;
   if (install && !p.paid) installLinkedDownload(p, file);
   $('.modal-body', m).addEventListener('click', async (e) => {
     const findRequired = e.target.closest('[data-find-required]');
