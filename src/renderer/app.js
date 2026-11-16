@@ -27,7 +27,7 @@ function toast(msg, type = 'info', ms = 3800) {
   el.className = `toast ${type}`;
   el.innerHTML = `${icon(type === 'ok' ? 'check' : type === 'err' ? 'alert' : 'info')}<div>${msg}</div>`;
   $('#toasts').appendChild(el);
-  setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, ms);
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 260); }, ms);
 }
 
 // ---------- state ----------
@@ -97,14 +97,14 @@ document.addEventListener('error', (e) => { if (e.target.tagName === 'IMG' && !e
 
 // ---------- rail ----------
 const VIEWS = [
-  { id: 'library', label: 'My Mods', icon: 'library', group: 'Mods' },
-  { id: 'get', label: 'Get Mods', icon: 'globe', group: 'Mods' },
-  { id: 'packs', label: 'OEM Packs', icon: 'layers', group: 'Mods' },
-  { id: 'downloads', label: 'Downloads', icon: 'download', group: 'Mods' },
-  { id: 'rider', label: 'Rider', icon: 'helmet', group: 'Ride' },
-  { id: 'game', label: 'Game', icon: 'play', group: 'Ride' },
-  { id: 'graphics', label: 'Graphics', icon: 'sparkle', group: 'Ride' },
-  { id: 'online', label: 'Online', icon: 'signal', group: 'Community' },
+  { id: 'library', label: 'My Mods', icon: 'library', hint: 'Everything installed in your game' },
+  { id: 'get', label: 'Get Mods', icon: 'globe', hint: 'Browse and install free and paid mods' },
+  { id: 'packs', label: 'OEM Packs', icon: 'layers', hint: 'Official bike packs and their updates' },
+  { id: 'rider', label: 'Rider', icon: 'helmet', hint: 'Outfit, bike, livery and gear' },
+  { id: 'game', label: 'Play', icon: 'play', hint: 'Pick a bike and track, then ride' },
+  { id: 'graphics', label: 'Graphics', icon: 'sparkle', hint: 'Graphics mods and game graphics settings' },
+  { id: 'online', label: 'Online', icon: 'signal', hint: 'Live servers, ranked and hosting' },
+  { id: 'friends', label: 'Friends', icon: 'users', hint: 'Friends, outfit sync and status' },
 ];
 // Soft blurred image behind the whole window (for example the mod being viewed).
 const ambientStack = [];
@@ -122,11 +122,35 @@ function renderRail() {
   const review = [...S.jobs.values()].filter((j) => j.status === 'review' || j.status === 'browser').length;
   const upd = (S.updates && S.updates.length) || 0;
   const packUpd = S.packsNeed || 0;
-  const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
-  $('#rail').innerHTML = VIEWS.map((v, i) => (v.group !== VIEWS[i - 1]?.group ? `<div class="rail-group">${v.group}</div>` : '') + btn(v, v.id === 'downloads' ? (review || active || upd || '') : v.id === 'packs' ? (packUpd || '') : '')).join('')
-    + `<button class="rail-btn rail-friends ${S.view === 'friends' ? 'active' : ''}" data-view="friends">${icon('users')}<span>Friends</span></button><div class="rail-spacer"></div><div class="rail-account"><button class="rail-account-friends" data-view="friends" title="Friends, sync & status">${S.accounts?.steam?.avatarData ? `<img class="rail-steam-avatar" src="${esc(S.accounts.steam.avatarData)}" alt="Steam avatar">` : icon('steam')}<span><b>${esc(S.accounts?.steam?.name || 'Steam account')}</b><small>Friends, sync & status</small></span></button><button class="btn btn-icon btn-ghost" data-view="settings" title="Settings" aria-label="Settings">${icon('settings')}</button></div>`;
+  const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}" title="${esc(v.label + ' — ' + v.hint)}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
+  $('#rail').innerHTML = '<span class="rail-ind" aria-hidden="true"></span>' + VIEWS.map((v) => btn(v, v.id === 'packs' ? (packUpd || '') : '')).join('');
+  moveRailIndicator();
+  const dl = review || active || upd || '';
+  const steam = S.accounts?.steam;
+  $('#railAccount').innerHTML = `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
+    + `<button class="top-icon ${S.view === 'settings' ? 'active' : ''}" data-view="settings" title="Settings">${icon('settings')}</button>`
+    + `<button class="top-avatar" data-view="friends" title="${esc((steam?.name || 'Steam account') + ' — friends, sync & status')}">${steam?.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}</button>`;
 }
+// The white pill behind the current page slides between nav items.
+let railInd = null;
+function moveRailIndicator() {
+  const rail = $('#rail'), ind = $('.rail-ind', rail), on = $('.rail-btn.active', rail);
+  if (!ind) return;
+  if (!on) { ind.style.opacity = '0'; railInd = null; return; }
+  const place = (x, w) => { ind.style.transform = `translateX(${x}px)`; ind.style.width = `${w}px`; };
+  ind.style.transition = 'none';
+  if (railInd) place(railInd.x, railInd.w); else place(on.offsetLeft, on.offsetWidth);
+  ind.style.opacity = '1';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    ind.style.transition = '';
+    place(on.offsetLeft, on.offsetWidth);
+    railInd = { x: on.offsetLeft, w: on.offsetWidth };
+    on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }));
+}
+window.addEventListener('resize', () => { railInd = null; moveRailIndicator(); });
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
+$('#railAccount').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
 function go(view) {
   // old view names still used in a few places
@@ -611,7 +635,14 @@ function modal({ title, body, foot = '', size = '', onClose }) {
   const wrap = document.createElement('div');
   wrap.className = 'modal-wrap';
   wrap.innerHTML = `<div class="modal ${size}"><div class="modal-head"><h3>${title}</h3><button class="btn btn-ghost btn-icon" data-close>${icon('x')}</button></div><div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}</div>`;
-  const close = () => { wrap.remove(); onClose && onClose(); };
+  // Animate out, then remove. The wrapper stops taking clicks straight away.
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    wrap.classList.add('closing');
+    setTimeout(() => wrap.remove(), matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 190);
+    onClose && onClose();
+  };
   wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
   wrap.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   $('#modalRoot').appendChild(wrap);
@@ -1557,7 +1588,7 @@ function drawBike(c) {
 function drawRider(c) {
   const R = S.rider, lo = R.lo;
   const it = bikeItem(R.bike);
-  const groups = [...new Set(lo.slots.filter((s) => s.group !== 'Bike').map((s) => s.group))];
+  const groups = [...new Set(lo.slots.filter((s) => s.group !== 'Bike' && s.id !== 'bikeAppearance').map((s) => s.group))];
   const tile = (s) => {
     const n = lo.options[s.id].length;
     const v = lo.current[s.id];
@@ -1582,7 +1613,7 @@ function drawRider(c) {
       </div><div class="stage-note muted" id="stageNote"></div></div>
       <div class="rider-wrap">
       <div class="outfit-bike-context"><span class="muted">Outfit for ${esc(bikeTitle(R.bike))}</span><button class="btn btn-sm" data-rider-tab="bike">${icon('bike')}Bike & livery</button></div>
-      ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g).map(tile).join('')}</div>`).join('')}
+      ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g && s.id !== 'bikeAppearance').map(tile).join('')}</div>`).join('')}
       <p class="muted" style="margin-top:22px;font-size:12px">${icon('info')} Close MX Bikes before changing gear here. A backup of your profile is kept next to it.</p>
     </div></div></div></div></div>`;
   mountRiderViewer();
@@ -2646,7 +2677,7 @@ $('#dropzone .dz-icon').innerHTML = icon('download');
 // ---------- keyboard ----------
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    const m = $$('.modal-wrap').pop();
+    const m = $$('.modal-wrap:not(.closing)').pop();
     if (m) m.close(); else if (S.drawerId) closeDrawer(); else if (S.selected.size) { S.selected.clear(); renderLibItems(); }
   }
   if (e.ctrlKey && e.key.toLowerCase() === 'f') {

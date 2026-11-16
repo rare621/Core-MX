@@ -1497,10 +1497,10 @@ function createWindow() {
   mainWin = new BrowserWindow({
     show: !process.env.MXB_DEBUG_SHOT,
     width: Math.min(1560, area.width - 24), height: Math.min(960, area.height - 24), minWidth: 980, minHeight: 640,
-    backgroundColor: '#0b0b0d',
+    backgroundColor: '#08090b',
     title: 'MX Bikes Manager',
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0b0b0d', symbolColor: '#cfd3dc', height: 40 },
+    titleBarOverlay: { color: '#00000000', symbolColor: '#cfd3dc', height: 60 },
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, webviewTag: true, backgroundThrottling: !process.env.MXB_DEBUG_SHOT },
   });
   // The Ranked tab embeds mxb-ranked.com: lock embedded pages down to that site, no Node, shared login session.
