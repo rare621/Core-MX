@@ -160,3 +160,140 @@ select option { background: var(--solid-2); color: var(--text); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .22); background-clip: padding-box; border: 3px solid transparent; }
 
 @media (prefers-reduced-motion: reduce) { .view, .card, .ambient::before, .ambient-img { animation: none; transition: none; } }
+
+/* =================== Layout v2: top navigation =================== */
+.titlebar { height: 60px; gap: 14px; padding: 0 150px 0 18px; position: relative; z-index: 20; }
+.brand-name { display: none; }
+.brand-mark { font-size: 11px; padding: 8px 9px; border-radius: 10px; }
+.rail { -webkit-app-region: no-drag; flex-direction: row; align-items: center; width: auto; height: 44px; padding: 4px; gap: 2px; border-radius: 999px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  background: rgba(255, 255, 255, .05); box-shadow: var(--hairline), var(--sheen); min-width: 0; flex: 0 1 auto; }
+.rail::-webkit-scrollbar { display: none; }
+.rail-group, .rail-spacer { display: none; }
+.rail-btn { flex: none; width: auto; height: 36px; padding: 0 15px; gap: 8px; border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--text-2); }
+.rail-btn .ico { width: 17px; height: 17px; }
+.rail-btn:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
+.rail-btn.active { background: rgba(255, 255, 255, .92); color: #0c0d10; box-shadow: 0 6px 16px rgba(0, 0, 0, .35); }
+.rail-btn.active .ico { color: #0c0d10; }
+.rail-btn.active::before { display: none; }
+.rail-btn .rail-badge { margin-left: 2px; }
+.top-account { -webkit-app-region: no-drag; display: flex; align-items: center; gap: 6px; }
+.top-icon { position: relative; display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, .06); box-shadow: var(--hairline); color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; }
+.top-icon:hover { background: rgba(255, 255, 255, .12); color: var(--text); }
+.top-icon.active { background: rgba(255, 255, 255, .92); color: #0c0d10; }
+.top-icon .ico { width: 18px; height: 18px; }
+.top-icon .rail-badge { position: absolute; top: -4px; right: -6px; min-width: 18px; height: 18px; font-size: 10.5px; padding: 0 5px; }
+.top-avatar { width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; overflow: hidden; cursor: pointer; background: rgba(255, 255, 255, .06); box-shadow: 0 0 0 2px rgba(255, 255, 255, .12); display: grid; place-items: center; color: var(--accent); }
+.top-avatar:hover { box-shadow: 0 0 0 2px var(--accent); }
+.top-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.top-avatar .ico { width: 20px; height: 20px; }
+.titlebar #launchBtn { -webkit-app-region: no-drag; height: 38px; margin-right: 6px; padding: 0 18px 0 15px; font-size: 13.5px; }
+
+.shell { height: calc(100% - 60px); padding: 0 14px 14px; }
+.content { border-radius: 26px; }
+.view > .main, .view.col { max-width: 100%; }
+
+/* Page header: big title on its own line, tabs underneath like iOS. */
+.toolbar { padding: 30px 36px 18px; }
+.toolbar h2 { font-size: 34px; margin-right: 8px; }
+.scroller { padding: 4px 36px 44px; }
+.filters, .chips { padding-left: 36px; padding-right: 36px; }
+.bigtabs { margin: 0 36px 16px; }
+
+/* Friends popover now opens from the avatar at the top right. */
+.friends-panel { left: auto; right: 16px; top: 64px; bottom: auto; background: var(--glass); backdrop-filter: var(--blur); border: 0; box-shadow: var(--shadow), inset 0 0 0 1px rgba(255, 255, 255, .09); border-radius: 24px; }
+.app-update-overlay { top: 70px; background: var(--glass); backdrop-filter: var(--blur); }
+
+/* Narrower windows: icons only, except the page you're on. */
+@media (max-width: 1480px) {
+  .rail-btn:not(.active) span:not(.rail-badge) { display: none; }
+  .rail-btn:not(.active) { padding: 0 11px; }
+}
+@media (max-width: 1100px) {
+  .titlebar #launchBtn { font-size: 0; padding: 0 12px; gap: 0; }
+  .titlebar #launchBtn .ico { width: 18px; height: 18px; }
+  .toolbar { padding: 22px 22px 14px; }
+  .scroller { padding: 4px 22px 32px; }
+  .filters, .chips { padding-left: 22px; padding-right: 22px; }
+  .bigtabs { margin: 0 22px 14px; }
+}
+.srcbar { padding: 30px 36px 10px; gap: 16px; }
+.srcbar h2 { font: 700 34px/1.1 var(--display); letter-spacing: -.025em; margin-right: 8px; }
+@media (max-width: 1100px) { .srcbar { padding: 22px 22px 8px; } }
+
+/* =================== Motion =================== */
+:root { --spring: cubic-bezier(.34, 1.36, .5, 1); --out: cubic-bezier(.16, 1, .3, 1); }
+
+/* Sliding page indicator in the top nav */
+.rail { position: relative; }
+.rail-ind { position: absolute; left: 0; top: 4px; height: 36px; border-radius: 999px; background: rgba(255, 255, 255, .92); box-shadow: 0 6px 16px rgba(0, 0, 0, .35); pointer-events: none; z-index: 0;
+  transition: transform .45s var(--out), width .45s var(--out), opacity .2s; }
+.rail-btn { position: relative; z-index: 1; transition: color .25s, background .2s; }
+.rail-btn.active { background: transparent; box-shadow: none; }
+
+/* Page change */
+.view { animation: viewIn .42s var(--out) both; }
+@keyframes viewIn { from { opacity: 0; transform: translateY(10px) scale(.995); filter: blur(2px); } }
+.toolbar h2, .srcbar h2 { animation: titleIn .5s var(--out) both; }
+@keyframes titleIn { from { opacity: 0; transform: translateX(-8px); } }
+
+/* Cards rise in, a few at a time */
+.grid > .card { animation: cardIn .5s var(--out) both; }
+.grid > .card:nth-child(1) { animation-delay: .02s; } .grid > .card:nth-child(2) { animation-delay: .04s; }
+.grid > .card:nth-child(3) { animation-delay: .06s; } .grid > .card:nth-child(4) { animation-delay: .08s; }
+.grid > .card:nth-child(5) { animation-delay: .1s; } .grid > .card:nth-child(6) { animation-delay: .12s; }
+.grid > .card:nth-child(7) { animation-delay: .14s; } .grid > .card:nth-child(8) { animation-delay: .16s; }
+.grid > .card:nth-child(9) { animation-delay: .18s; } .grid > .card:nth-child(10) { animation-delay: .2s; }
+.grid > .card:nth-child(n+11) { animation-delay: .22s; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+.card .thumb img { transition: opacity .4s, transform .6s var(--out); }
+.card:hover .thumb img { transform: scale(1.045); }
+.card { transition: transform .35s var(--spring), background .2s, box-shadow .3s; }
+.card:hover { transform: translateY(-4px); }
+.card:active { transform: translateY(-1px) scale(.985); transition-duration: .12s; }
+
+/* Grouped rows and settings cards fade up together */
+.set-card, .slot-grid, .jobs, .notice, .section-title { animation: rowIn .45s var(--out) both; }
+@keyframes rowIn { from { opacity: 0; transform: translateY(8px); } }
+
+/* Buttons and controls */
+.btn, .chip, .pill-btn, .top-icon, .top-avatar, .slot, .opt, .bigtab, .seg-tabs button { transition: background .2s, color .2s, box-shadow .25s, transform .3s var(--spring); }
+.btn:hover:not(:disabled), .top-icon:hover, .top-avatar:hover { transform: translateY(-1px); }
+.btn:active:not(:disabled), .chip:active, .pill-btn:active, .top-icon:active, .top-avatar:active, .rail-btn:active, .slot:active:not(:disabled) { transform: scale(.95); transition-duration: .1s; }
+.btn-primary:hover:not(:disabled), .titlebar #launchBtn:hover { box-shadow: 0 10px 26px rgba(255, 110, 40, .42), var(--sheen); }
+.slot:hover:not(:disabled) .slot-n .ico { transform: translateX(3px); }
+.slot-n .ico { transition: transform .3s var(--spring); }
+.chip.active, .bigtab.active, .seg-tabs button.active { animation: pick .35s var(--spring); }
+@keyframes pick { from { transform: scale(.92); } }
+.toggle .sw::after { transition: transform .35s var(--spring); }
+.search input { transition: background .2s, box-shadow .25s, width .4s var(--out); }
+
+/* Dialogs, sheets, menus, toasts */
+.modal-wrap { animation: scrimIn .25s ease both; }
+.modal { animation: sheetIn .45s var(--spring) both; }
+@keyframes scrimIn { from { opacity: 0; backdrop-filter: blur(0); } }
+@keyframes sheetIn { from { opacity: 0; transform: translateY(18px) scale(.94); } }
+.modal-wrap.closing { animation: scrimOut .19s ease both; pointer-events: none; }
+.modal-wrap.closing .modal { animation: sheetOut .19s ease-in both; }
+@keyframes scrimOut { to { opacity: 0; } }
+@keyframes sheetOut { to { opacity: 0; transform: translateY(10px) scale(.96); } }
+.drawer { transition: transform .5s var(--out), opacity .3s; opacity: 0; }
+.drawer.show { opacity: 1; }
+.drawer-scrim { transition: opacity .3s; }
+.menu { animation: menuIn .22s var(--out) both; transform-origin: top left; }
+@keyframes menuIn { from { opacity: 0; transform: translateY(-6px) scale(.96); } }
+.toast { animation: toastIn .45s var(--spring) both; }
+.toast.leaving { animation: toastOut .26s ease-in both; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(16px) scale(.92); } }
+@keyframes toastOut { to { opacity: 0; transform: translateY(8px) scale(.96); } }
+.friends-panel { animation: menuIn .3s var(--out) both; transform-origin: top right; }
+.dropzone.show .dropzone-inner { animation: sheetIn .4s var(--spring) both; }
+.bulkbar { transition: transform .45s var(--spring), opacity .25s; }
+
+/* Loading */
+.spinner { border-width: 2.5px; border-color: rgba(255, 255, 255, .12); border-top-color: var(--accent); animation: spin .7s linear infinite; }
+.progress > div { background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .4s var(--out); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
+}
+.rider-stage { height: calc(100vh - 240px); }

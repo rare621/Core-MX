@@ -6,7 +6,7 @@ S.ride = { bike: null, track: null };
 
 function gameTabs() {
   const t = (id, ic, l) => `<button class="${S.gameTab === id ? 'active' : ''}" data-game-tab="${id}">${icon(ic)}${l}</button>`;
-  return `<div class="seg-tabs">${t('ride', 'play', 'Ride')}${t('settings', 'settings', 'Settings')}</div>`;
+  return `<div class="seg-tabs">${t('ride', 'play', 'Ride')}${t('settings', 'settings', 'Game settings')}</div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-game-tab]');
@@ -39,7 +39,7 @@ async function renderRide(c) {
       <div class="ride-txt"><div class="slot-l">${kind === 'bike' ? 'Bike' : 'Track'}</div><div class="ride-title">${esc(title)}</div><div class="muted" style="font-size:13px">${esc(sub || '')}</div></div>
       <span class="btn btn-sm">Change</span></button>`;
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar"><h2>Game</h2>${gameTabs()}</div>
+    <div class="toolbar"><h2>Play</h2>${gameTabs()}</div>
     <div class="scroller"><div style="max-width:960px">
       <div class="ride-grid">
         ${tile('bike', bike, bike ? bike.title : (S.ride.bike || 'Choose a bike'), bike ? [bike.cc && (bike.cc === 'Electric' ? 'Electric' : `${bike.cc}cc`), bike.bikeClass].filter(Boolean).join(' · ') : '')}
@@ -185,7 +185,7 @@ const GAME_SETTINGS = [
 const RESOLUTIONS = ['1280x720', '1600x900', '1920x1080', '2560x1080', '2560x1440', '3440x1440', '3840x1600', '3840x2160'];
 
 async function renderGameSettings(c) {
-  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Game</h2>${gameTabs()}</div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Play</h2>${gameTabs()}</div><div class="scroller"><div class="loadmore"><div class="spinner"></div></div></div></div></div>`;
   let st;
   try { st = await api.invoke('game:settings'); } catch (e) { $('.scroller', c).innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
   if (!st) { $('.scroller', c).innerHTML = `<div class="empty"><div>${icon('settings')}<h3>No game profile yet</h3><div>Start MX Bikes once to create it.</div></div></div>`; return; }
