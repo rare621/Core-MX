@@ -83,7 +83,7 @@ select option { background: var(--solid-2); color: var(--text); }
 .bigtabs { margin: 0 32px 14px; }
 
 /* ---------- controls ---------- */
-.btn { height: 34px; border-radius: 999px; background: rgba(255, 255, 255, .08); box-shadow: var(--sheen); font-weight: 600; transition: background .18s, transform .1s, box-shadow .18s; }
+.btn { border-radius: 999px; background: rgba(255, 255, 255, .08); box-shadow: var(--sheen); font-weight: 600; transition: background .18s, transform .1s, box-shadow .18s; }
 .btn:hover { background: rgba(255, 255, 255, .14); }
 .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 18px rgba(255, 110, 40, .28), var(--sheen); }
 .btn-primary:hover { background: var(--accent-2); }
@@ -360,3 +360,59 @@ select option { background: var(--solid-2); color: var(--text); }
 .slot-ico { width: 42px; height: 42px; }
 .slot-img { width: 70px; height: 44px; border-radius: 10px; }
 .profile-controls { border-radius: 16px; padding: 6px 8px 6px 14px; }
+
+/* Small overlay buttons keep their own size (gear picker eye / delete). */
+.gear-view, .gear-delete { height: 26px; width: 26px; padding: 0; border-radius: 50%; box-shadow: none; background: rgba(0, 0, 0, .35); }
+.gear-view .ico, .gear-delete .ico { width: 14px; height: 14px; }
+.gear-view:hover, .gear-delete:hover { transform: none; background: rgba(255, 255, 255, .12); }
+.gear-spin { display: grid; place-items: center; }
+.gear-spin .spinner { display: block; }
+.gear-tile { background: rgba(255, 255, 255, .05); box-shadow: var(--hairline); transition: background .2s, transform .3s var(--spring), box-shadow .25s; }
+.gear-tile:hover { background: rgba(255, 255, 255, .09); transform: translateY(-2px); }
+.gear-tile.selected { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-soft); }
+.gear-img { background: radial-gradient(120% 90% at 50% 30%, rgba(255, 255, 255, .09) 0%, rgba(0, 0, 0, .2) 70%); }
+
+/* =================== My Mods summary =================== */
+.lib-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; padding: 0 36px 18px; }
+.sum-tile { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0; border-radius: 18px; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); color: var(--text); text-align: left; cursor: pointer; animation: rowIn .45s var(--out) both; transition: background .2s, box-shadow .25s, transform .3s var(--spring); }
+.sum-tile:nth-child(2) { animation-delay: .04s; } .sum-tile:nth-child(3) { animation-delay: .08s; } .sum-tile:nth-child(4) { animation-delay: .12s; } .sum-tile:nth-child(5) { animation-delay: .16s; }
+.sum-tile:hover { background: rgba(255, 255, 255, .08); transform: translateY(-2px); }
+.sum-tile:active { transform: scale(.97); }
+.sum-tile.active { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .55); background: rgba(255, 255, 255, .09); }
+.sum-ico { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: rgba(255, 255, 255, .07); color: var(--text-2); flex: none; }
+.sum-ico .ico { width: 18px; height: 18px; }
+.sum-tile.accent .sum-ico { background: var(--accent); color: #fff; box-shadow: 0 6px 16px rgba(255, 110, 40, .35); }
+.sum-tile.warn .sum-ico { background: var(--warn-soft); color: var(--warn); }
+.sum-txt { display: flex; flex-direction: column; min-width: 0; }
+.sum-txt b { font: 700 20px/1.1 var(--display); letter-spacing: -.02em; }
+.sum-txt small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1250px) { .lib-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .lib-summary { padding: 0 22px 14px; } }
+
+/* =================== Play page =================== */
+.play-page { max-width: 1180px; display: grid; gap: 18px; }
+.play-hero { position: relative; height: 360px; border-radius: 28px; overflow: hidden; box-shadow: var(--hairline), 0 24px 60px rgba(0, 0, 0, .4); animation: cardIn .6s var(--out) both; }
+.play-hero-bg { position: absolute; inset: 0; aspect-ratio: auto; }
+.play-hero-bg img { transform: scale(1.03); transition: transform 8s linear; }
+.play-hero:hover .play-hero-bg img { transform: scale(1.1); }
+.play-hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(6, 7, 9, .94) 0%, rgba(6, 7, 9, .72) 42%, rgba(6, 7, 9, .1) 80%), linear-gradient(0deg, rgba(6, 7, 9, .55), transparent 55%); }
+.play-hero-body { position: absolute; left: 40px; right: 40px; bottom: 36px; display: flex; flex-direction: column; gap: 8px; max-width: 620px; }
+.play-hero-body h3 { margin: 0; font: 750 40px/1.05 var(--display); letter-spacing: -.03em; text-shadow: 0 2px 24px rgba(0, 0, 0, .5); }
+.play-hero-sub { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 15px; font-weight: 600; }
+.play-hero-sub .ico { width: 18px; height: 18px; color: var(--accent-2); }
+.play-hero-actions { display: flex; align-items: center; gap: 18px; margin-top: 14px; }
+.play-hero-actions .muted { font-size: 12.5px; max-width: 300px; line-height: 1.45; }
+.ride-btn { height: 52px; padding: 0 34px; font-size: 16.5px; border-radius: 999px; }
+.ride-btn .ico { width: 20px; height: 20px; }
+.ride-grid { gap: 14px; }
+.ride-pick { flex-direction: row; align-items: center; gap: 16px; padding: 10px 16px 10px 10px; border-radius: 20px; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); transition: background .2s, transform .3s var(--spring); }
+.ride-pick:hover { background: rgba(255, 255, 255, .08); }
+.ride-pick .ride-img { width: 150px; flex: none; border-radius: 14px; aspect-ratio: 16 / 10; }
+.ride-pick .ride-txt { flex: 1; min-width: 0; padding: 0; }
+.ride-pick .ride-title { font: 650 17px/1.2 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ride-pick > .btn { position: static; backdrop-filter: none; background: rgba(255, 255, 255, .08); }
+.step-n { position: absolute; left: 18px; top: 18px; z-index: 3; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #fff; font-size: 11.5px; font-weight: 700; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .5); }
+.ride-outfit { margin-top: 0; }
+@media (max-width: 1100px) { .ride-grid { grid-template-columns: 1fr; } .play-hero { height: 300px; } .play-hero-body h3 { font-size: 30px; } .play-hero-body { left: 24px; bottom: 24px; } }
+.sum-tile:disabled { cursor: default; opacity: .55; transform: none; background: rgba(255, 255, 255, .03); }
+.play-hero-bg { z-index: 0; } .play-hero-shade { z-index: 1; } .play-hero-body { z-index: 2; }

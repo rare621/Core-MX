@@ -34,22 +34,28 @@ async function renderRide(c) {
   if (!S.ride.track) S.ride.track = (st && st.values.ui && st.values.ui.race_track) || null;
   const bike = S.ride.bike && bikeItem(S.ride.bike);
   const track = S.ride.track && S.items.find((i) => i.group === 'tracks' && i.name === S.ride.track);
-  const tile = (kind, it, title, sub) => `<button class="ride-pick" data-ride-pick="${kind}">
+  const tile = (kind, it, title, sub) => `<button class="ride-pick" data-ride-pick="${kind}"><span class="step-n">${kind === 'bike' ? 1 : 2}</span>
       <div class="thumb ride-img">${it ? thumbHtml(it) : `<div class="ph"><div class="ph-icon">${icon(kind === 'bike' ? 'bike' : 'track')}</div></div>`}</div>
       <div class="ride-txt"><div class="slot-l">${kind === 'bike' ? 'Bike' : 'Track'}</div><div class="ride-title">${esc(title)}</div><div class="muted" style="font-size:13px">${esc(sub || '')}</div></div>
       <span class="btn btn-sm">Change</span></button>`;
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>Play</h2>${gameTabs()}</div>
-    <div class="scroller"><div style="max-width:960px">
+    <div class="scroller"><div class="play-page">
+      <div class="play-hero">
+        <div class="play-hero-bg thumb">${track ? thumbHtml(track) : bike ? thumbHtml(bike) : '<div class="ph"></div>'}</div><div class="play-hero-shade"></div>
+        <div class="play-hero-body">
+          <span class="fh-kicker">${bike && track ? 'Ready to ride' : 'Pick a bike and a track'}</span>
+          <h3>${esc(track ? track.title : (S.ride.track || 'No track chosen'))}</h3>
+          <div class="play-hero-sub">${icon('bike')}${esc(bike ? bike.title : (S.ride.bike || 'No bike chosen'))}</div>
+          <div class="play-hero-actions"><button class="btn btn-primary ride-btn" data-act="ride-go">${icon('play')}Ride</button>
+          <span class="muted">Opens MX Bikes with this bike and track already set. Choose <b>Single Player</b> in the game.</span></div>
+        </div>
+      </div>
       <div class="ride-grid">
         ${tile('bike', bike, bike ? bike.title : (S.ride.bike || 'Choose a bike'), bike ? [bike.cc && (bike.cc === 'Electric' ? 'Electric' : `${bike.cc}cc`), bike.bikeClass].filter(Boolean).join(' · ') : '')}
         ${tile('track', track, track ? track.title : (S.ride.track || 'Choose a track'), track ? (track.info && track.info.author) || track.label : '')}
       </div>
       <div class="set-card ride-outfit"><h3>Rider setup${riderDirty() ? ' · Preview changes' : ''}</h3><p>Uses the same bike, livery, tyres and outfit as the Rider page.</p>${loadout ? `<div class="tags">${loadout.slots.map((slot) => { const value = loadout.current[slot.id]; const choice = (loadout.options[slot.id] || []).find((o) => (typeof o === 'string' ? o : o.value) === value); return `<span class="tag">${esc(slot.label)}: ${esc(typeof choice === 'object' ? choice.label : choice || value || (slot.id === 'protection' ? 'None' : 'Default'))}</span>`; }).join('')}</div>` : ''}<button class="btn btn-sm" data-ride-outfit>${icon('rider')}Customize rider & bike</button></div>
-      <div class="ride-go">
-        <button class="btn btn-primary ride-btn" data-act="ride-go">${icon('play')}Ride</button>
-        <div class="muted" style="font-size:13px">Sets this bike and track in your game, then opens MX Bikes — choose <b>Single Player</b> and your bike and track are already set. Your outfit for this bike comes from the <b>Rider</b> tab.</div>
-      </div>
     </div></div></div></div>`;
 }
 
