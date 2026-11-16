@@ -33,17 +33,22 @@ async function renderOnline(c) {
   }).join('');
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>Online</h2>${onlineTabs()}<span class="grow"></span><button class="btn" data-act="address-discovery">${icon('globe')}Automatic addresses</button></div>
-    <div class="scroller"><div style="max-width:960px">
-      <div id="youAreOn"></div>
+    <div class="scroller"><div class="online-layout"><section class="online-main">
       <div class="section-title" style="display:flex">Live servers<span class="grow"></span><span id="allSrvMeta" class="muted" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
       <div id="allServers"><div class="loadmore"><div class="spinner"></div></div></div>
+      </section><aside class="online-side">
+      <div id="youAreOn"></div>
+      <div id="friendsRiding"></div>
       <div class="section-title">Saved servers</div>
       ${S.servers.length ? `<div class="srv-list">${rows}</div>` : `<div class="set-card muted" style="text-align:center;padding:28px">Save servers you play on to join them in one click. Add the track a server runs and the app checks you have it before you join.</div>`}
       <div class="set-card" style="margin-top:18px"><h3>Join by address</h3><p>Paste a server address. The game opens and connects straight to it.</p>
-        <div class="path-row"><input class="input" id="joinAddr" placeholder="e.g. 123.45.67.89:54210" style="flex:1;background:var(--raised)" spellcheck="false">
+        <div class="path-row join-row"><input class="input" id="joinAddr" placeholder="e.g. 123.45.67.89:54210" style="flex:1" spellcheck="false">
           <button class="btn" data-act="srv-save-new">${icon('star')}Save</button><button class="btn btn-primary" data-act="srv-join-new">${icon('play')}Join</button></div></div>
-    </div></div></div></div>`;
+    </aside></div></div></div></div>`;
   drawYouAreOn();
+  drawFriendsRiding();
+  // Friends' live status feeds the 'Friends riding now' panel.
+  (async () => { try { if (!S.friends) S.friends = await api.invoke('friends:list'); const st = await liveStatus(); if (st && st.service.connected) await refreshLiveList('friends'); } catch {} drawFriendsRiding(); })();
   drawLiveServers();
 }
 

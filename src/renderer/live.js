@@ -85,6 +85,17 @@ function drawYouAreOn() {
     ${online && pr.serverAddress ? `<button class="btn btn-sm" data-act="live-copy-link" data-addr="${esc(pr.serverAddress)}">${icon('copy')}Copy join link</button>` : ''}</div>`;
 }
 
+// Friends who are on a server right now, with a one-click Join.
+function drawFriendsRiding() {
+  const box = $('#friendsRiding'); if (!box) return;
+  const live = new Map((S.live.friends || []).map((l) => [l.id, l]));
+  const riding = (S.friends || []).map((f, i) => ({ f, i, l: live.get(f.code) })).filter(({ l }) => l && l.status === 'ok' && l.online && (l.server || l.inEvent));
+  box.innerHTML = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ride"></span></span>
+    <div class="rf-txt"><b>${esc(f.name)}</b><small>${esc(l.server || 'Riding offline')}${l.trackName ? ` · ${esc(l.trackName)}` : ''}</small></div>
+    ${l.server && l.address ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}</div>`).join('')}</div>`
+    : `<div class="side-empty">${icon('users')}<span>${(S.friends || []).length ? 'None of your friends are riding right now.' : 'Add friends to see where they ride.'}</span><button class="btn btn-sm" data-view="friends">Friends</button></div>`}`;
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('#friendsRiding [data-view]'); if (b) go(b.dataset.view); });
 async function drawLiveServers(refresh) {
   const box = $('#allServers');
   if (!box) return;
@@ -113,7 +124,8 @@ async function drawLiveServers(refresh) {
     <p class="muted" style="font-size:12px">Updates every minute while Online is open. Ping is network round-trip and may differ from game ping. Full status is unknown when capacity is not reported.</p><div class="srv-list">${xs.map((s, i) => {
       const have = trackHave(s);
       const tl = trackLabel(s);
-      return `<div class="srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-ico">${icon('globe')}</div>
+      const cap = Number(s.capacity || s.maxPlayers) || 0, pingTone = s.ping == null ? '' : s.ping < 80 ? 'good' : s.ping < 150 ? 'ok' : 'bad';
+      return `<div class="srv live-srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-pop ${s.riders.length ? 'busy' : ''}"><b>${s.riders.length}</b><small>${cap ? '/' + cap : 'riders'}</small></div>${pingTone ? `<span class="ping-dot ${pingTone}" title="${s.ping} ms"></span>` : ''}
         <div class="srv-txt"><div class="t">${esc(s.name)}</div>
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
           ${sessionLabel(s) ? ` · <b>${esc(sessionLabel(s))}</b>` : ''} · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
@@ -122,6 +134,7 @@ async function drawLiveServers(refresh) {
     }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
   const qi = $('#allSrvQ');
   $$('[data-server-filter]', box).forEach((select) => select.addEventListener('change', () => { S.allSrv.filters[select.dataset.serverFilter] = select.value; drawLiveServers(); }));
+  drawFriendsRiding();
   if (qi) qi.addEventListener('input', () => { S.allSrv.q = qi.value; clearTimeout(drawLiveServers.t); drawLiveServers.t = setTimeout(() => drawLiveServers().then(() => { const n = $('#allSrvQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), 200); });
 }
 
@@ -216,7 +229,7 @@ async function renderFriends(c) {
     if (!p || (!p.items.length && !(p.unavailable || []).length)) return '';
     const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
     const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
-    const bike = p.bikeName || (p.bike || '').replace(/^(?:MX\w*|SM\w*|EN\w*)OEM_/i, '').replace(/_/g, ' ');
+    const bike = (p.bikeName || p.bike || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' ');
     const protectedItems = (p.unavailable || []).filter((it) => /paid|store-protected/i.test(it.error || ''));
     return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}${p.items.length ? `<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} free files synced</span></div>` : ''}
       ${paidModsSummary(protectedItems)}
@@ -225,7 +238,8 @@ async function renderFriends(c) {
 
   const query = (S.live.friendQuery || '').trim().toLowerCase();
   const rows = S.friends.map((f, i) => ({ f, i, s: statusOf(f) })).filter(({ f, s }) => !query || `${f.name} ${f.code} ${s[1]}`.toLowerCase().includes(query)).sort((a, b) => a.s[2] - b.s[2] || a.f.name.localeCompare(b.f.name));
-  const visible = S.live.showAllFriends ? rows : rows.slice(0, 5);
+  const pageSize = c.id === 'content' ? 12 : 5;
+  const visible = S.live.showAllFriends ? rows : rows.slice(0, pageSize);
   const friendCard = ({ f, i, s }) => {
     const j = joinable(f);
     return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
@@ -243,23 +257,29 @@ async function renderFriends(c) {
   const pluginTip = st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
     ? `<div class="fr-banner tip">${icon('info')}<div>${st.plugin.needsUpdate ? 'Close MX Bikes and update the game plugin to report server sessions.' : 'Install the game plugin so friends can see which server you\'re on.'}</div><button class="btn btn-sm" data-act="live-plugin-install">${st.plugin.needsUpdate ? 'Update plugin' : 'Install'}</button></div>` : '';
 
+  // Your own card: who you are and what your friends are up to.
+  const counts = { ride: rows.filter((r) => r.s[0] === 'ride').length, on: rows.filter((r) => r.s[0] === 'on').length };
+  const meCard = c.id === 'content' ? `<div class="me-card"><div class="me-av">${steam.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}<span class="fr-dot ${connected ? 'ride' : 'off'}"></span></div>
+    <div class="me-name">${esc(steam.name || st?.service?.name || 'You')}</div><div class="me-sub">${connected ? 'Online' : 'Offline'}</div>
+    <div class="me-stats"><div><b>${S.friends.length}</b><small>Friends</small></div><div><b>${counts.ride}</b><small>Riding</small></div><div><b>${counts.on}</b><small>Online</small></div></div>
+    <button class="btn btn-primary" data-act="friends-add">${icon('users')}Add friends</button></div>` : '';
   const scrollTop = $('.scroller', c)?.scrollTop || 0;
   const searchFocused = document.activeElement?.id === 'friendSearch';
   const selection = searchFocused ? document.activeElement.selectionStart : 0;
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>Friends</h2><div class="grow"></div>
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
-      <button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button></div>
-    <div class="scroller"><div class="fr-page">
-      ${banner}${pluginTip}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
+      ${c.id === 'content' ? '' : `<button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button>`}</div>
+    <div class="scroller"><div class="fr-page fr-layout">
+      <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' ? friendSettingsHtml(st) : ''}</aside>
+      <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
       ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length
-        ? `<div class="friends-list-toolbar"><div class="section-title">Friends · ${S.friends.length}</div><div class="search">${icon('search')}<input id="friendSearch" placeholder="Search friends…" aria-label="Search friends" value="${esc(S.live.friendQuery || '')}"></div></div><div class="fr-list">${visible.map(friendCard).join('') || '<div class="set-card muted">No friends match your search.</div>'}</div>${rows.length > 5 ? `<button class="btn friends-show-all" data-friends-expand>${S.live.showAllFriends ? 'Show less' : `Show all ${rows.length} friends`}</button>` : ''}`
+        ? `<div class="friends-list-toolbar"><div class="section-title">Friends · ${S.friends.length}</div><div class="search">${icon('search')}<input id="friendSearch" placeholder="Search friends…" aria-label="Search friends" value="${esc(S.live.friendQuery || '')}"></div></div><div class="fr-list">${visible.map(friendCard).join('') || '<div class="set-card muted">No friends match your search.</div>'}</div>${rows.length > pageSize ? `<button class="btn friends-show-all" data-friends-expand>${S.live.showAllFriends ? 'Show less' : `Show all ${rows.length} friends`}</button>` : ''}`
         : `<div class="fr-empty"><div class="fr-empty-ico">${icon('user')}</div><h3>Ride with your friends</h3>
             <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
-      ${S.view === 'friends' ? friendSettingsHtml(st) : ''}
-    </div></div></div></div>`;
+    </section></div></div></div></div>`;
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
   if (search) {
