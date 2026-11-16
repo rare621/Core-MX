@@ -48,6 +48,18 @@ running process; the string table (`.rdata`) is plain on disk.
 3. If a crash is ever attributed to the plugin, it disables itself and the app shows a
    pop-up until MX Bikes Manager is updated.
 
+## The Missing Track window (what the hook uses)
+
+A server whose track you lack opens `idd_trackerror` ("Missing Track" + the track id), not the
+mismatch dialog above (the mismatch list stays empty). It is registered twice:
+
+- handler 0xAB150 (World server list): sets its text with `ui(0x112, ctl, text)` returning to 0xAB2AC
+- handler 0xAFCD0 (other list): same call, returning to 0xAFE1E
+
+Both build the text from the selected server row as "%s" or "%s - %s" (track - layout). The
+plugin wraps the UI pointer at 0x566C48 and copies the text for those two return addresses only.
+The first in-game test missed the World list because only 0xAFCD0 was known.
+
 ## Open questions (need an in-game test)
 
 - What a record looks like when the track is not installed at all (type 1 with the track

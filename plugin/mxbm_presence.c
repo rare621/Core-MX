@@ -249,11 +249,12 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
 
 /* ===================== Missing track detection =====================
  * When you pick a server whose track you don't have, MX Bikes opens its "Missing Track" window
- * (dialog idd_trackerror, handler at RVA 0xAFCD0). That handler sets the window's text with one
- * call through the game's UI function pointer (stored at RVA 0x566C48):
- *     ui(0x112, control, "<track>" or "<track> - <layout>")     -- returns to RVA 0xAFE1E
+ * (dialog idd_trackerror). It is registered twice with two near-identical handlers: 0xAB150 (the
+ * World list; its text call returns to RVA 0xAB2AC) and 0xAFCD0 (returns to RVA 0xAFE1E). Each sets
+ * the window's text with one call through the game's UI function pointer (stored at RVA 0x566C48):
+ *     ui(0x112, control, "<track>" or "<track> - <layout>")
  * We swap that pointer for a tiny stub. The stub looks at every UI call, copies the text only for
- * that exact call (code 0x112 returning to 0xAFE1E), and always jumps on to the game's own function
+ * those exact calls (code 0x112 returning to one of those two places), and always jumps on to the game's own function
  * with every register and stack argument untouched. No game code is patched.
  *
  * Safety:
@@ -263,19 +264,26 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
  *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
  *    MX Bikes Manager ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
  * Research notes: plugin/MISMATCH_NOTES.md. */
-#define HOOK_BUILD 1
+#define HOOK_BUILD 2
 #define RVA_UI_SLOT  0x566C48u
 #define RVA_SIG      0xAFDF3u
 #define RVA_RETURN   0xAFE1Eu
+#define RVA_SIG2     0xAB281u
+#define RVA_RETURN2  0xAB2ACu
 
 static const unsigned char SIG[43] = {
   0x4c, 0x8d, 0x05, 0xe6, 0xc0, 0x28, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
   0x41, 0x6e, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
   0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0x2a, 0x6e, 0x4b, 0x00 };
+static const unsigned char SIG2[43] = {
+  0x4c, 0x8d, 0x05, 0x58, 0x0c, 0x29, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
+  0xb3, 0xb9, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
+  0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0x9c, 0xb9, 0x4b, 0x00 };
 
-/* Used by the assembly stub below, so not static. */
+/* Used by the assembly stub below, so not static. A return address left at 0 never matches. */
 void *mxbm_orig_ui = 0;
 void *mxbm_expect_ret = 0;
+void *mxbm_expect_ret2 = 0;
 void mxbm_capture(const char *text);
 extern void mxbm_ui_stub(void);
 
@@ -288,7 +296,10 @@ __asm__(
   "  jne 1f\n"
   "  mov rax, [rsp]\n"
   "  cmp rax, [rip + mxbm_expect_ret]\n"
+  "  je 2f\n"
+  "  cmp rax, [rip + mxbm_expect_ret2]\n"
   "  jne 1f\n"
+  "2:\n"
   "  push rcx\n  push rdx\n  push r8\n  push r9\n"
   "  sub rsp, 0x28\n"
   "  mov rcx, r8\n"
@@ -359,7 +370,11 @@ static DWORD WINAPI hookThread(LPVOID unused) {
   (void)unused;
   if (!base || ((IMAGE_DOS_HEADER *)base)->e_magic != IMAGE_DOS_SIGNATURE) { hookState("paused", "not running inside MX Bikes"); return 0; }
   nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
-  if (nt->OptionalHeader.SizeOfImage < RVA_UI_SLOT + 8 || memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0) {
+  if (nt->OptionalHeader.SizeOfImage < RVA_UI_SLOT + 8) { hookState("paused", "not running inside MX Bikes"); return 0; }
+  /* Each handler is watched only if its bytes match this game build exactly. */
+  if (memcmp(base + RVA_SIG, SIG, sizeof SIG) == 0) mxbm_expect_ret = base + RVA_RETURN;
+  if (memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) == 0) mxbm_expect_ret2 = base + RVA_RETURN2;
+  if (!mxbm_expect_ret && !mxbm_expect_ret2) {
     hookState("paused", "This MX Bikes version is newer than the plugin; missing-track detection waits for an MX Bikes Manager update");
     return 0;
   }
@@ -369,7 +384,6 @@ static DWORD WINAPI hookThread(LPVOID unused) {
     void *cur = *(void *volatile *)g_slot;
     if (cur && cur != (void *)mxbm_ui_stub) {
       mxbm_orig_ui = cur;
-      mxbm_expect_ret = base + RVA_RETURN;
       if (InterlockedCompareExchangePointer((PVOID *)g_slot, (PVOID)mxbm_ui_stub, cur) == cur) { hookState("active", ""); return 0; }
     }
     Sleep(250);
