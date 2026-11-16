@@ -1016,10 +1016,10 @@ function siteCard(p) {
   // standalone kit packs are tagged under every gear type.  Only label a card
   // as requiring a model after its creator instructions confirm that fact.
   const dependencyLabel = S.view === 'get' && S.getSrc === 'addons' && p.needsModelNotice ? 'Requires another model' : '';
-  return `<div class="card" data-post="${p.id}">
+  return `<div class="card" data-post="${esc(p.id)}">
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
-      <div class="badges">${p.id < 0 ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
+      <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
@@ -1028,7 +1028,7 @@ function heroCard(p) {
   const cat = p.categoryNames.filter((n) => !/^(Bikes|Rider|Other|Paid Mods)$/.test(n)).slice(-1)[0] || '';
   const installed = haveMod({ postId: p.id, title: p.title });
   const sortLabel = { 'popular-week': 'this week', 'popular-today': 'today', 'popular-all': 'of all time' }[S.browse.sort] || 'this month';
-  return `<div class="feature-hero" data-post="${p.id}"><img src="${esc(p.image)}" alt=""><div class="fh-shade"></div>
+  return `<div class="feature-hero" data-post="${esc(p.id)}"><img src="${esc(p.image)}" alt=""><div class="fh-shade"></div>
     <div class="fh-body"><span class="fh-kicker">${p.rank ? `#${p.rank} most popular ${sortLabel}` : 'Featured'}${cat ? ` · ${esc(cat)}` : ''}</span><h3>${esc(p.title)}</h3>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ''}
     <span class="fh-actions"><span class="btn btn-primary">${icon(installed ? 'check' : 'download')}${installed ? 'Installed · view' : 'View & install'}</span>${p.views ? `<span class="fh-views">${p.views.toLocaleString()} views</span>` : ''}</span></div></div>`;
 }
@@ -1051,11 +1051,11 @@ function renderBrowseGrid() {
   const top = sc.scrollTop;
   const existing = sc.querySelector(`[data-browse-grid="${b.reqId}"]`);
   if (existing && b.posts.length) {
-    const ids = new Set([...existing.querySelectorAll('[data-post]')].map((el) => Number(el.dataset.post)));
-    const heroId = Number(sc.querySelector('.feature-hero')?.dataset.post);
-    existing.insertAdjacentHTML('beforeend', b.posts.filter((p) => !ids.has(p.id) && p.id !== heroId).map(siteCard).join(''));
+    const ids = new Set([...existing.querySelectorAll('[data-post]')].map((el) => el.dataset.post));
+    const heroId = sc.querySelector('.feature-hero')?.dataset.post;
+    existing.insertAdjacentHTML('beforeend', b.posts.filter((p) => !ids.has(String(p.id)) && String(p.id) !== heroId).map(siteCard).join(''));
     for (const card of existing.querySelectorAll('[data-post]')) {
-      const post = b.posts.find((p) => p.id === Number(card.dataset.post));
+      const post = b.posts.find((p) => String(p.id) === card.dataset.post);
       const badge = [...card.querySelectorAll('.badge.ok')].find((el) => el.textContent.includes('Installed'));
       const installed = post && haveMod({ postId: post.id, title: post.title });
       if (!installed) badge?.remove();
@@ -1083,7 +1083,7 @@ function renderBrowseGrid() {
 document.addEventListener('click', (e) => {
   const c = e.target.closest('[data-post]');
   if (c && c.closest('#brScroll')) {
-    const p = S.browse.posts.find((x) => x.id === Number(c.dataset.post));
+    const p = S.browse.posts.find((x) => String(x.id) === c.dataset.post);
     if (p) openPost(p);
   }
 });
@@ -1120,7 +1120,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
   const m = modal({
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
-    foot: `<span class="grow">${summary.id < 0 ? 'coremx.app' : 'mxb-mods.com'}</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
+    foot: `<span class="grow">${summary.coremxId ? 'coremx.app' : 'mxb-mods.com'}</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
     onClose: () => { openPostRefreshers.delete(refresh); popAmbient(); },
   });
   pushAmbient(summary.image);
