@@ -1,4 +1,4 @@
-New look: the whole app has a new darker, cleaner design. Navigation is now a bar across the top with a sliding highlight, and Downloads, Settings and your Steam avatar (Friends) sit at the top right. Pages sit on frosted panels over a soft blurred background that changes colour by section, and a mod's picture glows behind it while you view it. Pages, cards, dialogs, menus and notifications animate smoothly, and the app respects the Windows reduce-motion setting.
+Version 1.0.16 rebuilds the pages around the new top navigation introduced in 1.0.15. This update also adjusts gear-picker button sizes and refreshes the Graphics layout.
 
 Rebuilt pages:
 - Get Mods: tiles explain each source (Free mods, Add-ons, MXB Hub, MX Bikes Shop), with a big search bar, category icons and a featured banner.
