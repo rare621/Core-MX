@@ -833,15 +833,33 @@ async function renderPacks(c, force) {
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>OEM Packs</h2><div class="grow"></div><button class="btn" data-act="packs-refresh">${icon('refresh')}Check again</button></div>
     <div class="scroller"><p class="muted" style="margin:-4px 0 18px;max-width:640px">The official bike packs most servers use. The app compares each pack with your bikes and only downloads what's missing or changed — not the whole pack.</p>
-    <div class="packs" id="packList">${[1, 2, 3, 4].map(() => '<div class="pack"><div class="pack-img skeleton"></div><div class="pack-body"><div class="skeleton" style="height:16px;width:50%;border-radius:6px"></div><div class="skeleton" style="height:10px;width:80%;border-radius:6px"></div></div></div>').join('')}</div></div></div></div>`;
+    <div class="pack-summary" id="packSummary"></div><div class="packs" id="packList">${[1, 2, 3, 4].map(() => '<div class="pack"><div class="pack-img skeleton"></div><div class="pack-body"><div class="skeleton" style="height:16px;width:50%;border-radius:6px"></div><div class="skeleton" style="height:10px;width:80%;border-radius:6px"></div></div></div>').join('')}</div></div></div></div>`;
   try { if (!S.packs || force) S.packs = await api.invoke('packs:list', !!force); }
   catch (e) { $('#packList').innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
   S.packsNeed = S.packs.filter((p) => p.summary && p.summary.needCount && p.summary.have).length;
   renderRail();
   if (S.view !== 'packs') return;
   $('#packList').innerHTML = S.packs.map(packCard).join('');
+  drawPackSummary();
 }
 
+// One line at the top: how many packs are current, and one button to update the rest.
+function drawPackSummary() {
+  const box = $('#packSummary'); if (!box || !S.packs) return;
+  // Only packs you already have count as updates; packs you've never installed are left to you.
+  const need = S.packs.filter((p) => p.summary && p.summary.needCount && p.summary.have && !p.error);
+  const fresh = S.packs.filter((p) => p.summary && p.summary.needCount && !p.summary.have && !p.error).length;
+  const ok = S.packs.filter((p) => p.summary && !p.summary.needCount && !p.error).length;
+  const bytes = need.reduce((n, p) => n + (p.summary.needBytes || 0), 0);
+  box.innerHTML = `<div class="pack-sum-icon ${need.length ? 'need' : 'ok'}">${icon(need.length ? 'refresh' : 'check')}</div>
+    <div class="pack-sum-txt"><b>${need.length ? `${need.length} installed pack${need.length > 1 ? 's' : ''} can be updated` : 'Your installed packs are up to date'}</b><small>${ok} of ${S.packs.length} up to date${need.length ? ` · ${fmtSize(bytes)}, only the files that changed` : ''}${fresh ? ` · ${fresh} not installed yet` : ''}</small></div>
+    ${need.length > 1 ? `<button class="btn btn-primary" data-act="packs-update-all">${icon('download')}Update all</button>` : ''}`;
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-act="packs-update-all"]')) return;
+  const ids = new Set(S.packs.filter((p) => p.summary && p.summary.needCount && p.summary.have && !p.error).map((p) => String(p.id)));
+  for (const b of $$('#packList [data-pack-update]:not([disabled])')) if (ids.has(b.dataset.packUpdate)) b.click();
+});
 function packCard(p) {
   const s = p.summary;
   let state, foot;
@@ -1315,6 +1333,18 @@ function jobHtml(j) {
     <div class="jactions">${acts.join('')}</div></div>`;
 }
 
+// Counts at the top of Downloads so it's clear what needs you.
+function downloadSummaryHtml(list) {
+  const n = { active: 0, review: 0, done: 0, error: 0 };
+  for (const j of list) {
+    if (j.status === 'review' || j.status === 'browser') n.review++;
+    else if (j.status === 'done') n.done++;
+    else if (j.status === 'error') n.error++;
+    else n.active++;
+  }
+  const tile = (ic, value, label, tone) => `<div class="sum-tile static ${value ? tone : ''}"><span class="sum-ico">${icon(ic)}</span><span class="sum-txt"><b>${value}</b><small>${label}</small></span></div>`;
+  return `<div class="lib-summary dl-summary">${tile('download', n.active, 'Downloading', 'accent')}${tile('alert', n.review, 'Needs your OK', 'warn')}${tile('check', n.done, 'Installed', 'ok')}${tile('x', n.error, 'Failed or removed', 'bad')}</div>`;
+}
 function renderDownloads(c) {
   if (S.dlTab === 'recent') { renderRecentInstalls(c); return; }
   const list = [...S.jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
@@ -1322,7 +1352,7 @@ function renderDownloads(c) {
     <div class="toolbar"><h2>Downloads</h2>${dlTabs("downloads")}<div class="grow"></div>
       <button class="btn" data-act="pick-files">${icon('upload')}Install from file…</button>
       ${list.some((j) => ['done', 'error'].includes(j.status)) ? `<button class="btn btn-ghost" data-act="clear-jobs" title="Clear completed history; installed files and active downloads are kept">Clear all completed</button>` : ''}</div>
-    <div class="scroller"><div class="jobs" id="jobsList">${list.length ? list.map(jobHtml).join('') : `<div class="empty"><div>${icon('download')}<h3>No downloads yet</h3><div>Install mods from the Browse tab, or drag .pkz / .zip / .rar files onto this window.</div></div></div>`}</div></div>
+    <div class="scroller">${list.length ? downloadSummaryHtml(list) : ''}<div class="jobs" id="jobsList">${list.length ? list.map(jobHtml).join('') : `<div class="empty"><div>${icon('download')}<h3>No downloads yet</h3><div>Install mods from Get Mods, or drag .pkz, .zip or .rar files onto this window.</div></div></div>`}</div></div>
   </div></div>`;
 }
 
@@ -2831,6 +2861,7 @@ api.on('jobs:update', (j) => {
   S.jobs.set(j.id, j);
   for (const old of [...S.jobs.values()].filter((job) => ['done', 'error'].includes(job.status)).sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt)).slice(10)) { S.jobs.delete(old.id); $(`[data-job="${old.id}"]`)?.remove(); }
   refreshInlineDownloads();
+  if ((!prev || prev.status !== j.status) && $('.dl-summary')) $('.dl-summary').outerHTML = downloadSummaryHtml([...S.jobs.values()]);
   if (prev && prev.status !== j.status) {
     if (j.status === 'done') toast(`Installed <b>${esc(j.title)}</b>`, 'ok', 4500);
     if (j.status === 'error' && j.error !== 'Cancelled') toast(`<b>${esc(j.title)}</b>: ${esc(j.error)}`, 'err', 7000);
@@ -2946,3 +2977,44 @@ api.on('jobs:started', () => { toast('Download started — it will install autom
   new MutationObserver(() => requestAnimationFrame(refresh)).observe(document.body, { childList: true, subtree: true });
   window.addEventListener('resize', refresh);
 })();
+
+// ---------- Settings: section menu ----------
+// General settings is one long page; a side menu jumps to each section and
+// highlights the one in view.
+const SETTINGS_ICONS = { 'MX Bikes user folder': 'folder', 'Game install folder': 'folder', Accounts: 'key', Installing: 'download', Pictures: 'image', 'Extraction tools': 'box', 'Disabled mods': 'power', Setup: 'settings', 'App updates': 'refresh', About: 'info' };
+function buildSettingsNav(c) {
+  const list = $('.settings', c), sc = $('.scroller', c);
+  if (!list || !sc || list.parentElement.classList.contains('settings-layout')) return;
+  const cards = $$(':scope > .set-card', list).filter((card) => $('h3', card));
+  cards.forEach((card, i) => { card.id = `set-${i}`; });
+  const layout = document.createElement('div'); layout.className = 'settings-layout';
+  list.replaceWith(layout);
+  layout.innerHTML = `<nav class="set-nav">${cards.map((card, i) => { const t = $('h3', card).textContent.trim(); return `<button data-set-jump="${i}" class="${i ? '' : 'active'}">${icon(SETTINGS_ICONS[t] || 'settings')}<span>${esc(t)}</span></button>`; }).join('')}</nav>`;
+  layout.appendChild(list);
+  const nav = $('.set-nav', layout);
+  nav.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-set-jump]'); if (!b) return;
+    const card = $(`#set-${b.dataset.setJump}`, list);
+    const target = sc.scrollTop + card.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8, from = sc.scrollTop;
+    sc.scrollTo({ top: target, behavior: 'smooth' });
+    // If smooth scrolling is unavailable, jump there instead.
+    setTimeout(() => { if (sc.scrollTop === from && Math.abs(target - from) > 2) sc.scrollTop = target; }, 600);
+    card.classList.toggle('flash', false); void card.offsetWidth; card.classList.toggle('flash', true);
+    // Keep the clicked section highlighted while the page scrolls to it.
+    lockUntil = Date.now() + 900;
+    $$('[data-set-jump]', nav).forEach((x) => x.classList.toggle('active', x === b));
+  });
+  let lockUntil = 0;
+  const spy = () => {
+    if (Date.now() < lockUntil) return;
+    const edge = sc.getBoundingClientRect().top + 60;
+    let current = 0;
+    cards.forEach((card, i) => { if (card.getBoundingClientRect().top <= edge) current = i; });
+    if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4) current = cards.length - 1;
+    $$('[data-set-jump]', nav).forEach((b) => b.classList.toggle('active', Number(b.dataset.setJump) === current));
+  };
+  sc.addEventListener('scroll', spy, { passive: true });
+}
+const renderSettingsBase = renderSettings;
+// eslint-disable-next-line no-func-assign
+renderSettings = async function (c) { await renderSettingsBase(c); if (S.view === 'settings' && (S.settingsTab || 'general') === 'general') buildSettingsNav(c); };
