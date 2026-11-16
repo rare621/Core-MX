@@ -335,9 +335,9 @@ static void hookState(const char *state, const char *detail) {
 /* Runs on the game's UI thread, only for the Missing Track window. Keep it short. */
 /* `frame` is the handler's own stack frame (0x390 bytes). It still holds the server-list row the
  * handler read (from +0x50) and the fields it split out of it, so the readable strings in it are
- * reported as "row" too (server name / address research). */
+ * used for the server name and address below. */
 void mxbm_capture(const char *text, const unsigned char *frame) {
-  static char o[4096]; char name[128], s[96]; size_t at, i, n, run; int count = 0;
+  static char o[1024]; char name[128]; size_t at, i;
   if (!text) return;
   for (i = 0; i < sizeof name - 1 && text[i]; i++) name[i] = text[i];
   name[i] = 0;
@@ -353,26 +353,6 @@ void mxbm_capture(const char *text, const unsigned char *frame) {
     if (port) at += (size_t)sprintf(o + at, ",\"address\":\"%u.%u.%u.%u:%u\"", a[0], a[1], a[2], a[3], port);
     memcpy(o + at, ",\"server\":", 10); at += 10;
     at = jstr(o, at, server, sizeof o - 64);
-  }
-  memcpy(o + at, ",\"row\":[", 8); at += 8;
-  if (frame) {
-    for (i = 0x38, run = 0; i < 0x380 && count < 40; i++) {
-      unsigned char ch = frame[i];
-      if (ch >= 0x20 && ch < 0x7f) { run++; continue; }
-      if (run >= 3) {
-        n = run < sizeof s - 1 ? run : sizeof s - 1;
-        memcpy(s, frame + i - run, n); s[n] = 0;
-        if (at + 140 < sizeof o) { at += (size_t)sprintf(o + at, "%s{\"off\":%u,\"s\":", count ? "," : "", (unsigned)(i - run)); at = jstr(o, at, s, sizeof o - 8); o[at++] = '}'; count++; }
-      }
-      run = 0;
-    }
-  }
-  o[at++] = ']';
-  /* The raw start of the row (before the server name): binary fields such as an address. */
-  if (frame && at + 0x200 < sizeof o) {
-    memcpy(o + at, ",\"raw\":\"", 8); at += 8;
-    for (i = 0x40; i < 0x80; i++) at += (size_t)sprintf(o + at, "%02x", frame[i]);
-    o[at++] = '"';
   }
   o[at++] = '}'; o[at] = 0;
   writeSmall("mxbm_missing.json", o);
