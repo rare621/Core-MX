@@ -1,4 +1,4 @@
-# MX Bikes Manager online service
+# CoreMX online service
 
 Powers **Live servers** (every server an app user rides on, with its track and riders) and **Friends**
 (where your friends are riding, one-click join). One file, no dependencies, needs Node.js 18+.

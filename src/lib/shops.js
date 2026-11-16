@@ -280,4 +280,18 @@ async function lookup(ses, shopId, items) {
   return out;
 }
 
-module.exports = { SHOPS, categories, search, details, account, signOut, owned, lookup };
+// Product page address for a product id (used by mxbm://install/<shop>/<id> links from the website).
+async function productLink(ses, shopId, id) {
+  const shop = SHOPS[shopId];
+  if (!shop || !Number.isSafeInteger(id) || id <= 0 || id > 999999999999) return null;
+  const { json } = await getJson(ses, shop.platform === 'woo' ? `${shop.url}/wp-json/wc/store/v1/products/${id}` : `${shop.url}/wp-json/wp/v2/edd-downloads/${id}?_fields=link`);
+  const link = json && (json.permalink || json.link);
+  try {
+    const url = new URL(link);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port || url.hostname.replace(/^www\./, '') !== new URL(shop.url).hostname) return null;
+    url.protocol = 'https:';
+    return url.href;
+  } catch { return null; }
+}
+
+module.exports = { SHOPS, categories, search, details, account, signOut, owned, lookup, productLink };

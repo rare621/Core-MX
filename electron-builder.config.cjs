@@ -2,8 +2,8 @@ const { prepareResources, verifyPackage } = require('./scripts/release-hooks.cjs
 
 module.exports = {
   appId: 'com.rare621.mxbikesmanager',
-  productName: 'MX Bikes Manager',
-  executableName: 'MX Bikes Manager',
+  productName: 'CoreMX',
+  executableName: 'CoreMX',
   asar: true,
   npmRebuild: false,
   compression: 'normal',
@@ -18,12 +18,12 @@ module.exports = {
     { from: 'build/generated/online.config.json', to: 'online.config.json' },
     { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md', 'frostmod/**/*'] },
   ],
-  protocols: [{ name: 'MX Bikes Manager join links', schemes: ['mxbm'] }],
+  protocols: [{ name: 'CoreMX website and join links', schemes: ['mxbm'] }],
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
     icon: 'build/generated/icon.ico',
     signExecutable: false,
-    artifactName: 'MX-Bikes-Manager-Setup-${version}-${arch}.${ext}',
+    artifactName: 'CoreMX-Setup-${version}-${arch}.${ext}',
   },
   nsis: {
     oneClick: false,
@@ -32,8 +32,8 @@ module.exports = {
     allowToChangeInstallationDirectory: true,
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
-    shortcutName: 'MX Bikes Manager',
-    uninstallDisplayName: 'MX Bikes Manager',
+    shortcutName: 'CoreMX',
+    uninstallDisplayName: 'CoreMX',
     deleteAppDataOnUninstall: false,
     runAfterFinish: true,
     packElevateHelper: false,

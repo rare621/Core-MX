@@ -61,7 +61,7 @@ async function renderPluginSettings(c) {
     const box = $('#pluginSettings', c); if (!box) return;
     const row = (id, name, text, installed, version, update = false) => `<div class="set-card"><h3>${name}</h3><p>${text}</p><div class="path-row"><span class="${installed ? 'ok' : 'muted'}">${installed ? 'Installed' : 'Not installed'}${version ? ` · ${esc(version)}` : ''}</span><span class="grow"></span>${update || !installed ? `<button class="btn btn-primary" data-plugin-install="${id}">${icon('download')}${update ? 'Update' : 'Install'}</button>` : ''}${installed ? `<button class="btn" data-plugin-remove="${id}">${icon('trash')}Remove</button>` : ''}</div></div>`;
     box.innerHTML = `<p class="muted">Close MX Bikes before installing or removing plugins. Plugins load when the game starts.</p>
-      ${row('presence', 'MX Bikes Manager presence', 'Reports your track, bike, server, riders and session stage to the manager and your friends.', online.plugin.installed, '', online.plugin.needsUpdate)}
+      ${row('presence', 'CoreMX presence', 'Reports your track, bike, server, riders and session stage to the manager and your friends.', online.plugin.installed, '', online.plugin.needsUpdate)}
       ${row('discovery', 'FrostMod · automatic server addresses', 'Bundled with setup. Saves server addresses when you open Multiplayer in MX Bikes. The manager shares matching addresses so friends can join. FrostMod also includes live mod reloads and gameplay/overlay features.', frost.installed, frost.version)}
       ${!frost.installed && frost.autoInstall ? '<p class="muted">Automatic installation is waiting for the game to close and a valid game folder.</p><button class="btn" data-plugin-remove="discovery">Cancel automatic installation</button>' : ''}
       <p class="muted">Removing FrostMod keeps it removed on future app starts. Use Install to enable it again.</p>`;
@@ -246,7 +246,5 @@ async function handleJoinLink(addr) {
   const known = (S.servers || await api.invoke('servers:list')).find((s) => s.address === addr);
   if (await confirmBox('Join server', `Join <b>${esc(known ? known.name : addr)}</b> <span class="mono">${esc(addr)}</span>?`, 'Join')) joinServer(addr, known);
 }
-api.on('deeplink:join', handleJoinLink);
-setTimeout(() => api.invoke('deeplink:pending').then(handleJoinLink).catch(() => {}), 1500);
 
 // Friends screen: see live.js

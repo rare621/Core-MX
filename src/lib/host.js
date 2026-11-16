@@ -24,7 +24,7 @@ function toIni(cfg) {
     s.event[`track${n}_layout`] = t.layout || '';
   });
   s.log = { file: LOG };
-  const out = ['; Written by MX Bikes Manager'];
+  const out = ['; Written by CoreMX'];
   for (const sec of SECTIONS) {
     const vals = s[sec];
     if (!vals) continue;

@@ -1,8 +1,10 @@
-# MX Bikes Manager
+# CoreMX
+
+**Content manager for MX Bikes** · [coremx.app](https://coremx.app/)
 
 **Your bikes, tracks, gear, and downloads in one place.**
 
-MX Bikes Manager is a Windows desktop app for organizing your MX Bikes mods, finding new content, building rider outfits, and getting ready to ride. Browse your installed collection with pictures, preview your bike and gear in 3D, and install downloads into the right folders.
+CoreMX is a Windows desktop app for organizing your MX Bikes mods, finding new content, building rider outfits, and getting ready to ride. Browse your installed collection with pictures, preview your bike and gear in 3D, and install downloads into the right folders.
 
 [**Download the Windows installer**](https://github.com/rare621/MXB-MANAGER/releases/latest) · [Report a problem](https://github.com/rare621/MXB-MANAGER/issues) · [Build from source](#build-from-source)
 
@@ -10,9 +12,9 @@ MX Bikes Manager is a Windows desktop app for organizing your MX Bikes mods, fin
 
 ## Install and get started
 
-1. Open [Releases](https://github.com/rare621/MXB-MANAGER/releases/latest) and download the latest **MX-Bikes-Manager-Setup-…-x64.exe**.
+1. Open [Releases](https://github.com/rare621/MXB-MANAGER/releases/latest) and download the latest **CoreMX-Setup-…-x64.exe**.
 2. Run the setup and choose where to install it. The setup adds desktop and Start menu shortcuts.
-3. Open **MX Bikes Manager**. It looks for your Steam game install and your `Documents\PiBoSo\MX Bikes` folder. You can choose the folders yourself if needed.
+3. Open **CoreMX**. It looks for your Steam game install and your `Documents\PiBoSo\MX Bikes` folder. You can choose the folders yourself if needed.
 4. Browse **My Mods**, build an outfit under **Rider**, or find something new in **Get Mods**.
 
 You need 64-bit Windows and your own copy of MX Bikes. The installed app includes its runtime, so you do **not** need Node.js, npm, or the source code. Game and mod assets shown in the screenshots are installed separately.
@@ -89,7 +91,7 @@ Servers refresh every five minutes while the Online page is open, with a manual 
 
 Online hosts updating to 1.0.8 must also update **mxbm-server.js** from the release's **mxbm-online-service.zip** (health version 5). Keep the existing account database and shared-file folder; see [server update instructions](server/README.md#update-an-existing-server).
 
-To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\MX Bikes Manager\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
+To change the service address in an installed copy, close the manager and edit `%LOCALAPPDATA%\Programs\CoreMX\resources\online.config.json` in Notepad, then reopen the manager. If you chose another install folder, open its `resources\online.config.json` instead.
 
 ## Build from source
 
@@ -114,3 +116,22 @@ The setup EXE and checksum are written to `dist/`. [Release instructions](docs/R
 Found a problem? [Open an issue](https://github.com/rare621/MXB-MANAGER/issues) with the app version, what you clicked, and a screenshot if possible. Do not include account tokens or passwords.
 
 An independent community project, not affiliated with PiBoSo or the supported mod stores. Game assets, mod content, and screenshots of installed content belong to their respective creators. Third-party format work and library notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Website links
+
+[coremx.app](https://coremx.app/#/) is the main CoreMX website. The Windows setup registers these links:
+
+- `mxbm://install/mxbmods/123` opens the matching MXB Mods listing. A single available download starts through the normal install/review flow; multiple downloads stay available to choose.
+- `mxbm://install/mxbmods/123?file=1` selects the second download (zero-based index). Invalid indexes never select a different file.
+- `mxbm://install/hub/123` opens MXB Hub and its product popup.
+- `mxbm://install/mxbs/123` opens MX Bikes Shop and its product popup.
+- `mxbm://oem/mx` opens and installs or updates the MX OEM pack. Also supported: `enduro`, `sm`, `freeride`.
+- `mxbm://join/1.2.3.4:54210` asks to join that server.
+
+Links are queued until app startup finishes. Purchase/login, dependency checks and install reviews still use the normal app flows. Finish first-run setup before installing through a website link.
+
+### Upgrading from MX Bikes Manager
+
+CoreMX keeps the original Windows application ID, internal package ID, `mxbm://` protocol, data directory and disabled-mod folder so upgrades preserve user data and installed files. The Windows display name, executable, shortcuts and primary setup filename are CoreMX.
+
+For Google Drive updates, upload `latest.yml` and the matching **MX-Bikes-Manager-Setup-1.0.17-x64.exe** compatibility copy together. This is byte-for-byte the same CoreMX installer as **CoreMX-Setup-1.0.17-x64.exe**; older installed versions require the legacy filename. Do not rename the file referenced by `latest.yml`. GitHub releases do not automatically upload files to Google Drive.

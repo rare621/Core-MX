@@ -835,7 +835,7 @@ async function renderPacks(c, force) {
     <div class="scroller"><p class="muted" style="margin:-4px 0 18px;max-width:640px">The official bike packs most servers use. The app compares each pack with your bikes and only downloads what's missing or changed — not the whole pack.</p>
     <div class="pack-summary" id="packSummary"></div><div class="packs" id="packList">${[1, 2, 3, 4].map(() => '<div class="pack"><div class="pack-img skeleton"></div><div class="pack-body"><div class="skeleton" style="height:16px;width:50%;border-radius:6px"></div><div class="skeleton" style="height:10px;width:80%;border-radius:6px"></div></div></div>').join('')}</div></div></div></div>`;
   try { if (!S.packs || force) S.packs = await api.invoke('packs:list', !!force); }
-  catch (e) { $('#packList').innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
+  catch (e) { const list = $('#packList'); if (list) list.innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
   S.packsNeed = S.packs.filter((p) => p.summary && p.summary.needCount && p.summary.have).length;
   renderRail();
   if (S.view !== 'packs') return;
@@ -1114,7 +1114,7 @@ document.addEventListener('click', async (e) => {
   catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
   finally { if (button.isConnected) button.disabled = false; }
 });
-async function openPost(summary, { install = false } = {}) {
+async function openPost(summary, { install = false, file = null } = {}) {
   let refresh;
   const m = modal({
     title: esc(summary.title),
@@ -1174,10 +1174,7 @@ async function openPost(summary, { install = false } = {}) {
   };
   openPostRefreshers.add(refresh);
   draw();
-  if (install && !p.paid && !haveMod({ postId: p.id, title: p.title, urls: p.downloads.map((d) => d.url) })) {
-    if (p.downloads.length === 1) (p.downloads[0].shop ? installDependency(p.downloads[0].url) : startDownload(p, p.downloads[0])).catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
-    else if (p.downloads.length > 1) toast('Choose which model download to install below.', 'info', 4000);
-  }
+  if (install && !p.paid) installLinkedDownload(p, file);
   $('.modal-body', m).addEventListener('click', async (e) => {
     const findRequired = e.target.closest('[data-find-required]');
     if (findRequired) {
@@ -2428,7 +2425,7 @@ function drawSetup() {
   let body = '', next = 'Next';
   if (step === 'welcome') {
     body = `<div class="setup-hero"><span class="brand-mark" style="font-size:22px;padding:9px 12px 8px">MXB</span>
-      <h1>Welcome to MX Bikes Manager</h1><p>Everything for your MX Bikes mods in one place. Let's get you set up — it takes a minute.</p></div>
+      <h1>Welcome to CoreMX</h1><p>Everything for your MX Bikes mods in one place. Let's get you set up — it takes a minute.</p></div>
       <div class="setup-feats">
         <div>${icon('library')}<b>Your mods</b><span>See every bike, track and piece of gear you have installed, with pictures.</span></div>
         <div>${icon('globe')}<b>One-click installs</b><span>Browse mxb-mods.com and install straight into the game.</span></div>
@@ -2543,12 +2540,12 @@ function drawAppUpdate() {
   const u = S.appUpdate;
   if (!['available', 'downloading', 'ready', 'installing', 'error'].includes(u.phase)) return;
   if (!updateDialog && (u.phase === 'error' || skippedUpdate === u.version)) return;
-  if (!updateDialog) updateDialog = modal({ title: 'MX Bikes Manager update', body: '', foot: '<span></span>', onClose: () => { skippedUpdate = S.appUpdate.version; updateAccepted = false; updateDialog = null; } });
+  if (!updateDialog) updateDialog = modal({ title: 'CoreMX update', body: '', foot: '<span></span>', onClose: () => { skippedUpdate = S.appUpdate.version; updateAccepted = false; updateDialog = null; } });
   const raw = Array.isArray(u.notes) ? u.notes.map((n) => n.note || '').join('\n') : u.notes || '';
   // Release notes come from a remote manifest: display text, never execute HTML.
   const notes = new DOMParser().parseFromString(raw, 'text/html').body.textContent;
   const labels = { available: 'An update is available', downloading: 'Downloading update', ready: 'Ready to install', installing: 'Installing update — the app will close and reopen', error: 'Update failed' };
-  $('.modal-body', updateDialog).innerHTML = '<h3>' + esc(u.version || '') + ' · ' + labels[u.phase] + '</h3><div style="white-space:pre-wrap;line-height:1.7;margin:16px 0">' + esc(notes || 'Improvements and fixes for MX Bikes Manager.') + '</div>' + (u.phase === 'downloading' ? '<progress style="width:100%" max="100" value="' + (Number(u.percent) || 0) + '"></progress><p>' + Math.round(u.percent || 0) + '% downloaded</p>' : '') + (u.error ? '<p class="sync-warning">' + esc(u.error) + '</p>' : '') + (u.phase === 'ready' && riderDirty() ? '<p>Apply or Revert your Rider preview before installing this update.</p>' : '');
+  $('.modal-body', updateDialog).innerHTML = '<h3>' + esc(u.version || '') + ' · ' + labels[u.phase] + '</h3><div style="white-space:pre-wrap;line-height:1.7;margin:16px 0">' + esc(notes || 'Improvements and fixes for CoreMX.') + '</div>' + (u.phase === 'downloading' ? '<progress style="width:100%" max="100" value="' + (Number(u.percent) || 0) + '"></progress><p>' + Math.round(u.percent || 0) + '% downloaded</p>' : '') + (u.error ? '<p class="sync-warning">' + esc(u.error) + '</p>' : '') + (u.phase === 'ready' && riderDirty() ? '<p>Apply or Revert your Rider preview before installing this update.</p>' : '');
   $('.modal-foot', updateDialog).innerHTML = (u.phase === 'installing' ? '' : '<button class="btn" data-close>' + (u.phase === 'available' ? 'Skip' : 'Later') + '</button>') + (u.phase === 'available' ? '<button class="btn btn-primary" data-act="app-update-download">Install update</button>' : u.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Install & reopen</button>' : u.phase === 'error' ? '<button class="btn btn-primary" data-act="app-update-check">Retry</button>' : '');
   if (u.phase === 'ready' && updateAccepted && !riderDirty()) restartForUpdate();
 }
@@ -2606,7 +2603,7 @@ async function renderSettings(c) {
       <div class="path-row"><div class="path">${esc(env.disabledDir)}</div><button class="btn btn-icon" data-folder="disabled" title="Open">${icon('folder')}</button></div></div>
     <div class="set-card"><h3>Setup</h3><p>Go through the welcome setup again.</p><button class="btn" data-act="run-setup">${icon('sparkle')}Run setup again</button></div>
     <div class="set-card"><h3>App updates</h3><div id="appUpdates">${appUpdateHtml()}</div></div>
-    <div class="set-card"><h3>About</h3><p>MX Bikes Manager ${esc(env.version)} · Mods are browsed from <a href="#" data-open="https://mxb-mods.com">mxb-mods.com</a>. Please support mod creators — rate and thank them on the site.</p></div>
+    <div class="set-card"><h3>About</h3><p>CoreMX ${esc(env.version)} — Content manager for MX Bikes.</p><p><a class="btn" href="#" data-open="https://coremx.app/#/">${icon('external')}Open website · coremx.app</a></p><p>Mods are browsed from <a href="#" data-open="https://mxb-mods.com">mxb-mods.com</a>. Please support mod creators — rate and thank them on the site.</p></div>
   </div></div></div></div>`;
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
   $('#autoImages').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoImages: e.target.checked }); if (e.target.checked) backgroundImages(); });
@@ -2967,6 +2964,8 @@ function updateFor(postId, modified) {
   }).catch(() => {}), 2500);
   if (!S.env.settings.setupDone) openSetup(0);
   else if (S.env.modsFound) setTimeout(backgroundImages, 1500);
+  // Links are delivered only after environment, jobs and installed content are ready.
+  for (const link of await api.invoke('deeplink:ready')) queueOpenLink(link);
 })();
 
 api.on('shops:changed', async () => { await refreshAccounts(); rerenderAccountsArea(); });
@@ -3108,9 +3107,55 @@ api.on('plugin:hook', (info) => {
   modal({
     title: crashed ? 'Missing-track detection switched off' : 'Missing-track detection paused', size: 'sm',
     body: `<div class="notice ${crashed ? 'warn' : 'info'}">${icon(crashed ? 'alert' : 'info')}<div>${crashed
-      ? 'MX Bikes crashed inside the MX Bikes Manager plugin, so missing-track detection has been switched off to keep the game stable.'
+      ? 'MX Bikes crashed inside the CoreMX plugin, so missing-track detection has been switched off to keep the game stable.'
       : 'MX Bikes has been updated, and the plugin doesn\'t recognise the new version yet, so missing-track detection is paused. Nothing in the game was changed.'}</div></div>
-      <p>It turns back on automatically when you install the next MX Bikes Manager update. Everything else (friends, live servers, gear sync) keeps working.</p>`,
+      <p>It turns back on automatically when you install the next CoreMX update. Everything else (friends, live servers, gear sync) keeps working.</p>`,
     foot: '<button class="btn btn-primary" data-close>OK</button>',
   });
 });
+
+// Links from the website (coremx.app): mxbm://install/<source>/<id>[?file=n] and mxbm://oem/<pack>
+async function handleOpenLink(l) {
+  if (!l) return;
+  try {
+    if (l.type === 'join') { await handleJoinLink(l.address); return; }
+    if (!S.env.settings.setupDone || !S.env.modsFound) {
+      toast('Finish setup and choose your MX Bikes folder, then open the website link again.', 'info', 6000);
+      if (S.env.settings.setupDone) openSetup(0);
+      return;
+    }
+    if (l.type === 'oem') {
+      S.packs = await api.invoke('packs:list', true);
+      go('packs');
+      const pack = S.packs.find((p) => p.id === l.pack);
+      const b = $(`#packList [data-pack-update="${l.pack}"]:not([disabled]), #packList [data-pack-full="${l.pack}"]:not([disabled])`);
+      if (b) b.click();
+      else if ([...S.jobs.values()].some((j) => j.packId === l.pack && !['done', 'error', 'cancelled'].includes(j.status))) toast('That pack is already downloading. See Downloads for progress.', 'info', 4000);
+      else if (pack && !pack.error && pack.summary && !pack.summary.needCount) toast('That pack is already installed and up to date', 'ok', 3500);
+      else toast(pack?.error || 'Could not load this OEM pack. Try Check again.', 'err', 5000);
+      return;
+    }
+    if (l.type !== 'install') return;
+    const t = await api.invoke('deeplink:target', l);
+    if (!t) { toast('That mod could not be found. It may have been removed.', 'err', 5000); return; }
+    if (t.source === 'mxbmods') {
+      S.getSrc = t.addon ? 'addons' : 'free';
+      Object.assign(S.browse, { posts: [], cursor: null, kind: 'all', tab: 'all', page: 0, totalPages: 1, loading: false, reqId: (S.browse.reqId || 0) + 1 });
+      go('get'); await openPost(t.post, { install: true, file: Number.isInteger(l.file) ? l.file : null }); return;
+    }
+    S.getSrc = t.source; go('get');
+    await api.invoke('shops:open', t.source, t.link);
+  } catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
+}
+let linkSequence = Promise.resolve();
+function queueOpenLink(link) { linkSequence = linkSequence.then(() => handleOpenLink(link)).catch((e) => toast(esc(cleanErr(e)), 'err', 6000)); return linkSequence; }
+api.on('deeplink:open', queueOpenLink);
+
+function installLinkedDownload(post, file) {
+  const downloads = post.downloads || [];
+  if (Number.isInteger(file) && !downloads[file]) { toast('That download is no longer available. Choose a download below.', 'info', 5000); return; }
+  const picked = Number.isInteger(file) ? downloads[file] : downloads.length === 1 ? downloads[0] : null;
+  if (!picked) { toast('Choose which download to install below.', 'info', 4000); return; }
+  if (picked.installed) { toast('This download is already installed.', 'ok', 3500); return; }
+  (picked.shop ? installDependency(picked.url) : startDownload(post, picked)).catch((e) => toast(esc(cleanErr(e)), 'err', 6000));
+}

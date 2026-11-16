@@ -121,7 +121,7 @@ async function drawLiveServers(refresh) {
   box.innerHTML = `${setup}<div class="filters" style="padding:0 0 12px"><div class="search wide">${icon('search')}<input id="allSrvQ" placeholder="Search by server, track or class…" value="${esc(S.allSrv.q || '')}" spellcheck="false"></div>
       <select class="input" data-server-filter="population" aria-label="Server population">${[['all', 'All servers'], ['populated', 'Not empty'], ['empty', 'Empty'], ['available', 'Hide full'], ['full', 'Full only']].map(([v, label]) => `<option value="${v}" ${filters.population === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="maxPing" aria-label="Maximum network ping">${[['', 'Any ping'], ['50', 'Under 50 ms'], ['100', 'Under 100 ms'], ['150', 'Under 150 ms'], ['250', 'Under 250 ms']].map(([v, label]) => `<option value="${v}" ${filters.maxPing === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="sort" aria-label="Server order"><option value="activity" ${filters.sort === 'activity' ? 'selected' : ''}>Activity</option><option value="ping" ${filters.sort === 'ping' ? 'selected' : ''}>Lowest ping</option></select><span class="count">${xs.length} shown</span>
       <button class="btn btn-icon" data-act="live-refresh" title="Reload">${icon('refresh')}</button></div>
-    <p class="muted" style="font-size:12px">Only servers that currently have an MX Bikes Manager user on them are listed here.</p><div class="srv-list">${xs.map((s, i) => {
+    <p class="muted" style="font-size:12px">Only servers that currently have an CoreMX user on them are listed here.</p><div class="srv-list">${xs.map((s, i) => {
       const have = trackHave(s);
       const tl = trackLabel(s);
       const cap = Number(s.capacity || s.maxPlayers) || 0, pingTone = s.ping == null ? '' : s.ping < 80 ? 'good' : s.ping < 150 ? 'ok' : 'bad';
@@ -171,7 +171,7 @@ async function joinLiveServer(s) {
   };
   const m = modal({
     title: `Riders on ${esc(s.name)}`, size: 'sm',
-    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} MX Bikes Manager. Download their gear so you see their bikes and outfits in game? Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
+    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} CoreMX. Download their gear so you see their bikes and outfits in game? Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
     foot: `<button class="btn" data-sr-skip>Join without gear</button><span class="grow"></span><button class="btn btn-primary" data-sr-go>${icon('download')}Download & join</button>`,
   });
   $('[data-sr-skip]', m).addEventListener('click', () => { m.close(); join(); });
@@ -268,7 +268,7 @@ async function renderFriends(c) {
     if (!connected) return ['off', 'Offline — go online to see status', 3];
     const l = live.get(f.code);
     if (!l) return ['off', S.live.friendsLoading ? 'Checking…' : '—', 3];
-    if (l.status === 'not-on-service') return ['off', "Hasn't installed MX Bikes Manager yet", 4];
+    if (l.status === 'not-on-service') return ['off', "Hasn't installed CoreMX yet", 4];
     if (l.status === 'not-added-back') return ['wait', 'Waiting for them to add you back', 2];
     if (l.status === 'hidden' || !l.online) return ['off', l.lastSeen ? `Offline · last seen ${timeAgo(l.lastSeen)}` : 'Offline', 3];
     if (l.server) return ['ride', `Riding on ${l.server}${l.trackName || l.trackId ? ` · ${l.trackName || l.trackId}` : ''}${sessionLabel(l) ? ` · ${sessionLabel(l)}` : ''}`, 0];
@@ -395,7 +395,7 @@ document.addEventListener('click', async (e) => {
   const busy = (fn) => async () => { const old = a.innerHTML; a.disabled = true; a.innerHTML = '<div class="spinner" style="width:14px;height:14px"></div>'; try { await fn(); } catch (err) { toast(esc(cleanErr(err)), 'err', 7000); } a.disabled = false; a.innerHTML = old; };
   const rerender = () => { S.live.servers = null; S.live.friends = null; S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content')); };
   if (act === 'live-plugin-install') return busy(async () => { S.live.status = await api.invoke('online:pluginInstall'); toast('Plugin installed — it starts next time you open MX Bikes', 'ok', 4000); rerender(); })();
-  if (act === 'live-plugin-remove') { if (await confirmBox('Remove plugin', 'Remove the MX Bikes Manager plugin from your game\'s plugins folder?', 'Remove', true)) busy(async () => { S.live.status = await api.invoke('online:pluginRemove'); rerender(); })(); return; }
+  if (act === 'live-plugin-remove') { if (await confirmBox('Remove plugin', 'Remove the CoreMX plugin from your game\'s plugins folder?', 'Remove', true)) busy(async () => { S.live.status = await api.invoke('online:pluginRemove'); rerender(); })(); return; }
   if (act === 'live-connect') return busy(async () => { S.live.status = await api.invoke('online:connect'); toast('Online', 'ok'); rerender(); })();
   if (act === 'paint-now') e.preventDefault();
   if (act === 'paint-now') return busy(async () => { S.live.status = await api.invoke('online:paintSyncNow'); renderFriends($('#content')); })();
@@ -662,7 +662,7 @@ async function addFriendsModal() {
       const have = added();
       const xs = list.filter((f) => f.name.toLowerCase().includes(q)).sort((a, b) => (b.onService - a.onService) || a.name.localeCompare(b.name));
       $('#sfList', m).innerHTML = xs.map((f) => `<div class="opt" style="cursor:default"><span class="fr-av sm">${esc(f.name.slice(0, 1).toUpperCase())}</span>
-        <span class="opt-txt"><span>${esc(f.name)}</span><span class="muted">${f.onService ? 'Uses MX Bikes Manager' : "Hasn't installed the app yet"}</span></span>
+        <span class="opt-txt"><span>${esc(f.name)}</span><span class="muted">${f.onService ? 'Uses CoreMX' : "Hasn't installed the app yet"}</span></span>
         ${have.has(f.steamId) ? `<span class="badge ok" style="position:static">${icon('check')}Added</span>` : `<button class="btn btn-sm ${f.onService ? 'btn-primary' : ''}" data-sf-add="${esc(f.steamId)}">Add</button>`}</div>`).join('') || '<div class="muted" style="padding:20px;text-align:center">No matches</div>';
     };
     $('#sfQ', m).addEventListener('input', draw);
