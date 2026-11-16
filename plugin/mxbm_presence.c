@@ -343,6 +343,17 @@ void mxbm_capture(const char *text, const unsigned char *frame) {
   name[i] = 0;
   at = (size_t)sprintf(o, "{\"v\":2,\"at\":%llu,\"track\":", nowMs());
   at = jstr(o, at, name, sizeof o - 64);
+  /* The row at frame+0x50 is a copy of the game's server record: an IPv4-mapped IPv6 address at
+   * +0x0B (ff ff a b c d), the port big-endian at +0x11, the server name at +0x26. */
+  if (frame && frame[0x5B] == 0xff && frame[0x5C] == 0xff && frame[0x5D]) {
+    const unsigned char *a = frame + 0x5D; unsigned port = ((unsigned)frame[0x61] << 8) | frame[0x62];
+    char server[64]; size_t k;
+    for (k = 0; k < sizeof server - 1 && frame[0x76 + k] >= 0x20 && frame[0x76 + k] < 0x7f; k++) server[k] = (char)frame[0x76 + k];
+    server[k] = 0;
+    if (port) at += (size_t)sprintf(o + at, ",\"address\":\"%u.%u.%u.%u:%u\"", a[0], a[1], a[2], a[3], port);
+    memcpy(o + at, ",\"server\":", 10); at += 10;
+    at = jstr(o, at, server, sizeof o - 64);
+  }
   memcpy(o + at, ",\"row\":[", 8); at += 8;
   if (frame) {
     for (i = 0x38, run = 0; i < 0x380 && count < 40; i++) {
@@ -356,7 +367,14 @@ void mxbm_capture(const char *text, const unsigned char *frame) {
       run = 0;
     }
   }
-  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
+  o[at++] = ']';
+  /* The raw start of the row (before the server name): binary fields such as an address. */
+  if (frame && at + 0x200 < sizeof o) {
+    memcpy(o + at, ",\"raw\":\"", 8); at += 8;
+    for (i = 0x40; i < 0x80; i++) at += (size_t)sprintf(o + at, "%02x", frame[i]);
+    o[at++] = '"';
+  }
+  o[at++] = '}'; o[at] = 0;
   writeSmall("mxbm_missing.json", o);
 }
 

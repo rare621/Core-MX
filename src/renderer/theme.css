@@ -549,3 +549,5 @@ select option { background: var(--solid-2); color: var(--text); }
 .mt-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .mt-txt b { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mt-txt small { color: var(--muted); font-size: 12px; }
+.mt-rejoin { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 14px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 125, 46, .08); box-shadow: inset 0 0 0 1px rgba(255, 125, 46, .25); font-size: 13px; cursor: pointer; }
+.mt-rejoin input { width: 17px; height: 17px; margin-top: 1px; accent-color: var(--accent); flex: none; }

@@ -3055,23 +3055,50 @@ function chime() {
 }
 const SOURCE_LABEL = { 'mxb-mods': 'MXB Mods · free', hub: 'MXB Hub · shop', mxbs: 'MX Bikes Shop · shop' };
 let missingModal = null;
-api.on('missing:track', ({ track, results }) => {
+// After the missing track installs: restart MX Bikes straight into the server you tried to join.
+S.pendingRejoin = null;
+api.on('jobs:update', (j) => {
+  const p = S.pendingRejoin;
+  if (!p || j.status !== 'done' || Date.now() - p.at > 30 * 60 * 1000) return;
+  if (!(String(j.postId || '') === String(p.postId || '-') || j.plan?.kind === 'track')) return;
+  S.pendingRejoin = null;
+  let left = 5, timer = null;
+  const m = modal({
+    title: 'Track installed', size: 'sm',
+    body: `<p style="margin-top:0">Restarting MX Bikes to join <b>${esc(p.server || p.address)}</b> in <b data-rj-left>${left}</b>…</p><p class="muted" style="font-size:12px">MX Bikes is closed the normal way, so your profile is saved first.</p>`,
+    foot: `<button class="btn" data-close>Cancel</button><span class="grow"></span><button class="btn btn-primary" data-rj-now>${icon('play')}Join now</button>`,
+    onClose: () => clearInterval(timer),
+  });
+  const go = async () => {
+    clearInterval(timer); m.close();
+    toast(`Restarting MX Bikes to join <b>${esc(p.server || p.address)}</b>…`, 'info', 6000);
+    try { await api.invoke('game:restartAndJoin', p.address); } catch (e) { toast(esc(cleanErr(e)), 'err', 7000); }
+  };
+  $('[data-rj-now]', m).addEventListener('click', go);
+  timer = setInterval(() => { left--; const el = $('[data-rj-left]', m); if (el) el.textContent = left; if (left <= 0) go(); }, 1000);
+});
+
+api.on('missing:track', ({ track, results, address, server }) => {
   if (missingModal) missingModal.close();
   chime();
+  S.pendingRejoin = address ? { address, server, track, at: Date.now(), postId: null } : null;
   const pretty = String(track).replace(/_/g, ' ');
   const row = (r, i) => `<div class="mt-row" data-mt="${i}"><div class="mt-img">${r.image ? `<img src="${esc(r.image)}" alt="">` : icon('track')}</div>
     <div class="mt-txt"><b>${esc(r.title)}</b><small>${SOURCE_LABEL[r.source] || esc(r.source)}${r.price ? ` · ${esc(r.price)}` : ''}</small></div>
     ${r.source === 'mxb-mods' ? `<button class="btn btn-primary btn-sm" data-mt-open="${i}">${icon('download')}View & install</button>` : dependencyButton({ url: r.link }, 'View in shop')}</div>`;
   missingModal = modal({
     title: 'Missing track', size: 'sm',
-    body: `<p style="margin-top:0">MX Bikes couldn't join because you don't have <b>${esc(pretty)}</b>.</p>
+    body: `<p style="margin-top:0">MX Bikes couldn't join${server ? ` <b>${esc(server)}</b>` : ''} because you don't have <b>${esc(pretty)}</b>.</p>
+      ${address ? `<label class="mt-rejoin"><input type="checkbox" data-mt-rejoin checked><span>When the track is installed, restart MX Bikes and join ${server ? `<b>${esc(server)}</b>` : 'the server'}</span></label>` : ''}
       ${results.length ? `<div class="section-title" style="margin-top:4px">Best matches</div><div class="mt-list">${results.map(row).join('')}</div><p class="muted" style="font-size:12px">Matches are found by name; check it's the right track before installing.</p>` : `<div class="notice info">${icon('info')}<div>No match on MXB Mods, MXB Hub or MX Bikes Shop. The server's own page or Discord usually links it.</div></div>`}`,
     foot: `<button class="btn" data-mt-search>${icon('search')}Search Get Mods</button><span class="grow"></span><button class="btn" data-close>Close</button>`,
     onClose: () => { missingModal = null; },
   });
   missingModal.addEventListener('click', (e) => {
     const open = e.target.closest('[data-mt-open]');
-    if (open) { const r = results[Number(open.dataset.mtOpen)]; missingModal.close(); openPost(r); return; }
+    const rejoin = e.target.closest('[data-mt-rejoin]');
+    if (rejoin) { if (rejoin.checked && address) S.pendingRejoin = { address, server, track, at: Date.now(), postId: null }; else S.pendingRejoin = null; return; }
+    if (open) { const r = results[Number(open.dataset.mtOpen)]; if (S.pendingRejoin) S.pendingRejoin.postId = r.id; missingModal.close(); openPost(r); return; }
     if (e.target.closest('[data-mt-search]')) { missingModal.close(); if (typeof findTrack === 'function') findTrack(pretty); }
   });
 });

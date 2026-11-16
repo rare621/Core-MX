@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const { execFile } = require('child_process');
 
 const { Store } = require('./src/lib/store');
 const paths = require('./src/lib/paths');
@@ -121,7 +122,8 @@ async function onMissingTrackFile(file) {
   if (missingSeen.track === track && info.at - missingSeen.at < 30000) return;
   missingSeen = { track, at: info.at };
   const results = await searchMissingTrack(track).catch(() => []);
-  send('missing:track', { track, results, at: info.at });
+  const address = game.validAddress(String(info.address || '')) || null;
+  send('missing:track', { track, results, at: info.at, address, server: String(info.server || '').slice(0, 64) });
   // Get the app in front: over a borderless/windowed game it appears right away; with exclusive
   // full screen Windows keeps it behind the game, so it flashes in the taskbar until you Alt+Tab.
   if (mainWin && !mainWin.isDestroyed() && !mainWin.isFocused()) {
@@ -1099,6 +1101,27 @@ function registerIpc() {
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes, then click Join again to connect directly to this server.');
     const exe = paths.findGameExe(store.get('settings').gameInstallDir);
     if (!exe) throw new Error("Couldn't find mxbikes.exe — set the game install folder in Settings.");
+    game.launch(exe, ['-directconnect', addr]);
+    if (online) online.noteJoin(addr);
+    return true;
+  });
+  // After a missing track is installed: close MX Bikes the normal way (a window close request,
+  // like clicking X; never a forced kill, so it saves its profile), wait for it to exit, then
+  // launch it straight into the server.
+  handle('game:restartAndJoin', async (address) => {
+    const addr = game.validAddress(address);
+    if (!addr) throw new Error('That server address is not valid');
+    const exe = paths.findGameExe(store.get('settings').gameInstallDir);
+    if (!exe) throw new Error("Couldn't find mxbikes.exe — set the game install folder in Settings.");
+    if (await profile.isGameRunning()) {
+      await new Promise((resolve) => execFile('taskkill', ['/IM', 'mxbikes.exe'], { windowsHide: true }, () => resolve()));
+      const until = Date.now() + 25000;
+      while (await profile.isGameRunning()) {
+        if (Date.now() > until) throw new Error('MX Bikes did not close. Close it yourself, then click Join again.');
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      await new Promise((r) => setTimeout(r, 2500)); // let it finish writing its profile
+    }
     game.launch(exe, ['-directconnect', addr]);
     if (online) online.noteJoin(addr);
     return true;
