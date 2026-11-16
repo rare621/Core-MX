@@ -14,7 +14,7 @@ const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app joi
 
 function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
   let current = null;        // parsed plugin state, or null
-  let gameRunning = false;
+  let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
   let lastSentAt = 0;
   let lastError = null;
@@ -111,6 +111,13 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     let next = null;
     try { next = JSON.parse(await fsp.readFile(p, 'utf8')); } catch {}
     gameRunning = await isGameRunning();
+    // An app update brings a new plugin, but Windows locks it while the game runs: replace the
+    // installed copy as soon as the game is closed (only if one is installed; a removed plugin
+    // stays removed).
+    if (!gameRunning && !pluginUpdating && pluginStatus().needsUpdate) {
+      pluginUpdating = true;
+      installPlugin().catch(() => {}).finally(() => { pluginUpdating = false; onChange(status()); });
+    }
     if (!gameRunning) next = null; // stale file from a game that has closed
     if (next && next.inEvent && next.server) {
       // Remember which address this server name had when we joined it from the app.
