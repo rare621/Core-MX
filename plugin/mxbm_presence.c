@@ -284,7 +284,7 @@ static const unsigned char SIG2[43] = {
 void *mxbm_orig_ui = 0;
 void *mxbm_expect_ret = 0;
 void *mxbm_expect_ret2 = 0;
-void mxbm_capture(const char *text);
+void mxbm_capture(const char *text, const unsigned char *frame);
 extern void mxbm_ui_stub(void);
 
 __asm__(
@@ -303,6 +303,7 @@ __asm__(
   "  push rcx\n  push rdx\n  push r8\n  push r9\n"
   "  sub rsp, 0x28\n"
   "  mov rcx, r8\n"
+  "  lea rdx, [rsp + 0x50]\n"   /* the calling handler's stack frame (its rsp) */
   "  call mxbm_capture\n"
   "  add rsp, 0x28\n"
   "  pop r9\n  pop r8\n  pop rdx\n  pop rcx\n"
@@ -332,13 +333,30 @@ static void hookState(const char *state, const char *detail) {
 }
 
 /* Runs on the game's UI thread, only for the Missing Track window. Keep it short. */
-void mxbm_capture(const char *text) {
-  char name[128], o[400]; size_t at, i;
+/* `frame` is the handler's own stack frame (0x390 bytes). It still holds the server-list row the
+ * handler read (from +0x50) and the fields it split out of it, so the readable strings in it are
+ * reported as "row" too (server name / address research). */
+void mxbm_capture(const char *text, const unsigned char *frame) {
+  static char o[4096]; char name[128], s[96]; size_t at, i, n, run; int count = 0;
   if (!text) return;
   for (i = 0; i < sizeof name - 1 && text[i]; i++) name[i] = text[i];
   name[i] = 0;
-  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"track\":", nowMs());
-  at = jstr(o, at, name, sizeof o - 4); o[at++] = '}'; o[at] = 0;
+  at = (size_t)sprintf(o, "{\"v\":2,\"at\":%llu,\"track\":", nowMs());
+  at = jstr(o, at, name, sizeof o - 64);
+  memcpy(o + at, ",\"row\":[", 8); at += 8;
+  if (frame) {
+    for (i = 0x38, run = 0; i < 0x380 && count < 40; i++) {
+      unsigned char ch = frame[i];
+      if (ch >= 0x20 && ch < 0x7f) { run++; continue; }
+      if (run >= 3) {
+        n = run < sizeof s - 1 ? run : sizeof s - 1;
+        memcpy(s, frame + i - run, n); s[n] = 0;
+        if (at + 140 < sizeof o) { at += (size_t)sprintf(o + at, "%s{\"off\":%u,\"s\":", count ? "," : "", (unsigned)(i - run)); at = jstr(o, at, s, sizeof o - 8); o[at++] = '}'; count++; }
+      }
+      run = 0;
+    }
+  }
+  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
   writeSmall("mxbm_missing.json", o);
 }
 
