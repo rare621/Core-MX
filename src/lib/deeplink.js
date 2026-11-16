@@ -15,13 +15,16 @@ function parse(link) {
     let address; try { address = decodeURIComponent(m[1]); } catch { return null; }
     return /^[A-Za-z0-9.\-:[\]]{3,80}$/.test(address) ? { type: 'join', address } : null;
   }
-  m = link.match(/^mxbm:\/\/install\/([a-z]+)\/(\d{1,12})\/?(?:\?file=(\d{1,3}))?$/i);
+  m = link.match(/^mxbm:\/\/install\/([a-z]+)\/([A-Za-z0-9_-]{1,80})\/?(?:\?file=(\d{1,3}))?$/i);
   if (m) {
     const source = m[1].toLowerCase();
     if (!SOURCES.has(source)) return null;
-    const out = { type: 'install', source, id: Number(m[2]) };
+    const local = source === 'local';
+    if (!local && !/^\d{1,12}$/.test(m[2])) return null;
+    const id = local && !/^\d+$/.test(m[2]) ? m[2] : Number(m[2]);
+    const out = { type: 'install', source, id };
     if (m[3] !== undefined) out.file = Number(m[3]);
-    return out.id > 0 ? out : null;
+    return typeof id === 'string' || id > 0 ? out : null;
   }
   m = link.match(/^mxbm:\/\/oem\/([a-z]+)\/?$/i);
   if (m) { const pack = m[1].toLowerCase(); return PACKS.has(pack) ? { type: 'oem', pack } : null; }

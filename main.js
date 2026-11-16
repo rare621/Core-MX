@@ -894,7 +894,7 @@ function registerIpc() {
     return post;
   });
   handle('site:post', async (id) => {
-    const post = id < 0 ? await coremx.post(-id) : await site.post(id), rec = store.get('installs')[id];
+    const post = typeof id === 'string' && id.startsWith('coremx:') ? await coremx.post(id) : id < 0 ? await coremx.post(-id) : await site.post(id), rec = store.get('installs')[id];
     post.installKind = installer.kindFromCategories(post.categories);
     if (post.installKind === 'bikePaint') post.needsModelNotice = false;
     // Tracks, whole bikes and other standalone mods only keep requirements the creator declared explicitly.
@@ -1079,9 +1079,14 @@ function registerIpc() {
   }))));
   // Website install links: turn a source + id into what the renderer needs to open it.
   handle('deeplink:target', async (l) => {
-    if (!l || l.type !== 'install' || !Number.isSafeInteger(l.id) || l.id <= 0 || l.id > 999999999999) return null;
+    if (!l || l.type !== 'install') return null;
+    if (l.source === 'local') {
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(l.id))) return null;
+      const post = await coremx.post(l.id);
+      return { source: 'local', addon: post.addon, post };
+    }
+    if (!Number.isSafeInteger(l.id) || l.id <= 0 || l.id > 999999999999) return null;
     if (l.source === 'mxbmods') { const [post] = await site.postsByIds([l.id]); return post ? { source: 'mxbmods', addon: site.isAddonPost(post), post } : null; }
-    if (l.source === 'local') { const post = await coremx.post(l.id); return { source: 'local', addon: post.addon, post }; }
     if (l.source !== 'hub' && l.source !== 'mxbs') return null;
     const link = await shops.productLink(ses, l.source, l.id);
     return link ? { source: l.source, link } : null;

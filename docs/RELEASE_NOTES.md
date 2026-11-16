@@ -1,6 +1,7 @@
-## 1.0.19 — HTTPS online sync
+## 1.0.20 — HTTPS online sync and community uploads
 
 - The app now sends online sync traffic to `https://coremx.app/v1/`. The website proxies those calls to the local sync service. Existing tokens and friends are retained when moving from the old service address.
+- CoreMX community uploads now use the website's alphanumeric IDs, so published mods appear in Get Mods with their images, detail pages, download links, and website install links.
 - The release workflow builds the CoreMX installer and legacy-named update copy, then publishes the release automatically after tests and packaging pass.
 
 ## 1.0.10 — Hoodie previews, gear defaults, and Drive updates
