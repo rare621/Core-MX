@@ -1,4 +1,6 @@
-New look: the whole app has been restyled with a darker, cleaner design. The sidebar floats and is grouped into Mods, Ride and Community. Pages sit on frosted panels over a soft blurred background that changes colour by section, and a mod's own picture glows behind it while you view it. Cards, menus, dialogs and controls are all refreshed.
+New look: the whole app has a new darker, cleaner design. Navigation is now a bar across the top with a sliding highlight, and Downloads, Settings and your Steam avatar (Friends) sit at the top right. Pages sit on frosted panels over a soft blurred background that changes colour by section, and a mod's picture glows behind it while you view it. Pages, cards, dialogs, menus and notifications animate smoothly, and the app respects the Windows reduce-motion setting.
+
+Clearer names: Game is now Play, its Settings tab is Game settings, and bike appearance is only on Rider > Bike.
 
 Get Mods no longer freezes: page parsing now runs in the background, so scrolling and clicking stay responsive while results load.
 
