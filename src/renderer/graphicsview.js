@@ -28,8 +28,9 @@ function graphicsListHtml(g) {
 }
 
 async function renderGraphics(c) {
-  const t = (id, ic, l) => `<button class="${S.gfxTab === id ? 'active' : ''}" data-gfx-tab="${id}">${icon(ic)}${l}</button>`;
-  c.innerHTML = `<div class="view col"><div class="srcbar"><h2>Graphics</h2><div class="seg-tabs">${t('installed', 'sparkle', 'Installed')}${t('get', 'globe', 'Get graphics')}</div></div><div class="view" id="gfxBody"></div></div>`;
+  // Same header as Get Mods: descriptive tiles instead of bare tabs.
+  const t = (id, ic, l, hint) => `<button class="src-tile ${S.gfxTab === id ? 'active' : ''}" data-gfx-tab="${id}"><span class="src-ico">${icon(ic)}</span><span class="src-txt"><b>${l}</b><small>${hint}</small></span></button>`;
+  c.innerHTML = `<div class="view col"><div class="get-head"><div class="get-title"><h2>Graphics</h2><span class="sub">ReShade presets and graphics overhauls, with an on/off switch</span></div><div class="src-tiles two">${t('installed', 'sparkle', 'Installed', 'Turn graphics mods on or off')}${t('get', 'globe', 'Get graphics', 'Browse mxb-mods.com')}</div></div><div class="view" id="gfxBody"></div></div>`;
   const body = $('#gfxBody');
   if (S.gfxTab === 'get') {
     if (S.browse.tab !== 'graphics') { S.browse.tab = 'graphics'; S.browse.query = ''; S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.req = (S.browse.req || 0) + 1; S.browse.loading = false; }

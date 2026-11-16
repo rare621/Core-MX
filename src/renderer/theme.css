@@ -476,3 +476,49 @@ select option { background: var(--solid-2); color: var(--text); }
 .fr-layout [data-friend-remove] { position: absolute; top: 12px; right: 12px; color: var(--muted); }
 .fr-layout .fr-status { white-space: normal; }
 @media (max-width: 1150px) { .fr-page.fr-layout { grid-template-columns: 1fr; } .fr-side { position: static; } }
+
+/* =================== Settings =================== */
+.settings-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; align-items: start; max-width: 1100px; }
+.set-nav { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: 20px; background: rgba(255, 255, 255, .035); box-shadow: var(--hairline); animation: rowIn .4s var(--out) both; }
+.set-nav button { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px; border: 0; border-radius: 12px; background: transparent; color: var(--text-2); font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; transition: background .2s, color .2s; }
+.set-nav button .ico { width: 16px; height: 16px; color: var(--muted); transition: color .2s; }
+.set-nav button span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-nav button:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+.set-nav button.active { background: rgba(255, 255, 255, .1); color: var(--text); }
+.set-nav button.active .ico { color: var(--accent); }
+.settings-layout .settings { max-width: none; }
+.set-card.flash { animation: flash 1.1s var(--out); }
+@keyframes flash { 0% { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 6px var(--accent-soft); } 100% { box-shadow: var(--hairline); } }
+@media (max-width: 1000px) { .settings-layout { grid-template-columns: 1fr; } .set-nav { position: static; flex-direction: row; overflow-x: auto; } }
+
+/* =================== OEM Packs =================== */
+.pack-summary:empty { display: none; }
+.pack-summary { display: flex; align-items: center; gap: 14px; max-width: 1100px; margin-bottom: 18px; padding: 16px 18px; border-radius: 20px; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); animation: rowIn .4s var(--out) both; }
+.pack-sum-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; flex: none; }
+.pack-sum-icon .ico { width: 22px; height: 22px; }
+.pack-sum-icon.ok { background: var(--ok-soft); color: var(--ok); }
+.pack-sum-icon.need { background: var(--accent); color: #fff; box-shadow: 0 8px 20px rgba(255, 110, 40, .35); }
+.pack-sum-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pack-sum-txt b { font: 650 16px var(--display); }
+.pack-sum-txt small { color: var(--muted); font-size: 12.5px; }
+.pack { background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); border-radius: 24px; animation: cardIn .5s var(--out) both; transition: transform .35s var(--spring), background .2s; }
+.pack:hover { transform: translateY(-3px); background: rgba(255, 255, 255, .06); }
+.pack-img img { transition: transform .8s var(--out); }
+.pack:hover .pack-img img { transform: scale(1.04); }
+.pack-bar { background: rgba(255, 255, 255, .08); }
+.pack-bar > div { background: linear-gradient(90deg, #2fbf5a, var(--ok)); transition: width .6s var(--out); }
+
+/* =================== Downloads =================== */
+.dl-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0 0 16px; max-width: 1000px; }
+.sum-tile.static { cursor: default; }
+.sum-tile.static:hover { transform: none; background: rgba(255, 255, 255, .04); }
+.sum-tile.ok .sum-ico { background: var(--ok-soft); color: var(--ok); }
+.sum-tile.bad .sum-ico { background: var(--danger-soft); color: var(--danger); }
+.jobs { background: none; box-shadow: none; gap: 8px; overflow: visible; }
+.job, .inst { border-radius: 18px; border: 0; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); animation: rowIn .4s var(--out) both; }
+.job:last-child, .inst:last-child { border-bottom: 0; }
+.job .jthumb { border-radius: 12px; }
+.inst.update { background: rgba(255, 125, 46, .1); box-shadow: inset 0 0 0 1px rgba(255, 125, 46, .3); }
+
+/* Graphics header uses two tiles */
+.src-tiles.two { grid-template-columns: repeat(2, minmax(180px, 1fr)); max-width: 460px; }
