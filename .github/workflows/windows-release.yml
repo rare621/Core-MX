@@ -13,8 +13,6 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
-    env:
-      MXB_SERVICE_URL: ${{ vars.MXB_SERVICE_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -35,13 +33,14 @@ jobs:
         with:
           name: windows-setup
           path: |
+            dist/CoreMX-Setup-*.exe
             dist/MX-Bikes-Manager-Setup-*.exe
             dist/SHA256SUMS.txt
             dist/mxbm-online-service.zip
             dist/latest.yml
           if-no-files-found: error
           retention-days: 14
-      - name: Create draft GitHub release
+      - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,4 +48,4 @@ jobs:
         run: |
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -eq 0) { Write-Output 'Release already exists; leaving its assets unchanged.'; exit 0 }
-          gh release create $env:GITHUB_REF_NAME dist/MX-Bikes-Manager-Setup-*.exe dist/mxbm-online-service.zip dist/SHA256SUMS.txt dist/latest.yml --verify-tag --draft --title "MX Bikes Manager $env:GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
+          gh release create $env:GITHUB_REF_NAME dist/CoreMX-Setup-*.exe dist/MX-Bikes-Manager-Setup-*.exe dist/mxbm-online-service.zip dist/SHA256SUMS.txt dist/latest.yml --verify-tag --title "CoreMX $env:GITHUB_REF_NAME" --notes-file build/release-notes.md

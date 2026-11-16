@@ -1,3 +1,8 @@
+## 1.0.19 — HTTPS online sync
+
+- The app now sends online sync traffic to `https://coremx.app/v1/`. The website proxies those calls to the local sync service. Existing tokens and friends are retained when moving from the old service address.
+- The release workflow builds the CoreMX installer and legacy-named update copy, then publishes the release automatically after tests and packaging pass.
+
 ## 1.0.10 — Hoodie previews, gear defaults, and Drive updates
 
 - Local preview workers can read installed KCOL models carrying a binding marker, including the purchased ABDesigns hoodie tested with the Dropsize paint. Rider bodies use their recorded bounds to select the correct transform. Missing custom bodies no longer silently show the stock rider. This does not change paid-mod sync restrictions.
