@@ -782,8 +782,14 @@ S.getSrc = 'free';
 function isFree() { return (S.view === 'get' && ['free', 'addons'].includes(S.getSrc)) || (S.view === 'graphics' && S.gfxTab === 'get'); }
 function isShop() { return S.view === 'get' && !['free', 'addons'].includes(S.getSrc); }
 function renderGet(c) {
-  const src = (id, ic, label) => `<button class="${S.getSrc === id ? 'active' : ''}" data-src="${id}">${icon(ic)}${label}</button>`;
-  c.innerHTML = `<div class="view col"><div class="srcbar"><h2>Get Mods</h2><div class="seg-tabs">${src('free', 'globe', 'MXB Mods')}${src('addons', 'layers', 'Addons')}${src('hub', 'cart', 'MXB Hub')}${src('mxbs', 'cart', 'MX Bikes Shop')}</div></div><div class="view" id="getBody"></div></div>`;
+  const SOURCES = [
+    ['free', 'globe', 'Free mods', 'mxb-mods.com'],
+    ['addons', 'layers', 'Add-ons', 'Free, needs another mod'],
+    ['hub', 'cart', 'MXB Hub', 'Paid store'],
+    ['mxbs', 'cart', 'MX Bikes Shop', 'Paid store'],
+  ];
+  const src = ([id, ic, label, hint]) => `<button class="src-tile ${S.getSrc === id ? 'active' : ''}" data-src="${id}"><span class="src-ico">${icon(ic)}</span><span class="src-txt"><b>${label}</b><small>${hint}</small></span></button>`;
+  c.innerHTML = `<div class="view col"><div class="get-head"><div class="get-title"><h2>Get Mods</h2><span class="sub">Browse, check what you need and install in one click</span></div><div class="src-tiles">${SOURCES.map(src).join('')}</div></div><div class="view" id="getBody"></div></div>`;
   const body = $('#getBody');
   if (['free', 'addons'].includes(S.getSrc)) { renderBrowse(body); return; }
   if (S.shop.id !== S.getSrc) { S.shop.id = S.getSrc; S.shop.cat = 0; S.shop.sort = 'date'; S.shop.query = ''; S.shop.products = []; S.shop.page = 0; S.shop.totalPages = 1; S.shop.total = 0; S.shop.req++; S.shop.loading = false; }
@@ -889,8 +895,8 @@ document.addEventListener('click', (e) => {
 function renderBrowse(c) {
   if (!$('#browseView')) {
     c.innerHTML = `<div class="view" id="browseView"><div class="main">
-      <div class="toolbar" style="padding-top:10px">
-        <div class="search wide">${icon('search')}<input id="brSearch" placeholder="Search mxb-mods.com — bikes, tracks, gear…" spellcheck="false"></div>
+      <div class="toolbar browse-bar">
+        <div class="search spotlight">${icon('search')}<input id="brSearch" placeholder="Search bikes, tracks, gear, liveries…" spellcheck="false"></div>
         <select id="brSort"><option value="relevance">Best match</option><option value="popular-week">🔥 Popular this week</option><option value="popular-month">🔥 Popular this month</option><option value="popular-today">🔥 Popular today</option><option value="popular-all">🔥 Popular all time</option><option value="date">Newest</option><option value="modified">Recently updated</option><option value="title">Title A–Z</option></select>
         <span class="sub" id="brCount"></span><div class="grow"></div>
         <button class="btn btn-icon" data-act="open-site" title="Open mxb-mods.com">${icon('external')}</button>
@@ -911,11 +917,12 @@ function renderBrowse(c) {
     $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
-  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${esc(t.label)}</button>`).join('');
+  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${icon(TAB_ICONS[t.id] || 'grid')}${esc(t.label)}</button>`).join('');
   drawBrowseKind();
   if (!S.browse.posts.length && !S.browse.loading) browseLoad(); else renderBrowseGrid();
 }
 
+const TAB_ICONS = { all: 'grid', tracks: 'track', bikes: 'bike', liveries: 'paint', riderkit: 'shirt', riders: 'rider', helmets: 'helmet', boots: 'boot', gloves: 'glove', protection: 'shield', goggles: 'goggles', sounds: 'power', wheels: 'tyre', graphics: 'sparkle', modpacks: 'box', other: 'settings', paid: 'cart' };
 function drawBrowseKind() {
   const box = $('#brKind'); if (!box) return;
   const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
@@ -971,6 +978,14 @@ function siteCard(p) {
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
 
+function heroCard(p) {
+  const cat = p.categoryNames.filter((n) => !/^(Bikes|Rider|Other|Paid Mods)$/.test(n)).slice(-1)[0] || '';
+  const installed = haveMod({ postId: p.id, title: p.title });
+  const sortLabel = { 'popular-week': 'this week', 'popular-today': 'today', 'popular-all': 'of all time' }[S.browse.sort] || 'this month';
+  return `<div class="feature-hero" data-post="${p.id}"><img src="${esc(p.image)}" alt=""><div class="fh-shade"></div>
+    <div class="fh-body"><span class="fh-kicker">${p.rank ? `#${p.rank} most popular ${sortLabel}` : 'Featured'}${cat ? ` · ${esc(cat)}` : ''}</span><h3>${esc(p.title)}</h3>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ''}
+    <span class="fh-actions"><span class="btn btn-primary">${icon(installed ? 'check' : 'download')}${installed ? 'Installed · view' : 'View & install'}</span>${p.views ? `<span class="fh-views">${p.views.toLocaleString()} views</span>` : ''}</span></div></div>`;
+}
 let brObserver = null;
 function renderBrowseGrid() {
   const sc = $('#brScroll');
@@ -978,7 +993,10 @@ function renderBrowseGrid() {
   const b = S.browse;
   $('#brCount').textContent = b.total ? `${b.total.toLocaleString()} mods` : '';
   let html = '';
-  if (b.posts.length) html += `<div class="grid big" data-browse-grid="${b.reqId}">${b.posts.map(siteCard).join('')}</div>`;
+  // Front page of free mods: the top mod gets a large banner above the grid.
+  const hero = S.view === 'get' && S.getSrc === 'free' && !b.query && b.tab === 'all' && b.posts.length >= 4 && b.posts[0].image ? b.posts[0] : null;
+  if (hero) html += heroCard(hero);
+  if (b.posts.length) html += `<div class="grid big" data-browse-grid="${b.reqId}">${b.posts.filter((p) => p !== hero).map(siteCard).join('')}</div>`;
   else if (b.loading) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
   else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't reach mxb-mods.com</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
   else html += `<div class="empty"><div>${icon('search')}<h3>No mods found${b.page < b.totalPages ? ' on this page' : ''}</h3><div>Try another search or category.</div>${b.page < b.totalPages ? '<button class="btn" data-act="browse-more">Check next page</button>' : ''}</div></div>`;
@@ -988,7 +1006,8 @@ function renderBrowseGrid() {
   const existing = sc.querySelector(`[data-browse-grid="${b.reqId}"]`);
   if (existing && b.posts.length) {
     const ids = new Set([...existing.querySelectorAll('[data-post]')].map((el) => Number(el.dataset.post)));
-    existing.insertAdjacentHTML('beforeend', b.posts.filter((p) => !ids.has(p.id)).map(siteCard).join(''));
+    const heroId = Number(sc.querySelector('.feature-hero')?.dataset.post);
+    existing.insertAdjacentHTML('beforeend', b.posts.filter((p) => !ids.has(p.id) && p.id !== heroId).map(siteCard).join(''));
     for (const card of existing.querySelectorAll('[data-post]')) {
       const post = b.posts.find((p) => p.id === Number(card.dataset.post));
       const badge = [...card.querySelectorAll('.badge.ok')].find((el) => el.textContent.includes('Installed'));
@@ -1627,6 +1646,13 @@ function profileControlsHtml() {
 function mountProfileControls() {
   const controls = $('.profile-controls');
   if (controls) controls.insertAdjacentHTML('beforeend', `<span class="rider-save-state">${riderDirty() ? '' : S.rider.saveState || ''}</span><button class="btn btn-sm" data-act="rider-revert" ${riderDirty() ? '' : 'disabled'}>Revert</button><button class="btn btn-primary btn-sm" data-act="rider-apply">Apply</button>`);
+  // Unsaved changes get a floating bar at the bottom so Apply is always in reach.
+  const view = $('#content .view');
+  $('.save-bar')?.remove();
+  if (view && riderDirty()) {
+    view.classList.add('has-save-bar');
+    view.insertAdjacentHTML('beforeend', `<div class="save-bar"><span class="save-dot"></span><div><b>Unsaved changes</b><small>You're previewing. Apply saves it to the game.</small></div><button class="btn" data-act="rider-revert">Revert</button><button class="btn btn-primary" data-act="rider-apply">${icon('check')}Apply to game</button></div>`);
+  }
   const select = $('#riderProfile');
   if (select) select.addEventListener('change', async (e) => { S.rider.profile = e.target.value; S.rider.selectionDirty = true; S.rider.bikes = null; S.rider.bike = null; await renderRider($('#content')); });
 }
