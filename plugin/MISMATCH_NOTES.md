@@ -60,6 +60,17 @@ Both build the text from the selected server row as "%s" or "%s - %s" (track - l
 plugin wraps the UI pointer at 0x566C48 and copies the text for those two return addresses only.
 The first in-game test missed the World list because only 0xAFCD0 was known.
 
+## Server address for auto-rejoin
+
+The Missing Track handler copies the selected server's record into its stack frame (row at
+frame+0x50). Record layout (same as the game's server array):
+
+- +0x0B: IPv4-mapped IPv6 address (`ff ff a b c d`), +0x11: port, big-endian
+- +0x26: server name
+
+The full list: pointer at RVA 0x5985D8 (stride 0x1D8), count at RVA 0x5985E0. Verified in game:
+address, name and the app's restart-and-join all worked.
+
 ## Open questions (need an in-game test)
 
 - What a record looks like when the track is not installed at all (type 1 with the track
