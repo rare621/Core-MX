@@ -149,8 +149,9 @@ async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
   return entry;
 }
 
-async function listFriends({ call, modsDir, received = {}, have, friendId }) {
-  const { loadouts = [] } = await call('GET', '/v1/loadouts');
+// preloaded: loadouts already fetched elsewhere (riders on the same server), instead of mutual friends.
+async function listFriends({ call, modsDir, received = {}, have, friendId, preloaded }) {
+  const { loadouts = [] } = preloaded ? { loadouts: preloaded } : await call('GET', '/v1/loadouts');
   const report = [];
   for (const lo of loadouts.filter((l) => !friendId || l.id === friendId)) {
     const items = [];
@@ -178,8 +179,8 @@ async function listFriends({ call, modsDir, received = {}, have, friendId }) {
   return report;
 }
 
-async function fetchFriends({ call, download, modsDir, received, have, friendId, onProgress = () => {} }) {
-  const report = await listFriends({ call, modsDir, received, have, friendId });
+async function fetchFriends({ call, download, modsDir, received, have, friendId, preloaded, onProgress = () => {} }) {
+  const report = await listFriends({ call, modsDir, received, have, friendId, preloaded });
   const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
   let completed = 0;
   for (const { lo, it } of pending) {

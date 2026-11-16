@@ -19,3 +19,5 @@ server/mxbm-files/
 *.log
 .DS_Store
 Thumbs.db
+
+server/steam-key.txt

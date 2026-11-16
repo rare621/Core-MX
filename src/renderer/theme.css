@@ -527,3 +527,16 @@ select option { background: var(--solid-2); color: var(--text); }
 .fr-remove { color: var(--text-2) !important; background: rgba(255, 255, 255, .06); }
 .fr-remove:hover { color: var(--danger) !important; background: var(--danger-soft); }
 .fr-remove .ico { width: 15px; height: 15px; }
+
+/* Join a live server: riders whose gear can be synced */
+.sr-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; }
+.sr-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 16px; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); cursor: pointer; transition: background .2s; }
+.sr-row:hover { background: rgba(255, 255, 255, .07); }
+.sr-row input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.sr-row .fr-av { flex: none; }
+.sr-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sr-txt b { font-size: 13.5px; }
+.sr-txt small { font-size: 12px; color: var(--muted); }
+.sr-txt .sr-warn { color: var(--warn); }
+.sr-via { flex: none; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: rgba(255, 255, 255, .07); color: var(--text-2); }
+.sr-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
