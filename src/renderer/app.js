@@ -796,7 +796,7 @@ async function autoFindImages() {
 }
 
 // ---------- browse ----------
-const AUTO_HOSTS = /^(mxb-mods\.com|drive\.google\.com|docs\.google\.com|mediafire\.com|mega\.nz|dropbox\.com)$/;
+const AUTO_HOSTS = /^(coremx\.app|mxb-mods\.com|drive\.google\.com|docs\.google\.com|mediafire\.com|mega\.nz|dropbox\.com)$/;
 function hostMode(d) {
   if (/\/folder\/|#F!|\/drive\/folders\/|\/scl\/fo\//.test(d.url)) return 'browser';
   if (AUTO_HOSTS.test(d.host)) return 'auto';
@@ -810,7 +810,7 @@ function isFree() { return (S.view === 'get' && ['free', 'addons'].includes(S.ge
 function isShop() { return S.view === 'get' && !['free', 'addons'].includes(S.getSrc); }
 function renderGet(c) {
   const SOURCES = [
-    ['free', 'globe', 'Free mods', 'mxb-mods.com'],
+    ['free', 'globe', 'Free mods', 'coremx.app + mxb-mods.com'],
     ['addons', 'layers', 'Add-ons', 'Free, needs another mod'],
     ['hub', 'cart', 'MXB Hub', 'Paid store'],
     ['mxbs', 'cart', 'MX Bikes Shop', 'Paid store'],
@@ -944,7 +944,8 @@ function renderBrowse(c) {
         <div class="search spotlight">${icon('search')}<input id="brSearch" placeholder="Search bikes, tracks, gear, liveries…" spellcheck="false"></div>
         <select id="brSort"><option value="relevance">Best match</option><option value="popular-week">🔥 Popular this week</option><option value="popular-month">🔥 Popular this month</option><option value="popular-today">🔥 Popular today</option><option value="popular-all">🔥 Popular all time</option><option value="date">Newest</option><option value="modified">Recently updated</option><option value="title">Title A–Z</option></select>
         <span class="sub" id="brCount"></span><div class="grow"></div>
-        <button class="btn btn-icon" data-act="open-site" title="Open mxb-mods.com">${icon('external')}</button>
+        ${S.view === 'get' && S.getSrc === 'free' ? `<button class="btn" data-open="https://coremx.app/#/new">${icon('upload')}Upload mod</button>` : ''}
+        <button class="btn btn-icon" data-act="open-site" title="Open coremx.app">${icon('external')}</button>
       </div>
       <div class="chips" id="brTabs"></div>
       <div class="chips browse-kind" id="brKind"></div>
@@ -1018,7 +1019,7 @@ function siteCard(p) {
   return `<div class="card" data-post="${p.id}">
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
-      <div class="badges">${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
+      <div class="badges">${p.id < 0 ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
@@ -1043,7 +1044,7 @@ function renderBrowseGrid() {
   if (hero) html += heroCard(hero);
   if (b.posts.length) html += `<div class="grid big" data-browse-grid="${b.reqId}">${b.posts.filter((p) => p !== hero).map(siteCard).join('')}</div>`;
   else if (b.loading) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
-  else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't reach mxb-mods.com</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
+  else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't load free mods</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
   else html += `<div class="empty"><div>${icon('search')}<h3>No mods found${b.page < b.totalPages ? ' on this page' : ''}</h3><div>Try another search or category.</div>${b.page < b.totalPages ? '<button class="btn" data-act="browse-more">Check next page</button>' : ''}</div></div>`;
   const moreHtml = `<div class="loadmore" id="brMore">${b.error ? `<span class="muted">${esc(b.error)}</span><button class="btn" data-act="browse-retry">Retry</button>` : b.loading ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
   if (b.page < b.totalPages && b.posts.length) html += moreHtml;
@@ -1119,7 +1120,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
   const m = modal({
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
-    foot: `<span class="grow">mxb-mods.com</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
+    foot: `<span class="grow">${summary.id < 0 ? 'coremx.app' : 'mxb-mods.com'}</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
     onClose: () => { openPostRefreshers.delete(refresh); popAmbient(); },
   });
   pushAmbient(summary.image);
@@ -2603,7 +2604,7 @@ async function renderSettings(c) {
       <div class="path-row"><div class="path">${esc(env.disabledDir)}</div><button class="btn btn-icon" data-folder="disabled" title="Open">${icon('folder')}</button></div></div>
     <div class="set-card"><h3>Setup</h3><p>Go through the welcome setup again.</p><button class="btn" data-act="run-setup">${icon('sparkle')}Run setup again</button></div>
     <div class="set-card"><h3>App updates</h3><div id="appUpdates">${appUpdateHtml()}</div></div>
-    <div class="set-card"><h3>About</h3><p>CoreMX ${esc(env.version)} — Content manager for MX Bikes.</p><p><a class="btn" href="#" data-open="https://coremx.app/#/">${icon('external')}Open website · coremx.app</a></p><p>Mods are browsed from <a href="#" data-open="https://mxb-mods.com">mxb-mods.com</a>. Please support mod creators — rate and thank them on the site.</p></div>
+    <div class="set-card"><h3>About</h3><p>CoreMX ${esc(env.version)} — Content manager for MX Bikes.</p><p><a class="btn" href="#" data-open="https://coremx.app/#/">${icon('external')}Open website · coremx.app</a></p><p>Free mods come from CoreMX community uploads and <a href="#" data-open="https://mxb-mods.com">mxb-mods.com</a>. Please support mod creators.</p></div>
   </div></div></div></div>`;
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
   $('#autoImages').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoImages: e.target.checked }); if (e.target.checked) backgroundImages(); });
@@ -2725,7 +2726,7 @@ document.addEventListener('click', async (e) => {
     }
     case 'run-setup': openSetup(0); break;
     case 'packs-refresh': renderPacks($('#content'), true); break;
-    case 'open-site': api.invoke('open:external', 'https://mxb-mods.com'); break;
+    case 'open-site': api.invoke('open:external', 'https://coremx.app/#/browse?src=local'); break;
     case 'browse-more': browseLoad(); break;
     case 'browse-retry': if (S.browse.posts.length) browseLoad(); else browseReset(); break;
     case 'pick-user': case 'pick-install': S.env = await api.invoke('settings:pickFolder', act === 'pick-user' ? 'user' : 'install'); render(); if (S.env.modsFound) rescan(true); break;
@@ -3138,7 +3139,7 @@ async function handleOpenLink(l) {
     if (l.type !== 'install') return;
     const t = await api.invoke('deeplink:target', l);
     if (!t) { toast('That mod could not be found. It may have been removed.', 'err', 5000); return; }
-    if (t.source === 'mxbmods') {
+    if (t.source === 'mxbmods' || t.source === 'local') {
       S.getSrc = t.addon ? 'addons' : 'free';
       Object.assign(S.browse, { posts: [], cursor: null, kind: 'all', tab: 'all', page: 0, totalPages: 1, loading: false, reqId: (S.browse.reqId || 0) + 1 });
       go('get'); await openPost(t.post, { install: true, file: Number.isInteger(l.file) ? l.file : null }); return;

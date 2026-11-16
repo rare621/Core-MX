@@ -5,7 +5,7 @@
 //                                              file:   0-based index into the post's download list
 //   mxbm://oem/<pack>                          install or update an OEM pack (mx, enduro, sm, freeride)
 // Everything is validated here; anything that doesn't match exactly is ignored.
-const SOURCES = new Set(['mxbmods', 'hub', 'mxbs']);
+const SOURCES = new Set(['mxbmods', 'local', 'hub', 'mxbs']);
 const PACKS = new Set(['mx', 'enduro', 'sm', 'freeride']);
 
 function parse(link) {

@@ -121,6 +121,7 @@ An independent community project, not affiliated with PiBoSo or the supported mo
 
 [coremx.app](https://coremx.app/#/) is the main CoreMX website. The Windows setup registers these links:
 
+- `mxbm://install/local/123` opens a community upload on CoreMX.
 - `mxbm://install/mxbmods/123` opens the matching MXB Mods listing. A single available download starts through the normal install/review flow; multiple downloads stay available to choose.
 - `mxbm://install/mxbmods/123?file=1` selects the second download (zero-based index). Invalid indexes never select a different file.
 - `mxbm://install/hub/123` opens MXB Hub and its product popup.
@@ -128,10 +129,12 @@ An independent community project, not affiliated with PiBoSo or the supported mo
 - `mxbm://oem/mx` opens and installs or updates the MX OEM pack. Also supported: `enduro`, `sm`, `freeride`.
 - `mxbm://join/1.2.3.4:54210` asks to join that server.
 
+Free mods combines CoreMX community uploads with MXB Mods listings. The Upload mod button opens `https://coremx.app/#/new`. Community downloads use the CoreMX `/dl/local-<id>` route and the usual install review.
+
 Links are queued until app startup finishes. Purchase/login, dependency checks and install reviews still use the normal app flows. Finish first-run setup before installing through a website link.
 
 ### Upgrading from MX Bikes Manager
 
 CoreMX keeps the original Windows application ID, internal package ID, `mxbm://` protocol, data directory and disabled-mod folder so upgrades preserve user data and installed files. The Windows display name, executable, shortcuts and primary setup filename are CoreMX.
 
-For Google Drive updates, upload `latest.yml` and the matching **MX-Bikes-Manager-Setup-1.0.17-x64.exe** compatibility copy together. This is byte-for-byte the same CoreMX installer as **CoreMX-Setup-1.0.17-x64.exe**; older installed versions require the legacy filename. Do not rename the file referenced by `latest.yml`. GitHub releases do not automatically upload files to Google Drive.
+For Google Drive updates, upload `latest.yml` and the matching **MX-Bikes-Manager-Setup-1.0.18-x64.exe** compatibility copy together. This is byte-for-byte the same CoreMX installer as **CoreMX-Setup-1.0.18-x64.exe**; older installed versions require the legacy filename. Do not rename the file referenced by `latest.yml`. GitHub releases do not automatically upload files to Google Drive.

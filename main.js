@@ -11,6 +11,7 @@ const paths = require('./src/lib/paths');
 const scanner = require('./src/lib/scanner');
 const { Thumbs } = require('./src/lib/thumbs');
 const site = require('./src/lib/site');
+const coremx = require('./src/lib/coremx');
 const hosts = require('./src/lib/hosts');
 const archive = require('./src/lib/archive');
 const installer = require('./src/lib/installer');
@@ -841,7 +842,14 @@ function registerIpc() {
   });
 
   handle('site:tabs', () => site.BROWSE_TABS.map(({ id, label }) => ({ id, label })));
-  handle('site:search', (q) => site.search(q));
+  handle('site:search', async (q) => {
+    if (!['free', 'addons'].includes(q?.scope)) return site.search(q);
+    const [legacy, community] = await Promise.allSettled([site.search(q), coremx.search(q)]);
+    if (legacy.status === 'rejected' && community.status === 'rejected') throw legacy.reason;
+    const a = legacy.status === 'fulfilled' ? legacy.value : { posts: [], total: 0, page: q.page || 1, totalPages: 1 };
+    const b = community.status === 'fulfilled' ? community.value : { posts: [], total: 0, totalPages: 1 };
+    return { ...a, posts: [...b.posts, ...a.posts], total: a.total + b.total, totalPages: Math.max(a.totalPages, b.totalPages), communityError: community.status === 'rejected' ? community.reason.message : null };
+  });
   handle('site:findDependency', async (dependency) => {
     const label = String(dependency?.label || '').trim().slice(0, 120);
     if (!label) return [];
@@ -886,7 +894,7 @@ function registerIpc() {
     return post;
   });
   handle('site:post', async (id) => {
-    const post = await site.post(id), rec = store.get('installs')[id];
+    const post = id < 0 ? await coremx.post(-id) : await site.post(id), rec = store.get('installs')[id];
     post.installKind = installer.kindFromCategories(post.categories);
     if (post.installKind === 'bikePaint') post.needsModelNotice = false;
     // Tracks, whole bikes and other standalone mods only keep requirements the creator declared explicitly.
@@ -1073,6 +1081,7 @@ function registerIpc() {
   handle('deeplink:target', async (l) => {
     if (!l || l.type !== 'install' || !Number.isSafeInteger(l.id) || l.id <= 0 || l.id > 999999999999) return null;
     if (l.source === 'mxbmods') { const [post] = await site.postsByIds([l.id]); return post ? { source: 'mxbmods', addon: site.isAddonPost(post), post } : null; }
+    if (l.source === 'local') { const post = await coremx.post(l.id); return { source: 'local', addon: post.addon, post }; }
     if (l.source !== 'hub' && l.source !== 'mxbs') return null;
     const link = await shops.productLink(ses, l.source, l.id);
     return link ? { source: l.source, link } : null;
@@ -1577,7 +1586,7 @@ function registerIpc() {
   });
   handle('installs:checkUpdates', async () => {
     const recs = Object.values(store.get('installs')).filter((r) => r.postId);
-    const posts = await site.postsByIds(recs.map((r) => r.postId));
+    const posts = await site.postsByIds(recs.filter((r) => r.postId > 0).map((r) => r.postId));
     return posts.filter((p) => {
       const rec = recs.find((r) => r.postId === p.id);
       return rec && rec.siteModified && new Date(p.modified) > new Date(rec.siteModified);
