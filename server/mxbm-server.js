@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MX Bikes Manager online service: live server list (with tracks) and friends' presence.
+// CoreMX online service: live server list (with tracks) and friends' presence.
 //
 //   node server/mxbm-server.js [--port 60000] [--data ./mxbm-data.json]
 //
@@ -346,4 +346,4 @@ async function fileRoute(req, res, sha) {
 }
 
 server.requestTimeout = 60000;
-server.listen(PORT, () => console.log(`MX Bikes Manager online service on port ${server.address().port} (data: ${DATA})`));
+server.listen(PORT, () => console.log(`CoreMX online service on port ${server.address().port} (data: ${DATA})`));

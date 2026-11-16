@@ -1,12 +1,12 @@
 {
   "name": "mx-bikes-manager",
-  "productName": "MX Bikes Manager",
-  "version": "1.0.16",
-  "description": "Manage installed MX Bikes mods and browse/install mods from mxb-mods.com",
+  "productName": "CoreMX",
+  "version": "1.0.17",
+  "description": "CoreMX — Content manager for MX Bikes",
   "main": "main.js",
   "private": true,
   "author": "rare621",
-  "homepage": "https://github.com/rare621/MXB-MANAGER",
+  "homepage": "https://coremx.app/",
   "repository": {
     "type": "git",
     "url": "https://github.com/rare621/MXB-MANAGER.git"

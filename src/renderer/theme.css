@@ -1,4 +1,4 @@
-/* MX Bikes Manager: modern dark theme with frosted panels.
+/* CoreMX: modern dark theme with frosted panels.
    Loaded after styles.css. Panels are translucent over a pre-blurred ambient
    layer, so scrolling stays cheap; live backdrop blur is used only for
    floating layers (menus, sheets, toasts). */
@@ -551,3 +551,6 @@ select option { background: var(--solid-2); color: var(--text); }
 .mt-txt small { color: var(--muted); font-size: 12px; }
 .mt-rejoin { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 14px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 125, 46, .08); box-shadow: inset 0 0 0 1px rgba(255, 125, 46, .25); font-size: 13px; cursor: pointer; }
 .mt-rejoin input { width: 17px; height: 17px; margin-top: 1px; accent-color: var(--accent); flex: none; }
+
+/* CoreMX application identity */
+.brand-icon { width: 34px; height: 34px; object-fit: contain; flex: 0 0 34px; }

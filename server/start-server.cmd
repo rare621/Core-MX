@@ -1,5 +1,5 @@
 @echo off
-title MX Bikes Manager online service
+title CoreMX online service
 cd /d "%~dp0"
 where node >nul 2>&1
 if errorlevel 1 (

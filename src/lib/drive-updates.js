@@ -7,7 +7,7 @@ const updateError = (message) => Object.assign(new Error(message), { code: 'DRIV
 function folderFiles(html) {
   const found = new Map(), $ = cheerio.load(html);
   const add = (id, name) => {
-    if (/^[\w-]{10,}$/.test(id || '') && /^(latest\.yml|MX-Bikes-Manager-Setup-[\w.-]+\.exe)$/.test(name || '')) {
+    if (/^[\w-]{10,}$/.test(id || '') && /^(latest\.yml|(?:CoreMX|MX-Bikes-Manager)-Setup-[\w.-]+\.exe)$/.test(name || '')) {
       if (found.has(name) && found.get(name) !== id) throw updateError(`Duplicate ${name} in the update folder. Keep one current copy.`);
       found.set(name, id);
     }
@@ -61,7 +61,7 @@ class DriveProvider extends Provider {
     if (!manifest) throw updateError('Could not find latest.yml in the shared update folder. Put it beside the setup EXE and allow anyone with the link to view both files.');
     const url = new URL(downloadUrl(manifest));
     const info = parseUpdateInfo(await smallText(await this.request(url.href)), 'latest.yml', url);
-    const file = info.files?.find((f) => /^MX-Bikes-Manager-Setup-[\w.-]+\.exe$/.test(f.url));
+    const file = info.files?.find((f) => /^(?:CoreMX|MX-Bikes-Manager)-Setup-[\w.-]+\.exe$/.test(f.url));
     if (!file || !/^[A-Za-z0-9+/]{86}==$/.test(file.sha512 || '')) throw updateError('The update manifest is invalid. Upload the original latest.yml from the release without editing it.');
     if (!files.has(file.url)) throw updateError(`The shared update folder is missing ${file.url}. Upload the setup EXE from the same release as latest.yml.`);
     let installerUrl = downloadUrl(files.get(file.url));

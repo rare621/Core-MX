@@ -156,7 +156,9 @@ function insideGame(p) {
   return !!g && path.resolve(p).toLowerCase().startsWith(path.resolve(g).toLowerCase() + path.sep);
 }
 
-app.setName('MX Bikes Manager');
+// Keep the existing data directory when upgrading to CoreMX.
+app.setPath('userData', path.join(app.getPath('appData'), 'MX Bikes Manager'));
+app.setName('CoreMX');
 // Test-only overrides: isolated app data and a fake game folder.
 if (process.env.MXB_USERDATA) app.setPath('userData', process.env.MXB_USERDATA);
 protocol.registerSchemesAsPrivileged([{ scheme: 'mxb', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -1067,6 +1069,14 @@ function registerIpc() {
   handle('shops:list', async () => Promise.all(Object.values(shops.SHOPS).map(async (s) => ({
     id: s.id, name: s.name, url: s.url, account: await shops.account(ses, s.id),
   }))));
+  // Website install links: turn a source + id into what the renderer needs to open it.
+  handle('deeplink:target', async (l) => {
+    if (!l || l.type !== 'install' || !Number.isSafeInteger(l.id) || l.id <= 0 || l.id > 999999999999) return null;
+    if (l.source === 'mxbmods') { const [post] = await site.postsByIds([l.id]); return post ? { source: 'mxbmods', addon: site.isAddonPost(post), post } : null; }
+    if (l.source !== 'hub' && l.source !== 'mxbs') return null;
+    const link = await shops.productLink(ses, l.source, l.id);
+    return link ? { source: l.source, link } : null;
+  });
   handle('shops:cats', (id) => shops.categories(ses, id));
   handle('shops:search', (q) => shops.search(ses, q));
   handle('shops:details', (id, link) => shops.details(ses, id, link));
@@ -1613,12 +1623,13 @@ function registerIpc() {
 
 // ---------- window ----------
 function createWindow() {
+  linkInbox.reset();
   const area = screen.getPrimaryDisplay().workAreaSize;
   mainWin = new BrowserWindow({
     show: !process.env.MXB_DEBUG_SHOT,
     width: Math.min(1560, area.width - 24), height: Math.min(960, area.height - 24), minWidth: 980, minHeight: 640,
     backgroundColor: '#08090b',
-    title: 'MX Bikes Manager',
+    title: 'CoreMX',
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#cfd3dc', height: 60 },
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, webviewTag: true, backgroundThrottling: !process.env.MXB_DEBUG_SHOT },
@@ -1633,6 +1644,7 @@ function createWindow() {
   mainWin.webContents.on('did-attach-webview', (_e, wc) => {
     wc.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) wc.loadURL(url); return { action: 'deny' }; });
   });
+  mainWin.webContents.on('did-start-loading', () => linkInbox.reset());
   mainWin.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   mainWin.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file:')) { e.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url); } });
   mainWin.loadFile(path.join(__dirname, 'src', 'renderer', 'index.html'));
@@ -1660,33 +1672,31 @@ async function debugShots() {
   if (!process.env.MXB_DEBUG_KEEP) app.quit();
 }
 
-// Join links: mxbm://join/ip:port opens the app (or the running one) and offers to join that server.
-function deepLinkFrom(argv) {
-  const a = (argv || []).find((x) => /^mxbm:\/\//i.test(x));
-  const m = a && a.match(/^mxbm:\/\/join\/([^/?#]+)/i);
-  return m ? decodeURIComponent(m[1]) : null;
-}
-let pendingJoin = deepLinkFrom(process.argv);
+// mxbm:// links (see src/lib/deeplink.js): join a server, install a mod from the website, install an OEM pack.
+const deeplink = require('./src/lib/deeplink');
+const linkInbox = deeplink.createInbox((link) => send('deeplink:open', link));
+linkInbox.push(deeplink.fromArgv(process.argv));
 if (!process.env.MXB_DEBUG_SHOT) {
   if (!app.requestSingleInstanceLock()) app.quit();
   app.on('second-instance', (_e, argv) => {
-    const j = deepLinkFrom(argv);
+    const l = deeplink.fromArgv(argv);
     if (!mainWin || mainWin.isDestroyed()) {
       // Window was closed but the app was still running: open a fresh one
-      if (j) pendingJoin = j;
+      linkInbox.reset();
+      linkInbox.push(l);
       if (app.isReady()) createWindow();
       return;
     }
     if (mainWin.isMinimized()) mainWin.restore();
     mainWin.show(); mainWin.focus();
-    if (j) send('deeplink:join', j);
+    linkInbox.push(l);
   });
   try {
     if (process.defaultApp) app.setAsDefaultProtocolClient('mxbm', process.execPath, [path.resolve(process.argv[1] || '.')]);
     else app.setAsDefaultProtocolClient('mxbm');
   } catch {}
 }
-ipcMain.handle('deeplink:pending', () => { const j = pendingJoin; pendingJoin = null; return j; });
+ipcMain.handle('deeplink:ready', () => linkInbox.ready());
 
 app.whenReady().then(async () => {
   store = new Store(path.join(app.getPath('userData'), 'data.json'), { settings: {}, installs: {}, images: {}, favorites: [], servers: [], friends: [] });

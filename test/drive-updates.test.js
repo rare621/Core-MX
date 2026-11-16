@@ -36,3 +36,8 @@ test('Drive reports the exact missing installer instead of blaming valid manifes
   const provider = new DriveProvider({ fetch: async (url) => new Response(url.includes('/folders/') ? '<div data-id="manifest12345">latest.yml</div>' : `version: 1.0.10\nfiles:\n  - url: ${name}\n    sha512: ${Buffer.alloc(64).toString('base64')}`) }, {}, {});
   await assert.rejects(provider.getLatestVersion(), (error) => error.code === 'DRIVE_UPDATE' && error.message.includes(name));
 });
+
+test('Drive recognizes CoreMX installers as well as the upgrade compatibility filename', () => {
+  const html='<div data-id="coreinstaller12345" aria-label="CoreMX-Setup-1.0.17-x64.exe"></div>';
+  assert.equal(folderFiles(html).get('CoreMX-Setup-1.0.17-x64.exe'),'coreinstaller12345');
+});
