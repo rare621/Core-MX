@@ -1,4 +1,7 @@
 {
-  "serviceUrl": "http://67.84.130.214:60000",
-  "previousServiceUrls": ["http://192.168.0.38:60000"]
+  "serviceUrl": "https://coremx.app",
+  "previousServiceUrls": [
+    "http://67.84.130.214:60000",
+    "http://192.168.0.38:60000"
+  ]
 }

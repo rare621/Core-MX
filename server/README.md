@@ -7,7 +7,7 @@ Powers **Live servers** (every server an app user rides on, with its track and r
 
 1. Install **Node.js** (the LTS version) from https://nodejs.org if it isn't installed.
 2. Unzip this folder anywhere (for example `C:\mxbm-online`).
-3. Right-click **open-firewall.cmd** → **Run as administrator** (opens TCP port 60000 in Windows Firewall).
+3. Right-click **open-firewall.cmd** â†’ **Run as administrator** (opens TCP port 60000 in Windows Firewall).
 4. On your router, forward **TCP 60000** to this PC. Giving this PC a fixed local IP in the router helps, so the forward keeps working.
 5. Double-click **start-server.cmd** and leave the window open. Close it to stop the service.
 
@@ -26,12 +26,11 @@ Signed-in riders have separate request allowances, including when they share one
 
 ## Connecting the app
 
-In the app's `online.config.json` put `{ "serviceUrl": "http://<server PC public IP>:60000" }` — every copy of the app
-then connects automatically with the user's Steam account. On the server PC itself `http://127.0.0.1:60000` works.
-Check it from another PC by opening `http://<ip>:60000/v1/health` in a browser — it should show `"ok":true`.
+The official CoreMX app connects to **https://coremx.app**. The website forwards `/v1/` to the existing sync server on localhost port 60000 through its Cloudflare-proxied HTTPS address.
 
-Plain HTTP is fine for a group of friends, but the sign-in token travels unencrypted. For anything wider,
-put it behind HTTPS (for example a Cloudflare Tunnel or a reverse proxy) and give people the `https://` address.
+Check `https://coremx.app/v1/health`; it must return JSON with `ok: true`. Existing user IDs and tokens migrate through the known aliases in `online.config.json`; the app does not use those aliases as network fallbacks.
+
+For deployment instructions, verification, and Cloudflare upload limits, see [Online HTTPS](../docs/online-https.md). Keep existing direct access until older clients have migrated, and leave shared website/game-server port forwards alone.
 
 ## How it works
 
