@@ -1,5 +1,16 @@
 New look: the whole app has a new darker, cleaner design. Navigation is now a bar across the top with a sliding highlight, and Downloads, Settings and your Steam avatar (Friends) sit at the top right. Pages sit on frosted panels over a soft blurred background that changes colour by section, and a mod's picture glows behind it while you view it. Pages, cards, dialogs, menus and notifications animate smoothly, and the app respects the Windows reduce-motion setting.
 
+Rebuilt pages:
+- Get Mods: tiles explain each source (Free mods, Add-ons, MXB Hub, MX Bikes Shop), with a big search bar, category icons and a featured banner.
+- Rider: a showroom stage, plus a floating "Unsaved changes" bar with Revert and Apply to game.
+- My Mods: one-click summary tiles (installed, updates, turned off, duplicates, favorites).
+- Play: a track banner with a big Ride button and numbered bike/track picks.
+- Online: server rows show rider counts and ping colours, next to "Friends riding now" with Join.
+- Friends: a profile card and friend cards.
+- Settings: a side menu.
+- OEM Packs: "Update all" for packs you already have.
+- Downloads: status counts.
+
 Clearer names: Game is now Play, its Settings tab is Game settings, and bike appearance is only on Rider > Bike.
 
 Get Mods no longer freezes: page parsing now runs in the background, so scrolling and clicking stay responsive while results load.
