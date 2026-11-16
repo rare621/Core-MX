@@ -229,7 +229,7 @@ async function renderFriends(c) {
     if (!p || (!p.items.length && !(p.unavailable || []).length)) return '';
     const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
     const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
-    const bike = (p.bikeName || p.bike || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' ');
+    const bike = prettyBikeId(p.bikeName || p.bike || '');
     const protectedItems = (p.unavailable || []).filter((it) => /paid|store-protected/i.test(it.error || ''));
     return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}${p.items.length ? `<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} free files synced</span></div>` : ''}
       ${paidModsSummary(protectedItems)}
@@ -245,7 +245,7 @@ async function renderFriends(c) {
     return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
       <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}">${esc(s[1])}</div>${paintLine(f)}</div>
       <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
-        <button class="btn btn-sm btn-ghost btn-icon" data-friend-remove="${i}" title="Remove ${esc(f.name)}" aria-label="Remove friend ${esc(f.name)}">${icon('x')}</button></div></div>`;
+        <button class="btn btn-sm btn-ghost btn-icon fr-remove" data-friend-remove="${i}" title="Remove ${esc(f.name)} from friends" aria-label="Remove friend ${esc(f.name)}">${icon('trash')}</button></div></div>`;
   };
 
   const ps = st && st.paintSync;
@@ -326,7 +326,10 @@ document.addEventListener('click', async (e) => {
     S.friends.splice(i, 1);
     S.friends = await api.invoke('friends:save', S.friends);
     S.live.friends = null;
+    rm.closest('.modal-wrap')?.close();
+    toast(`Removed <b>${esc(f.name)}</b>`, 'ok', 2500);
     renderFriends($('#content'));
+    if (S.friendsPanel?.body) renderFriends(S.friendsPanel.body);
   }
 });
 
@@ -400,6 +403,8 @@ function paidModsSummary(items) {
   return `<div class="fr-paid-summary" role="status"><b>Rider has ${missing.length} paid mod${missing.length === 1 ? '' : 's'} — not installing.</b><div>If you own and have installed the matching gear, it is used automatically for this rider. Paid files are not transferred through Sync.</div></div>`;
 }
 
+// MX2OEM_2023_Kawasaki_KX250 -> 2023 Kawasaki KX250
+function prettyBikeId(id) { return String(id || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' '); }
 async function openFriendDetails(friend) {
   let outfit = null, loading = true, error = null, syncing = false;
   let viewer = null, previewKey = null, previewRevision = 0, refreshRun = null;
@@ -428,7 +433,7 @@ async function openFriendDetails(friend) {
       state.textContent = '3D preview unavailable'; note.textContent = cleanErr(err);
     }
   };
-  const m = modal({ title: esc(friend.name), body: '<div class="loadmore"><div class="spinner"></div></div>', foot: `<span class="grow"></span><button class="btn" data-close>Close</button><button class="btn btn-primary" data-sync-friend>${icon('download')}Sync equipped gear</button>`,
+  const m = modal({ title: esc(friend.name), body: '<div class="loadmore"><div class="spinner"></div></div>', foot: `<button class="btn btn-danger" data-friend-remove="${S.friends.indexOf(friend)}">${icon('trash')}Remove friend</button><span class="grow"></span><button class="btn" data-close>Close</button><button class="btn btn-primary" data-sync-friend>${icon('download')}Sync equipped gear</button>`,
     onClose: () => { disposePreview(); if (S.friendDialog && S.friendDialog.modal === m) S.friendDialog = null; } });
   $('[data-preview-reset]', preview).addEventListener('click', () => viewer?.resetView());
   const drawProgress = () => { const box = $('[data-friend-progress]', m); if (box) box.innerHTML = friendProgressHtml(); };
@@ -446,7 +451,7 @@ async function openFriendDetails(friend) {
       const needs = item && item.needs || [];
       return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
-    $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Riding session — server not reported')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(outfit.bikeName || outfit.bike || '')} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
+    $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'Riding session — server not reported')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(prettyBikeId(outfit.bikeName || outfit.bike || ''))} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
     const list = $('.friend-gear-list', m);
     if (list) { list.before(preview); renderPreview(); }
     const button = $('[data-sync-friend]', m);

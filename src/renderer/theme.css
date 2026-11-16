@@ -522,3 +522,8 @@ select option { background: var(--solid-2); color: var(--text); }
 
 /* Graphics header uses two tiles */
 .src-tiles.two { grid-template-columns: repeat(2, minmax(180px, 1fr)); max-width: 460px; }
+
+/* Remove-friend button: visible, turns red on hover */
+.fr-remove { color: var(--text-2) !important; background: rgba(255, 255, 255, .06); }
+.fr-remove:hover { color: var(--danger) !important; background: var(--danger-soft); }
+.fr-remove .ico { width: 15px; height: 15px; }
