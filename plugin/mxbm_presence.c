@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define EXPORT __declspec(dllexport)
 #define MAX_RIDERS 128
@@ -45,6 +46,9 @@ typedef struct { int m_iRaceNum; } RaceRemove;
 typedef struct { int m_iSession; int m_iSessionState; } RaceSessionData;
 
 typedef struct { int used, num; char name[100], bike[100], category[100]; } Rider;
+
+static void hookStart(const char *dir);
+static void hookStop(void);
 
 static char g_path[MAX_PATH * 2];
 static char g_tmp[MAX_PATH * 2];
@@ -145,6 +149,7 @@ EXPORT int Startup(char *_szSavePath) {
   copy(g_path, _szSavePath ? _szSavePath : "", sizeof g_path - 40);
   n = strlen(g_path);
   if (n && g_path[n - 1] != '\\' && g_path[n - 1] != '/') g_path[n++] = '\\', g_path[n] = 0;
+  hookStart(g_path);
   strcpy(g_tmp, g_path); strcat(g_tmp, "mxbm_presence.tmp");
   strcat(g_path, "mxbm_presence.json");
   memset(&S, 0, sizeof S);
@@ -157,6 +162,7 @@ EXPORT void RunTelemetry(void *_pData, int _iDataSize, float _fTime, float _fPos
 }
 
 EXPORT void Shutdown(void) {
+  hookStop();
   lock(); memset(&S, 0, sizeof S); writeState(); unlock();
   if (g_lockReady) { g_lockReady = 0; DeleteCriticalSection(&g_lock); }
 }
@@ -239,6 +245,157 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
   const RaceSessionData *e = (const RaceSessionData *)_pData;
   if (!e || _iDataSize < (int)sizeof(int)) return;
   lock(); S.session = e->m_iSession; writeState(); unlock();
+}
+
+/* ===================== Missing track detection =====================
+ * When you pick a server whose track you don't have, MX Bikes opens its "Missing Track" window
+ * (dialog idd_trackerror, handler at RVA 0xAFCD0). That handler sets the window's text with one
+ * call through the game's UI function pointer (stored at RVA 0x566C48):
+ *     ui(0x112, control, "<track>" or "<track> - <layout>")     -- returns to RVA 0xAFE1E
+ * We swap that pointer for a tiny stub. The stub looks at every UI call, copies the text only for
+ * that exact call (code 0x112 returning to 0xAFE1E), and always jumps on to the game's own function
+ * with every register and stack argument untouched. No game code is patched.
+ *
+ * Safety:
+ *  - Installed only if 43 bytes of the dialog handler match this game build exactly. Otherwise
+ *    the state file says "paused" (game updated) and nothing is touched.
+ *  - The original pointer is put back on Shutdown.
+ *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
+ *    MX Bikes Manager ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
+ * Research notes: plugin/MISMATCH_NOTES.md. */
+#define HOOK_BUILD 1
+#define RVA_UI_SLOT  0x566C48u
+#define RVA_SIG      0xAFDF3u
+#define RVA_RETURN   0xAFE1Eu
+
+static const unsigned char SIG[43] = {
+  0x4c, 0x8d, 0x05, 0xe6, 0xc0, 0x28, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
+  0x41, 0x6e, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
+  0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0x2a, 0x6e, 0x4b, 0x00 };
+
+/* Used by the assembly stub below, so not static. */
+void *mxbm_orig_ui = 0;
+void *mxbm_expect_ret = 0;
+void mxbm_capture(const char *text);
+extern void mxbm_ui_stub(void);
+
+__asm__(
+  ".intel_syntax noprefix\n"
+  ".text\n"
+  ".globl mxbm_ui_stub\n"
+  "mxbm_ui_stub:\n"
+  "  cmp ecx, 0x112\n"
+  "  jne 1f\n"
+  "  mov rax, [rsp]\n"
+  "  cmp rax, [rip + mxbm_expect_ret]\n"
+  "  jne 1f\n"
+  "  push rcx\n  push rdx\n  push r8\n  push r9\n"
+  "  sub rsp, 0x28\n"
+  "  mov rcx, r8\n"
+  "  call mxbm_capture\n"
+  "  add rsp, 0x28\n"
+  "  pop r9\n  pop r8\n  pop rdx\n  pop rcx\n"
+  "1:\n"
+  "  jmp [rip + mxbm_orig_ui]\n"
+  ".att_syntax prefix\n");
+
+static char g_dir[MAX_PATH * 2];
+static void **g_slot = 0;
+static volatile LONG g_hookStop = 0;
+static HANDLE g_hookThread = 0;
+static PVOID g_veh = 0;
+static unsigned char *g_selfBase = 0; static size_t g_selfSize = 0;
+
+static void writeSmall(const char *name, const char *json) {
+  char path[MAX_PATH * 2 + 40], tmp[MAX_PATH * 2 + 44]; FILE *f;
+  sprintf(path, "%s%s", g_dir, name); sprintf(tmp, "%s.tmp", path);
+  f = fopen(tmp, "wb"); if (!f) return;
+  fwrite(json, 1, strlen(json), f); fclose(f);
+  MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
+}
+static unsigned long long nowMs(void) { FILETIME ft; ULARGE_INTEGER u; GetSystemTimeAsFileTime(&ft); u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime; return (u.QuadPart - 116444736000000000ULL) / 10000ULL; }
+static void hookState(const char *state, const char *detail) {
+  char o[600]; size_t at = (size_t)sprintf(o, "{\"v\":1,\"build\":%d,\"state\":\"%s\",\"at\":%llu,\"detail\":", HOOK_BUILD, state, nowMs());
+  at = jstr(o, at, detail ? detail : "", sizeof o - 4); o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_hook.json", o);
+}
+
+/* Runs on the game's UI thread, only for the Missing Track window. Keep it short. */
+void mxbm_capture(const char *text) {
+  char name[128], o[400]; size_t at, i;
+  if (!text) return;
+  for (i = 0; i < sizeof name - 1 && text[i]; i++) name[i] = text[i];
+  name[i] = 0;
+  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"track\":", nowMs());
+  at = jstr(o, at, name, sizeof o - 4); o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_missing.json", o);
+}
+
+/* A crash with the instruction pointer inside this DLL: switch the hook off for good (until a new
+ * plugin build), put the game's pointer back, then let the crash continue as it would have. */
+static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
+  DWORD code = e->ExceptionRecord->ExceptionCode;
+  unsigned char *ip = (unsigned char *)e->ExceptionRecord->ExceptionAddress;
+  if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_PRIV_INSTRUCTION) return EXCEPTION_CONTINUE_SEARCH;
+  if (!g_selfBase || ip < g_selfBase || ip >= g_selfBase + g_selfSize) return EXCEPTION_CONTINUE_SEARCH;
+  if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
+  { char o[200]; sprintf(o, "{\"v\":1,\"build\":%d,\"at\":%llu}", HOOK_BUILD, nowMs()); writeSmall("mxbm_hook_disabled.json", o); }
+  hookState("disabled", "MX Bikes crashed inside the MX Bikes Manager plugin");
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static int disabledForThisBuild(void) {
+  char path[MAX_PATH * 2 + 40], buf[256] = {0}; FILE *f; int build = -1; char *p;
+  sprintf(path, "%smxbm_hook_disabled.json", g_dir);
+  f = fopen(path, "rb"); if (!f) return 0;
+  fread(buf, 1, sizeof buf - 1, f); fclose(f);
+  p = strstr(buf, "\"build\":"); if (p) build = atoi(p + 8);
+  return build == HOOK_BUILD;
+}
+
+static DWORD WINAPI hookThread(LPVOID unused) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  IMAGE_NT_HEADERS *nt; int waited;
+  (void)unused;
+  if (!base || ((IMAGE_DOS_HEADER *)base)->e_magic != IMAGE_DOS_SIGNATURE) { hookState("paused", "not running inside MX Bikes"); return 0; }
+  nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+  if (nt->OptionalHeader.SizeOfImage < RVA_UI_SLOT + 8 || memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0) {
+    hookState("paused", "This MX Bikes version is newer than the plugin; missing-track detection waits for an MX Bikes Manager update");
+    return 0;
+  }
+  g_slot = (void **)(base + RVA_UI_SLOT);
+  /* The game fills the pointer while it starts up: wait for it (up to 2 minutes). */
+  for (waited = 0; !g_hookStop && waited < 480; waited++) {
+    void *cur = *(void *volatile *)g_slot;
+    if (cur && cur != (void *)mxbm_ui_stub) {
+      mxbm_orig_ui = cur;
+      mxbm_expect_ret = base + RVA_RETURN;
+      if (InterlockedCompareExchangePointer((PVOID *)g_slot, (PVOID)mxbm_ui_stub, cur) == cur) { hookState("active", ""); return 0; }
+    }
+    Sleep(250);
+  }
+  if (!g_hookStop) hookState("paused", "The game's UI did not start in time");
+  return 0;
+}
+
+static void hookStart(const char *dir) {
+  HMODULE self = 0;
+  copy(g_dir, dir, sizeof g_dir);
+  if (disabledForThisBuild()) { hookState("disabled", "Switched off after MX Bikes crashed inside the plugin"); return; }
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(void *)hookStart, &self)) {
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((unsigned char *)self + ((IMAGE_DOS_HEADER *)self)->e_lfanew);
+    g_selfBase = (unsigned char *)self; g_selfSize = nt->OptionalHeader.SizeOfImage;
+  }
+  g_veh = AddVectoredExceptionHandler(1, onCrash);
+  g_hookStop = 0;
+  g_hookThread = CreateThread(NULL, 0, hookThread, NULL, 0, NULL);
+}
+
+static void hookStop(void) {
+  InterlockedExchange(&g_hookStop, 1);
+  if (g_hookThread) { WaitForSingleObject(g_hookThread, 2000); CloseHandle(g_hookThread); g_hookThread = 0; }
+  if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
+  if (g_veh) { RemoveVectoredExceptionHandler(g_veh); g_veh = 0; }
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) { (void)h; (void)reason; (void)r; return TRUE; }

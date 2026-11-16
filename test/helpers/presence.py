@@ -54,5 +54,8 @@ with tempfile.TemporaryDirectory(prefix="mxb-presence-") as folder:
     finally:
         plugin.Shutdown()
     assert read()["inEvent"] == 0
-    assert sorted(p.name for p in pathlib.Path(folder).iterdir()) == ["mxbm_presence.json"]
+    hook = json.loads(pathlib.Path(folder, "mxbm_hook.json").read_text())
+    # Outside MX Bikes the code signature cannot match, so the missing-track hook must stay off.
+    assert hook["state"] == "paused", hook
+    assert sorted(p.name for p in pathlib.Path(folder).iterdir()) == ["mxbm_hook.json", "mxbm_presence.json"]
 print("Plugin enabled; race/bike callbacks, optional fields, replay and exit states verified")
