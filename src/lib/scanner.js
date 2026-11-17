@@ -26,15 +26,15 @@ async function isZip(file) {
 }
 
 async function dirSize(dir) {
-  let total = 0, files = 0;
+  let total = 0, files = 0, mtime = 0;
   let ents;
-  try { ents = await fsp.readdir(dir, { withFileTypes: true }); } catch { return { total, files }; }
+  try { ents = await fsp.readdir(dir, { withFileTypes: true }); } catch { return { total, files, mtime }; }
   await Promise.all(ents.map(async (e) => {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) { const r = await dirSize(p); total += r.total; files += r.files; }
-    else { try { total += (await fsp.stat(p)).size; files++; } catch {} }
+    if (e.isDirectory()) { const r = await dirSize(p); total += r.total; files += r.files; mtime = Math.max(mtime, r.mtime); }
+    else { try { const st = await fsp.stat(p); total += st.size; files++; mtime = Math.max(mtime, st.mtimeMs); } catch {} }
   }));
-  return { total, files };
+  return { total, files, mtime };
 }
 
 async function countFiles(dir, ext) {
@@ -215,7 +215,7 @@ async function scanModelDir(ctx, rootAbs, rel, group, sub, label) {
       const st = await fsp.stat(p).catch(() => null);
       if (st) {
         parts.push(rel + '/' + g.parts.dir);
-        const ds = await dirSize(p); size += ds.total; mtime = Math.max(mtime, st.mtimeMs);
+        const ds = await dirSize(p); size += ds.total; mtime = Math.max(mtime, st.mtimeMs, ds.mtime);
         paints = await countFiles(path.join(p, 'paints'), '.pnt');
         goggles = await countFiles(path.join(p, 'goggles'), '.pnt');
         if (!kind) {

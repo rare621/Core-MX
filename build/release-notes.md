@@ -1,9 +1,7 @@
-CoreMX 1.0.25
+CoreMX 1.0.26
 
-- Get Mods now caches each viewed page and refreshes it in the background. Bike Liveries has brand filters based on the MXB Mods site categories.
-- Added mod sharing and notifications, CoreMX mod reporting through a website login, and a Recents list for previously joined servers.
-- Added Rider name and number editing. Live server rider details use the matching CoreMX/Steam identity when available.
-- Game plugins are detected separately from graphics mods. Downloaded application installers appear under My Mods → Apps, and sound mods require a target bike. CoreMX only removes plugin files it can verify it installed.
-- Fixed My Mods graphics counts and improved MediaFire folder handling.
+- My Mods → Bikes now renders a 3D image for each readable installed bike. The first visit shows progress; the images are saved on this PC, reused on later visits, refreshed when a bike changes, and removed when its mod is deleted. Newly installed bikes render automatically. Bikes that cannot be previewed retain their existing artwork and can be retried.
+- Sharing a mod now uses a dark friend dropdown and an explicit Share mod button.
+- Rider → Outfit now edits the MX Bikes nickname from global.ini instead of confusing it with the profile name. The race-number field is read-only until its actual game storage is verified; CoreMX no longer shows a false 0 or writes an unverified setting.
 
-For Google Drive updates, upload latest.yml and MX-Bikes-Manager-Setup-1.0.25-x64.exe together to the shared update folder. The CoreMX-named installer is identical and is included for direct downloads.
+For Google Drive updates, upload latest.yml and MX-Bikes-Manager-Setup-1.0.26-x64.exe together to the shared update folder. CoreMX-Setup-1.0.26-x64.exe is the same installer for direct downloads.

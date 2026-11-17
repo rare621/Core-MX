@@ -93,22 +93,33 @@ function currentBike(prof) {
   return pick(sec('category'), info.class) || pick(sec('bike'), info.class) || info.bikeid || null;
 }
 
-function riderIdentity(prof) {
-  const info = prof.sections.info?.values || {};
-  return { name: info.name || '', number: info.race_number || '' };
+async function readNickname(userDir) {
+  const text = await fsp.readFile(path.join(userDir, 'global.ini'), 'latin1');
+  return parseSections(text).sections.profile?.values.nickname || '';
+}
+
+async function writeNickname(userDir, value) {
+  if (await isGameRunning()) throw new Error('MX Bikes is running. Close the game first — it rewrites the nickname when it exits.');
+  const nickname = String(value || '').trim();
+  if (!nickname || nickname.length > 40 || /[=\r\n\x00-\x1f]/.test(nickname) || [...nickname].some((char) => char.codePointAt(0) > 255)) throw new Error('Nickname must be 1–40 characters supported by MX Bikes');
+  const file = path.join(userDir, 'global.ini');
+  const lines = (await fsp.readFile(file, 'latin1')).split(/\r?\n/);
+  applyValues(lines, [['profile', 'nickname', nickname]]);
+  await backupAndWrite(file, lines);
+}
+
+function riderIdentity(_prof, nickname = '') {
+  return { nickname };
 }
 
 function validateRiderIdentity(changes) {
   const values = [];
-  if (Object.hasOwn(changes, 'riderName')) {
-    const name = String(changes.riderName || '').trim();
-    if (!name || name.length > 40 || /[=\r\n\x00-\x1f]/.test(name) || [...name].some((char) => char.codePointAt(0) > 255)) throw new Error('Rider name must be 1–40 characters supported by MX Bikes');
-    values.push(['info', 'name', name]);
+  if (Object.hasOwn(changes, 'nickname')) {
+    const nickname = String(changes.nickname || '').trim();
+    if (!nickname || nickname.length > 40 || /[=\r\n\x00-\x1f]/.test(nickname) || [...nickname].some((char) => char.codePointAt(0) > 255)) throw new Error('Nickname must be 1–40 characters supported by MX Bikes');
   }
   if (Object.hasOwn(changes, 'riderNumber')) {
-    const number = String(changes.riderNumber ?? '').trim();
-    if (number && (!/^\d{1,3}$/.test(number) || Number(number) > 999)) throw new Error('Rider number must be between 0 and 999');
-    values.push(['info', 'race_number', number]);
+    throw new Error('Set the race number in MX Bikes. Its current value is not stored in the profile file CoreMX edits.');
   }
   return values;
 }
@@ -314,4 +325,4 @@ async function deleteProfile(userDir, value, trash) {
   return listProfiles(userDir);
 }
 
-module.exports = { SLOTS, currentBike, riderIdentity, validateRiderIdentity, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile, deleteProfile };
+module.exports = { SLOTS, currentBike, riderIdentity, readNickname, writeNickname, validateRiderIdentity, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile, deleteProfile };
