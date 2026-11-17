@@ -20,3 +20,21 @@ test('CoreMX detail handles a missing or malformed mod',async()=>{
  await assert.rejects(coremx.post(0,fake({})),/Invalid/);
  await assert.rejects(coremx.post('qnuO9d1Lr7Ij',fake({mod:{id:'bad'}})),/not found/);
 });
+test('website reports use a website session and never the Steam sync token', async (t) => {
+ const calls=[];
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  calls.push({url,options});
+  if(url.endsWith('/api/login')) return new Response('{}',{headers:{'set-cookie':'mctg_session=fixture_cookie; Path=/; HttpOnly'}});
+  if(url.endsWith('/api/notifications')) return new Response(JSON.stringify({notifications:[{title:'Report received'}]}));
+  return new Response('{}');
+ });
+ await coremx.websiteLogin('rider','private-password');
+ await coremx.reportMod('coremx:qnuO9d1Lr7Ij','Wrong category and file path');
+ const inbox=await coremx.websiteNotifications();
+ assert.equal(inbox.notifications[0].title,'Report received');
+ assert.equal(calls[1].url,'https://coremx.app/api/mods/qnuO9d1Lr7Ij/report');
+ assert.equal(calls[1].options.headers.Cookie,'mctg_session=fixture_cookie');
+ assert.equal(calls[1].options.headers['X-MCTG'],'1');
+ assert.deepEqual(JSON.parse(calls[1].options.body),{reason:'Other',details:'Wrong category and file path'});
+ assert.equal(calls[2].options.headers.Cookie,'mctg_session=fixture_cookie');
+});

@@ -131,6 +131,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // Resolve locally observed browser addresses on every poll, and report
       // them to friends too. Do not persist discovered entries beyond their TTL.
       next.serverAddress = await resolveServerAddress(next.server).catch(() => null) || known[next.server] || null;
+      const recent = store.get('recentServers') || [];
+      const previous = recent.find((s) => s.name.toLowerCase() === next.server.toLowerCase());
+      if (!previous || current?.server !== next.server || previous.address !== next.serverAddress || Date.now() - previous.at > 10 * 60 * 1000) {
+        store.set('recentServers', [{ name: next.server, address: next.serverAddress, track: next.trackName || next.trackId || '', at: Date.now() }, ...recent.filter((s) => s.name.toLowerCase() !== next.server.toLowerCase())].slice(0, 10));
+      }
     }
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
@@ -140,11 +145,21 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   function stateForReport() {
     const s = current || {};
+    let riderName = '', riderProfile = '';
+    try {
+      const global = fs.readFileSync(path.join(userDir(), 'global.ini'), 'latin1');
+      riderProfile = global.match(/^lastprofile=(.*)$/m)?.[1]?.trim() || '';
+      if (riderProfile && riderProfile !== '.' && riderProfile !== '..' && !/[\\/\x00-\x1f]/.test(riderProfile)) {
+        const profileText = fs.readFileSync(path.join(userDir(), 'profiles', riderProfile, 'profile.ini'), 'latin1');
+        riderName = profileText.match(/^name=(.*)$/m)?.[1]?.trim() || '';
+      }
+    } catch {}
     return {
       inGame: gameRunning, inEvent: !!s.inEvent,
       server: s.server || null, serverAddress: s.serverAddress || null,
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
+      riderName, riderProfile,
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
@@ -342,7 +357,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   function noteJoin(address) { setCfg({ lastJoin: { address, at: Date.now() } }); }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }) };
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+    notifications: () => call('GET', '/v1/notifications'),
+    shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
+    readNotification: (id) => call('POST', '/v1/notifications/read', { id }),
+  };
 }
 
 module.exports = { create, PLUGIN, STATE_FILE };

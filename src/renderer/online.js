@@ -7,7 +7,7 @@ S.friends = null;
 
 function onlineTabs() {
   const t = (id, ic, l) => `<button class="${S.onlineTab === id ? 'active' : ''}" data-online-tab="${id}">${icon(ic)}${l}</button>`;
-  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('ranked', 'star', 'Ranked')}${t('host', 'play', 'Host')}</div>`;
+  return `<div class="seg-tabs">${t('servers', 'globe', 'Servers')}${t('recents', 'clock', 'Recents')}${t('ranked', 'star', 'Ranked')}${t('host', 'play', 'Host')}</div>`;
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-online-tab]');
@@ -17,6 +17,7 @@ document.addEventListener('click', (e) => {
 async function renderOnline(c) {
   if (S.onlineTab === 'friends') S.onlineTab = 'servers';
   if (S.onlineTab === 'ranked') return renderRanked(c);
+  if (S.onlineTab === 'recents') return renderRecentServers(c);
   if (S.onlineTab === 'friends') return renderFriends(c);
   if (S.onlineTab === 'host') { await renderHost(c); if (S.host.status && S.host.status.running) pollHost(); return; }
   if (!S.servers) S.servers = await api.invoke('servers:list');
@@ -51,6 +52,20 @@ async function renderOnline(c) {
   (async () => { try { if (!S.friends) S.friends = await api.invoke('friends:list'); const st = await liveStatus(); if (st && st.service.connected) await refreshLiveList('friends'); } catch {} drawFriendsRiding(); })();
   drawLiveServers();
 }
+
+async function renderRecentServers(c) {
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Online</h2>${onlineTabs()}</div><div class="scroller"><div class="section-title">Recently played servers</div><div id="recentServers"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div>`;
+  try {
+    const rows = await api.invoke('servers:recent'); S.recentServers = rows;
+    const box = $('#recentServers'); if (!box) return;
+    box.innerHTML = rows.length ? `<div class="srv-list">${rows.map((s, i) => `<div class="srv"><div class="srv-ico">${icon('clock')}</div><div class="srv-txt"><div class="t">${esc(s.name)}</div><div class="m">${esc(s.track || 'Track unknown')} · ${timeAgo(s.at)}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ' · Address not discovered'}</div></div><div class="jactions"><button class="btn btn-sm btn-primary" data-recent-join="${i}" ${s.address ? '' : 'disabled'}>${icon('play')}Join</button></div></div>`).join('')}</div>` : '<div class="set-card muted">Servers appear here after you join them in MX Bikes with the CoreMX game plugin active.</div>';
+  } catch (error) { const box = $('#recentServers'); if (box) box.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
+document.addEventListener('click', (e) => {
+  const button = e.target.closest('[data-recent-join]'); if (!button) return;
+  const server = S.recentServers?.[Number(button.dataset.recentJoin)];
+  if (server?.address) joinServer(server.address, server);
+});
 
 // ---------- All servers (FrostMod's copy of the game's server list) ----------
 S.allSrv = { q: '', status: null };

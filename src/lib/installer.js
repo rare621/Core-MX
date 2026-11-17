@@ -31,6 +31,8 @@ const KINDS = {
   riderModel:      { label: 'Rider model', base: () => 'rider/riders' },
   animation:       { label: 'Rider animation', base: () => 'rider/animations' },
   tyre:            { label: 'Tyres', base: () => 'tyres' },
+  sound:           { label: 'Bike sound', base: () => 'bikes' },
+  plugin:          { label: 'Game plugin', base: () => 'plugins', root: 'game' },
   graphics:        { label: 'Graphics mod (game folder)', base: () => '', root: 'game' },
   custom:          { label: 'Other (choose folder)', base: (o) => o.customDir || '' },
 };
@@ -43,7 +45,7 @@ const CATEGORY_KIND = [
   [[135], 'protectionPaint'], [[344], 'protection'], [[365], 'riderModel'], [[519], 'animation'],
   [[31], 'boots'], [[33], 'helmet'], [[36], 'protection'], [[32], 'gloves'],
   [[35, 52, 129, 309, 534], 'riderKit'],
-  [[37, 51, 361], 'bikePaint'], [[45, 179, 304, 463], 'bike'],
+  [[37, 51, 361], 'bikePaint'], [[46], 'sound'], [[45, 179, 304, 463], 'bike'],
   [[22, 360, 122, 173], 'track'],
   [[174, 609, 130], 'graphics'],
   [[30], 'riderKit'], [[29], 'bike'],
@@ -132,7 +134,9 @@ function plan(files, ctx, opts = {}) {
   const hasPkz = files.some((f) => /\.pkz$/i.test(f.rel));
   const hasPnt = files.some((f) => /\.pnt$/i.test(f.rel));
 
-  let kind = opts.kind || ((!ctx.categories || !ctx.categories.length) && ctx.kindHint) || kindFromCategories(ctx.categories);
+  // A .dlo is an MX Bikes game plugin regardless of the website's category
+  // or an older review's saved "Graphics" choice.
+  let kind = files.some((f) => /\.dlo$/i.test(f.rel)) ? 'plugin' : opts.kind || ((!ctx.categories || !ctx.categories.length) && ctx.kindHint) || kindFromCategories(ctx.categories);
   let autoKind = !opts.kind;
   const visualBikeFiles = files.some((f) => /\.edf$/i.test(f.rel)) && !files.some((f) => /\.(engn|geom)$/i.test(f.rel));
   if (autoKind && visualBikeFiles && (kind === 'bike' || files.some((f) => /(?:^|\/)bikes\//i.test(f.rel)) || /model[\s_-]*swap/i.test(text + ' ' + (ctx.categoryNames || []).join(' ')))) kind = 'bikeSwap';
@@ -155,6 +159,7 @@ function plan(files, ctx, opts = {}) {
     trackType: opts.trackType || guessTrackType(text),
     paintTarget: opts.paintTarget || null,
     customDir: opts.customDir != null ? opts.customDir : '',
+    soundBike: listModels(modsDir, 'bikes').includes(opts.soundBike) ? opts.soundBike : '',
     gear: modern ? `rider/riders/${riderTarget || 'default_mx'}` : 'rider', riderTarget,
   };
   const base = K.base(o);
@@ -201,7 +206,7 @@ function plan(files, ctx, opts = {}) {
       const segs = f.rel.split('/').slice(strip);
       const fname = segs[segs.length - 1];
       const skip = segs.length === 1 && /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname);
-      const dest = skip ? null : segs.join('/');
+      const dest = skip ? null : kind === 'plugin' ? (segs[0].toLowerCase() === 'plugins' ? segs.join('/') : ['plugins', ...segs].join('/')) : segs.join('/');
       const status = !dest ? 'skip' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how: 'game' });
       continue;
@@ -252,6 +257,23 @@ function plan(files, ctx, opts = {}) {
       }
     }
     // 2) A model/track file or folder
+    // Loose sound files are a replacement for one selected bike. Archives
+    // with an explicit mods/bikes layout were already routed above.
+    if (!dest && kind === 'sound' && !DOC_EXT.test(fname)) {
+      if (o.soundBike) {
+        const start = lsegs.findIndex((s) => /^(?:engine\.scl|sfx(?:\.cfg)?|samples)$/i.test(s));
+        const relative = start >= 0 ? segs.slice(start).join('/') : fname;
+        // Packs may ship 250 and 450 variants together. Never copy both over
+        // one bike's sound files or silently choose the wrong displacement.
+        const variant = lsegs.slice(0, Math.max(0, start)).map((s) => s.match(/(?:^|\D)(125|250|350|450|500)(?:f)?(?:\D|$)/)?.[1]).find(Boolean);
+        const bikeSize = o.soundBike.match(/(?:^|\D)(125|250|350|450|500)(?:f)?(?:\D|$)/)?.[1];
+        if (variant && variant !== bikeSize) {
+          entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'other-engine-size' });
+          continue;
+        }
+        if (!variant || variant === bikeSize) { dest = `bikes/${o.soundBike}/${relative}`; how = 'sound-bike'; }
+      }
+    }
     if (!dest && /\.pkz$/i.test(fname)) { dest = `${base}/${fname}`; how = 'model'; }
     if (!dest && segs.length > 1) {
       for (let j = segs.length - 2; j >= 0; j--) {
@@ -308,14 +330,18 @@ function plan(files, ctx, opts = {}) {
 
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
   const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest);
+  const needsSoundBike = kind === 'sound' && entries.some((e) => e.status === 'unresolved' && !DOC_EXT.test(e.rel));
   const installable = entries.filter((e) => e.dest).length;
   const bikeBlocked = [...bikeMatches.values()].some((result) => ['missing', 'incompatible'].includes(result.status));
   const bikeResults = [...bikeMatches.values()];
   const bikeCompatibility = { targets: bikeTargetChecks, messages: [...new Set(bikeResults.map((result) => result.message))], blocked: bikeBlocked, multiple: bikeResults.every((result) => result.target) && new Set(bikeResults.map((result) => result.target)).size > 1 };
   const warnings = [];
   const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
-  if (!installable && !awaitingTarget) warnings.push('Choose the content type or destination folder to continue.');
-  if ((counts.unresolved || 0) > awaitingTarget) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
+  if (!installable && !awaitingTarget && !needsSoundBike) warnings.push('Choose the content type or destination folder to continue.');
+  if ((counts.unresolved || 0) > awaitingTarget && !needsSoundBike) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
+  if (needsSoundBike && o.soundBike) warnings.push('Some sound files are for a different engine size or have an unknown layout. Check the file list before installing.');
+  const otherSoundVariants = entries.filter((e) => e.how === 'other-engine-size').length;
+  if (otherSoundVariants) warnings.push(`${otherSoundVariants} sound file(s) for another engine size will be skipped.`);
   if (counts.overwrite) warnings.push(`${counts.overwrite} file(s) already exist and will be replaced.`);
   if (kind !== 'bikePaint' && ctx.unreadablePaints?.length) warnings.push('Some paints could not be inspected. Check the creator’s required model and target folder before installing.');
   if (needsRiderTarget) warnings.push(`These are paints for a different rider model (${bodyTextures.filter((t) => !['rider', 'gloves', 'skin'].includes(t)).join(', ') || 'custom rider'}). Install the matching model, then select it. Paints do not include the model.`);
@@ -331,8 +357,8 @@ function plan(files, ctx, opts = {}) {
   }
   const requiredModels = [...required.values()];
   for (const m of requiredModels.filter((m) => m.kind !== 'bike' && !m.installed && !m.included)) warnings.push(`These paints need the ${m.name} model. Install that model too before equipping the paints.`);
-  if (gameRoot && !ctx.installDir) warnings.push('Set your game install folder in Settings first — graphics mods go there.');
-  if (gameRoot) warnings.push('This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
+  if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : 'graphics mods'} go there.`);
+  if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
   else if (/^tools|^plugins|reshade/i.test(ctx.categoryNames ? ctx.categoryNames.join(' ') : '')) warnings.push('Tools, plugins and ReShade presets usually go in the game install folder, not mods/. Check the mod description.');
 
   // Everything placed by the archive's own folder structure counts as certain even without a known type.
@@ -347,7 +373,8 @@ function plan(files, ctx, opts = {}) {
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
     options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess, bikeCompatibility,
-    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
+    entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, needsSoundBike,
+    soundBikes: kind === 'sound' ? listModels(modsDir, 'bikes') : [], riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
     requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included && !r.installed) || needsPaintTarget || needsRiderTarget || riderModels.some((r) => r.name === riderTarget && r.unverified)), dependencies: ctx.dependencies || [],
     kinds: Object.entries(KINDS).map(([id, k]) => ({ id, label: k.label })),
     trackTypes: TRACK_TYPES,

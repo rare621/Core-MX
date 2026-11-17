@@ -200,7 +200,7 @@ function openLiveServer(s) {
     return `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
         ${sessionLabel(s) ? ` · ${esc(sessionLabel(s))}` : ''} · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
       <div class="section-title" style="margin-top:0">Riders (${riders.length})</div>
-      <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.name)}</div><div class="m">${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
+        <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.coremxName || r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.coremxName || r.name)}</div><div class="m">${r.coremxName && r.coremxName !== r.name ? `MX Bikes: ${esc(r.name)} · ` : ''}${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
       ${riders.length > 5 ? `<button class="btn" style="margin-top:12px" data-live-riders-toggle>${showAllRiders ? 'Show fewer riders' : `Show all ${riders.length} riders`}</button>` : ''}`;
   };
   const m = modal({

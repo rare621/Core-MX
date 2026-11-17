@@ -49,6 +49,9 @@ const BROWSE_TABS = [
   { id: 'paid', label: 'Paid', cats: [359] },
 ];
 
+const LIVERY_BRANDS = ['Virtual Team Bike Liveries', 'MSM', 'Alta', 'Beta', 'Fantic', 'GasGas', 'Honda', 'Husaberg', 'Husqvarna', 'KTM', 'Kawasaki', 'Suzuki', 'TM', 'Triumph', 'Yamaha'];
+const liveryBrandSlug = (name) => String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
 let categoryMap = null; // id -> {name, parent}
 const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
 const ADDON_CATEGORIES = { riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], protection: [135], goggles: [380] };
@@ -190,6 +193,7 @@ function summarizePost(p, cats) {
     date: p.date,
     modified: p.modified,
     categories: p.categories || [],
+    manufacturer: p.manufacturer || [],
     gearKind: gearKind(p.categories || []),
     needsModelNotice: !standalone(p.categories) && needsCustomModel(p.content?.rendered || p.excerpt?.rendered || ''),
     categoryNames: catNames,
@@ -232,7 +236,7 @@ async function fetchPopular(range) {
   const bySlug = new Map();
   for (let i = 0; i < ranked.length; i += 50) {
     const slugs = ranked.slice(i, i + 50).map((r) => r.slug).join(',');
-    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded' });
+    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,manufacturer,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded' });
     const { json: posts } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
     for (const p of await summarizeAll(posts, cats)) bySlug.set(p.slug, p);
   }
@@ -244,6 +248,33 @@ const popularPending = new Map();
 function popular(range) {
   if (!popularPending.has(range)) popularPending.set(range, fetchPopular(range).finally(() => popularPending.delete(range)));
   return popularPending.get(range);
+}
+
+async function archiveLiveries({ brand, query, page, perPage, cursor }, cats) {
+  if (!LIVERY_BRANDS.includes(brand)) throw new Error('Unknown bike livery category');
+  const slug = liveryBrandSlug(brand);
+  const base = `${BASE}/${brand === 'Virtual Team Bike Liveries' || brand === 'MSM' ? 'bikes' : 'manufacturer'}/${slug}/`;
+  const posts = [];
+  let archivePage = Math.max(1, Number(cursor?.archivePage) || 1), more = true;
+  for (let batch = 0; batch < 5 && more && posts.length < perPage; batch++) {
+    const url = archivePage === 1 ? base : `${base}page/${archivePage}/`;
+    const response = await net.fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error(`MXB Mods ${brand} page returned HTTP ${response.status}`);
+    const $ = cheerio.load(await response.text());
+    const ids = $('#posts a.post[id^="post-"]').map((_, el) => Number(($(el).attr('id') || '').slice(5))).get().filter(Number.isSafeInteger);
+    if (!ids.length) { more = false; break; }
+    const params = new URLSearchParams({ include: ids.join(','), per_page: String(ids.length), _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded' });
+    const { json } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
+    const resolved = await enrichListings(await summarizeAll(json, cats), AbortSignal.timeout(20000));
+    const byId = new Map(resolved.map((post) => [post.id, post]));
+    for (const id of ids) {
+      const post = byId.get(id);
+      if (post && !isAddonPost(post) && (!query || post.title.toLowerCase().includes(query.toLowerCase()))) posts.push(post);
+    }
+    more = !!$('link[rel="next"]').attr('href') || !!$('#posts').nextAll().find(`a[href*="/page/${archivePage + 1}/"]`).length;
+    archivePage++;
+  }
+  return { posts, page, total: 0, totalPages: more ? page + 1 : page, nextCursor: { archivePage } };
 }
 
 async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats) {
@@ -272,7 +303,7 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
   // Inspect listing descriptions in the same request, never download archives or
   // fetch each card separately. Carry the raw cursor so filtering cannot skip/repeat pages.
   for (let batch = 0; posts.length < perPage && offset < total && batch < 3; batch++) {
-    const params = new URLSearchParams({ per_page: String(Math.min(100, Math.max(30, perPage))), offset: String(offset), _embed: 'wp:featuredmedia', _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded', orderby: sort === 'title' ? 'title' : sort === 'modified' ? 'modified' : sort === 'relevance' && query ? 'relevance' : 'date' });
+    const params = new URLSearchParams({ per_page: String(Math.min(100, Math.max(30, perPage))), offset: String(offset), _embed: 'wp:featuredmedia', _fields: 'id,title,link,date,modified,categories,manufacturer,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded', orderby: sort === 'title' ? 'title' : sort === 'modified' ? 'modified' : sort === 'relevance' && query ? 'relevance' : 'date' });
     if (sort === 'title') params.set('order', 'asc');
     if (query) params.set('search', query);
     if (scoped.cats) params.set('categories', scoped.cats.join(','));
@@ -292,9 +323,10 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
   return { posts, total: 0, page, totalPages: more ? page + 1 : page, nextCursor: { offset, featuredOffset } };
 }
 
-async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', page = 1, perPage = 24, orderby = 'date', cursor = null } = {}) {
+async function search({ query = '', tab = 'all', kind = 'all', brand = '', scope = 'all', page = 1, perPage = 24, orderby = 'date', cursor = null } = {}) {
   const cats = await categories();
-  if (scope === 'free' || scope === 'addons') return scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats);
+  if (scope === 'free' && tab === 'liveries' && brand) return archiveLiveries({ brand, query, page, perPage, cursor }, cats);
+  if (scope === 'free' || scope === 'addons') return scopedSearch({ query, tab, kind, brand, scope, page, perPage, orderby, cursor }, cats);
   let t = browseCategory(tab, kind);
   if (scope === 'addons') t = { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() };
   // Unscoped lookups have no ranked-then-catalog cursor; show the full catalog.
@@ -492,4 +524,4 @@ function shopProduct(address) {
   } catch { return null; }
 }
 
-module.exports = { BROWSE_TABS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };
+module.exports = { BROWSE_TABS, LIVERY_BRANDS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };

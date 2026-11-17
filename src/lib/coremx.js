@@ -1,6 +1,39 @@
 'use strict';
 
 const BASE = 'https://coremx.app';
+let websiteCookie = '';
+async function websiteRequest(route, options = {}) {
+  const headers = { Accept: 'application/json', 'X-MCTG': '1', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(websiteCookie ? { Cookie: websiteCookie } : {}) };
+  const response = await fetch(BASE + route, { ...options, headers, signal: AbortSignal.timeout(15000) });
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401 || response.status === 403) websiteCookie = '';
+  if (!response.ok) throw new Error(data.error || data.message || `CoreMX returned HTTP ${response.status}`);
+  return { response, data };
+}
+async function websiteLogin(name, password) {
+  name = String(name || '').trim().slice(0, 100);
+  if (!name || !password) throw new Error('Enter your CoreMX website name and password.');
+  const { response } = await websiteRequest('/api/login', { method: 'POST', body: JSON.stringify({ name, password }) });
+  const cookies = response.headers.getSetCookie?.() || [response.headers.get('set-cookie') || ''];
+  const match = cookies.map((value) => value.match(/(?:^|[,\s])mctg_session=([^;,\s]+)/i)).find(Boolean);
+  if (!match) throw new Error('CoreMX did not return a website session. Check your login and try again.');
+  websiteCookie = `mctg_session=${match[1]}`;
+  return { signedIn: true, name };
+}
+async function reportMod(id, details) {
+  const value = rawId(id);
+  if (!value) throw new Error('Invalid CoreMX mod ID.');
+  if (!websiteCookie) throw new Error('Sign in to your CoreMX website account first.');
+  details = String(details || '').trim().slice(0, 2000);
+  if (details.length < 10) throw new Error('Describe the problem in at least 10 characters.');
+  return (await websiteRequest(`/api/mods/${encodeURIComponent(value)}/report`, { method: 'POST', body: JSON.stringify({ reason: 'Other', details }) })).data;
+}
+async function websiteNotifications() {
+  if (!websiteCookie) return { signedIn: false, notifications: [] };
+  const { data } = await websiteRequest('/api/notifications');
+  return { signedIn: true, notifications: Array.isArray(data) ? data : Array.isArray(data.notifications) ? data.notifications : Array.isArray(data.items) ? data.items : [] };
+}
+function websiteSession() { return { signedIn: !!websiteCookie }; }
 const CATEGORY = { tracks: [22], bikes: [45], liveries: [37], riderkit: [35], riders: [365], helmets: [33], boots: [31], gloves: [32], protection: [36], goggles: [380], sounds: [], wheels: [], graphics: [174], modpacks: [], other: [] };
 const CAT_NAME = { tracks: 'Tracks', bikes: 'Bikes', liveries: 'Bike liveries', riderkit: 'Rider kits', riders: 'Rider models', helmets: 'Helmets', boots: 'Boots', gloves: 'Gloves', protection: 'Protection', goggles: 'Goggles', sounds: 'Sounds', wheels: 'Wheels', graphics: 'Graphics', modpacks: 'Modpacks', other: 'Other' };
 const text = s => String(s || '').slice(0, 20000);
@@ -90,4 +123,4 @@ async function post(id, fetcher) {
   return mod;
 }
 
-module.exports = { normalize, search, post };
+module.exports = { normalize, search, post, websiteLogin, reportMod, websiteNotifications, websiteSession };

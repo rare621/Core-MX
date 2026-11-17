@@ -19,7 +19,7 @@ async function moveAcrossDevices(from, to, rename = fsp.rename) {
   }
 }
 
-const isGraphics = (rec) => (rec?.files || []).some((f) => f.startsWith('game:'));
+const isGraphics = (rec) => (rec?.kind === 'graphics' || !rec?.kind) && (rec?.files || []).some((f) => f.startsWith('game:'));
 function inside(root, relative) {
   if (!root || !relative || /[\0:]/.test(relative) || path.isAbsolute(relative) || relative.split(/[\\/]/).some((p) => p === '..' || !p)) throw new Error('Invalid graphics file path');
   const base = path.resolve(root), absolute = path.resolve(base, relative);

@@ -27,7 +27,7 @@ function b64url(s) {
 
 // Decide how to fetch a link.
 async function resolve(url, ses) {
-  if (FOLDER_PATTERNS.some((re) => re.test(url))) return { type: 'browser', url, reason: 'This link is a folder; pick the file in the browser window.' };
+  if (FOLDER_PATTERNS.some((re) => re.test(url))) return { type: 'browser', url, reason: /mediafire\.com\/folder\//i.test(url) ? 'MediaFire requires Premium to download a whole folder. Pick an individual file in the browser window; CoreMX will install that file.' : 'This link is a folder; pick an individual file in the browser window.' };
   let u;
   try { u = new URL(url); } catch { return { type: 'browser', url, reason: 'Unrecognised link' }; }
   const host = u.hostname.replace(/^www\./, '');

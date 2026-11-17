@@ -4,6 +4,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('livery brand chips read the public archive and resolve its post IDs across pages', async () => {
+  const urls = [];
+  const posts = [
+    { id: 1, title: { rendered: 'Factory paint' }, categories: [37], link: 'https://mxb-mods.com/factory-paint/' },
+    { id: 2, title: { rendered: 'Second paint' }, categories: [37], link: 'https://mxb-mods.com/second-paint/' },
+    { id: 3, title: { rendered: 'Third paint' }, categories: [37], link: 'https://mxb-mods.com/third-paint/' },
+  ];
+  const fetch = async (url) => {
+    const u = new URL(url); urls.push(u);
+    if (u.pathname.endsWith('/categories')) return new Response(JSON.stringify([{ id: 37, name: 'Liveries', slug: 'liveries', parent: 0 }]));
+    if (u.pathname.endsWith('/manufacturer/yamaha/')) return new Response('<head><link rel="next" href="/manufacturer/yamaha/page/2/"></head><div id="posts"><a class="post" id="post-2"></a><a class="post" id="post-1"></a></div>');
+    if (u.pathname.endsWith('/manufacturer/yamaha/page/2/')) return new Response('<div id="posts"><a class="post" id="post-3"></a></div>');
+    if (u.pathname.endsWith('/posts')) return new Response(JSON.stringify(posts.filter((p) => u.searchParams.get('include').split(',').includes(String(p.id))).reverse()), { headers: { 'x-wp-total': '3' } });
+    throw new Error('Unexpected URL: ' + url);
+  };
+  const module = { exports: {} }, context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch } } : require(name) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
+  const first = await module.exports.search({ tab: 'liveries', brand: 'Yamaha', scope: 'free', orderby: 'date', perPage: 1 });
+  assert.deepEqual(Array.from(first.posts, (p) => p.id), [2, 1]);
+  assert.equal(first.totalPages, 2);
+  const second = await module.exports.search({ tab: 'liveries', brand: 'Yamaha', scope: 'free', page: 2, cursor: first.nextCursor, perPage: 1 });
+  assert.deepEqual(Array.from(second.posts, (p) => p.id), [3]);
+  assert.equal(second.totalPages, 2);
+  assert.ok(urls.some((u) => u.pathname === '/manufacturer/yamaha/page/2/'));
+});
+
 test('popular browsing keeps the website rank instead of silently showing newest', async () => {
   const calls = [];
   const rows = [
