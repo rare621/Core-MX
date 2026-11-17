@@ -33,6 +33,8 @@ async function liveStatus(refresh) {
 api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
+  const activeCount = $('#activeUsersCount span');
+  if (activeCount) activeCount.textContent = Number.isInteger(st?.service?.activeUsers) ? `${st.service.activeUsers} online` : 'Online —';
   if (S.friendDialog) S.friendDialog.progress();
   if (st?.paintSync?.at && st.paintSync.at !== previous?.paintSync?.at && !st.paintSync.busy) S.friendDialog?.refresh();
   const key = (s) => JSON.stringify([s?.service, s?.plugin, s?.paintSync?.enabled, s?.paintSync?.error, s?.paintSync?.at, s?.paintSync?.friends]);

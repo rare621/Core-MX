@@ -42,6 +42,7 @@ function normalize(m, detail = false) {
     modified: timestamp(m.updatedAt || m.updated || m.createdAt || m.created || m.date),
     categoryNames: [CAT_NAME[cat] || 'Other'], categories: CATEGORY[cat] || [], image: images[0] || null,
     excerpt: text(m.summary), paid: false, addon: !!m.addon, needsModelNotice: !!m.addon && deps.length > 0,
+    views: Number.isFinite(Number(m.views ?? m.viewCount ?? m.stats?.views)) && Number(m.views ?? m.viewCount ?? m.stats?.views) >= 0 ? Number(m.views ?? m.viewCount ?? m.stats?.views) : null,
     version: text(m.version), dependencies: deps,
   };
   if (!detail) return post;

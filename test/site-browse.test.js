@@ -5,15 +5,18 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 test('popular browsing keeps the website rank instead of silently showing newest', async () => {
+  const calls = [];
   const rows = [
     { id: 1, slug: 'older-hit', title: { rendered: 'Older hit' }, categories: [22], date: '2024-01-01', link: 'https://mxb-mods.com/older-hit/' },
     { id: 2, slug: 'weekly-hit', title: { rendered: 'Weekly hit' }, categories: [22], date: '2025-01-01', link: 'https://mxb-mods.com/weekly-hit/' },
-    { id: 3, slug: 'newest', title: { rendered: 'Newest' }, categories: [22], date: '2026-01-01', link: 'https://mxb-mods.com/newest/' },
+    { id: 3, slug: 'newest', title: { rendered: 'Newest' }, categories: [22], date: '2026-01-01', views: '1,234', link: 'https://mxb-mods.com/newest/' },
   ];
   const cards = (slugs) => `<ol>${slugs.map((slug, index) => `<li class="dmpop-card"><a class="dmpop-title" href="https://mxb-mods.com/${slug}/">${slug}</a><span class="dmpop-views">${100 - index} views</span></li>`).join('')}</ol>`;
   const fetch = async (url) => {
     const u = new URL(url);
+    calls.push(u.pathname);
     if (u.pathname.includes('/categories')) return new Response(JSON.stringify([{ id: 22, name: 'Tracks' }]));
+    if (u.pathname.startsWith('/popular-')) return new Response(cards(u.pathname === '/popular-last-7-days/' ? ['weekly-hit', 'older-hit'] : ['older-hit', 'weekly-hit']));
     if (u.pathname.includes('/pages')) return new Response(JSON.stringify([{ content: { rendered: cards(u.searchParams.get('slug') === 'popular-last-7-days' ? ['weekly-hit', 'older-hit'] : ['older-hit', 'weekly-hit']) } }]));
     if (u.searchParams.has('slug')) return new Response(JSON.stringify(rows.filter(p => u.searchParams.get('slug').split(',').includes(p.slug)).reverse()));
     return new Response(JSON.stringify(rows.slice().reverse().filter(p => !u.searchParams.get('exclude')?.split(',').includes(String(p.id)))), { headers: { 'x-wp-total': '3' } });
@@ -23,9 +26,13 @@ test('popular browsing keeps the website rank instead of silently showing newest
   const site = module.exports;
   const week = await site.search({ tab: 'tracks', scope: 'free', perPage: 3, orderby: 'popular-week' });
   const month = await site.search({ tab: 'tracks', scope: 'free', perPage: 3, orderby: 'popular-month' });
-  assert.deepEqual(Array.from(week.posts, p => p.id), [2, 1, 3]);
-  assert.deepEqual(Array.from(month.posts, p => p.id), [1, 2, 3]);
-  assert.deepEqual(Array.from(week.posts, p => p.rank), [1, 2, undefined]);
+  assert.deepEqual(Array.from(week.posts, p => p.id), [2, 1]);
+  assert.deepEqual(Array.from(month.posts, p => p.id), [1, 2]);
+  assert.deepEqual(Array.from(week.posts, p => p.rank), [1, 2]);
+  assert.deepEqual(Array.from(week.posts, p => p.views), [100, 99]);
+  assert.equal(calls.some(pathname => pathname.includes('/pages')), false);
+  const newest = await site.search({ tab: 'tracks', scope: 'all', perPage: 3, orderby: 'date' });
+  assert.equal(newest.posts[0].views, 1234);
 });
 test('filtered browsing reads separate instructions, keeps stock kits in MXB Mods and advances raw cursors without skipping matches', async () => {
   const calls = [];

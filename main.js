@@ -846,6 +846,7 @@ function registerIpc() {
   handle('site:search', async (q) => {
     if (!['free', 'addons'].includes(q?.scope)) return site.search(q);
     const [legacy, community] = await Promise.allSettled([site.search(q), coremx.search(q)]);
+    if (q.orderby?.startsWith('popular') && legacy.status === 'rejected') throw legacy.reason;
     if (legacy.status === 'rejected' && community.status === 'rejected') throw legacy.reason;
     const a = legacy.status === 'fulfilled' ? legacy.value : { posts: [], total: 0, page: q.page || 1, totalPages: 1 };
     const b = community.status === 'fulfilled' ? community.value : { posts: [], total: 0, totalPages: 1 };

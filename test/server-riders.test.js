@@ -25,7 +25,9 @@ test('riders on the same server share gear by plugin report or Steam name match'
   // PluginRider's plugin reports the server and its rider list (which includes CaptiveDuck with a team tag, and Shy).
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riders: [{ name: 'PluginRider' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
-  assert.equal((await me.c('GET', '/v1/health')).version, 6);
+  const health = await me.c('GET', '/v1/health');
+  assert.equal(health.version, 6);
+  assert.equal(health.activeUsers, 1);
   const { loadouts } = await me.c('POST', '/v1/server-riders', { server: 'test server' });
   const byName = Object.fromEntries(loadouts.map((l) => [l.name, l.via]));
   assert.deepEqual(byName, { PluginRider: 'plugin', CaptiveDuck: 'name' });
