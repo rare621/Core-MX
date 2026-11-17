@@ -1216,10 +1216,8 @@ async function browseLoad() {
     const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
-    const added = r.posts.filter((p) => !b.posts.some((x) => x.id === p.id));
-    b.posts.push(...added);
+    b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
     browseCacheWrite(b.cacheKey || browseKey(), b);
-    loadPostStats(added).then((changed) => { if (changed && reqId === b.reqId && isFree()) renderBrowseGrid(); });
   } catch (e) {
     if (reqId === b.reqId) b.error = e.message;
   } finally {
@@ -1240,28 +1238,7 @@ function siteCard(p) {
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
-      <div class="card-meta">${esc(cat)}<span class="dot"></span>${postStat(p)}</div></div></div>`;
-}
-// Views when mxb-mods.com publishes them, downloads once known, otherwise how new it is.
-function postStat(p) {
-  const bits = [];
-  if (Number.isFinite(p.views)) bits.push(`${p.views.toLocaleString()} views`);
-  if (Number.isFinite(p.downloadCount) && p.downloadCount > 0) bits.push(`${p.downloadCount.toLocaleString()} downloads`);
-  return bits.join(' · ') || timeAgo(p.date);
-}
-// Fill in download counts for cards from coremx.app (one request per page of results).
-async function loadPostStats(posts) {
-  const need = posts.filter((p) => p.source !== 'hub' && p.source !== 'mxbs' && Number.isInteger(p.id) && p.id > 0 && p.downloadCount === undefined);
-  if (!need.length) return false;
-  let stats = {};
-  try { stats = await api.invoke('coremx:stats', need.map((p) => p.id)); } catch { return false; }
-  let changed = false;
-  for (const p of need) {
-    const st = stats[p.id];
-    p.downloadCount = st && Number.isFinite(st.siteDownloads) ? st.siteDownloads : null;
-    if (p.downloadCount) changed = true;
-  }
-  return changed;
+      <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
 
 function heroCard(p) {
