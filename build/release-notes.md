@@ -1,5 +1,7 @@
-CoreMX 1.0.21 — CoreMX mod details fix
+CoreMX 1.0.22 — Get Mods sorting fix
 
-CoreMX upload detail pages now load correctly. The website sends creation and update timestamps as numbers; the app converts them to dates before drawing the popup. If a future detail layout error occurs, the popup shows an error instead of spinning indefinitely.
+Popular today, this week, this month, and all time now use MXB Mods' actual ranked lists. The app previously lost each post's slug while resolving those lists, so every Popular selection fell back to newest posts. Searching now keeps the sort you selected.
 
-The update manifest still points to the identical legacy-named setup copy so existing Google Drive updaters can install CoreMX. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.21-x64.exe together to the shared Drive folder to make this version available there.
+CoreMX uploads use the website's trending, most viewed, recently updated, and name sorts where available. Combined results keep ranked mods ahead of unranked ones and order date, update, and title results across both sources.
+
+The update manifest points to the identical legacy-named setup copy for existing Google Drive updaters. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.22-x64.exe together to the shared Drive folder to make this version available there.
