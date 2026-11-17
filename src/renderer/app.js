@@ -69,6 +69,7 @@ const GROUP_COLORS = { tracks: ['#4d6b2f', '#1b2512'], rider: ['#5b3d8f', '#1d14
 
 // ---------- images ----------
 function itemImage(it) {
+  if (it.group === 'bikes' && it.bikePreview && !it.customImage) return it.bikePreview;
   if (!it.hasImage) return null;
   const root = it.disabled ? S.env.disabledDir : S.env.modsDir;
   const p = it.abs ? it.abs : `${root}\\${it.parts[0].replace(/\//g, '\\')}`;
@@ -91,7 +92,7 @@ function placeholder(it) {
 
 function thumbHtml(it) {
   const src = itemImage(it);
-  return `${placeholder(it)}${src ? `<img loading="lazy" decoding="async" src="${esc(src)}" alt="">` : ''}`;
+  return `${placeholder(it)}${src ? `<img ${it.group === 'bikes' && src === it.bikePreview ? 'class="bike-render-thumb"' : ''} loading="lazy" decoding="async" src="${esc(src)}" alt="">` : ''}`;
 }
 
 document.addEventListener('load', (e) => { if (e.target.tagName === 'IMG') e.target.classList.add('loaded'); }, true);
@@ -335,6 +336,7 @@ function filterItems() {
 
 function renderLibrary(c) {
   const scope = S.lib.scope || 'mods';
+  S.lib.scope = scope;
   if (!LIB_TABS[scope].some((t) => t.id === S.lib.tab)) { S.lib.tab = LIB_TABS[scope][0].id; S.lib.f = {}; }
   if (!$('#libView') || $('#libView').dataset.scope !== scope) {
     c.innerHTML = `<div class="view" id="libView" data-scope="${scope}"><div class="main" style="position:relative">
@@ -354,6 +356,75 @@ function renderLibrary(c) {
   if (!S.gfx && !S.gfxLoading) S.gfxLoading = api.invoke('graphics:scan').then((g) => { S.gfx = g; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.gfxLoading = null; });
   if (!S.plugins && !S.pluginsLoading) S.pluginsLoading = api.invoke('plugins:scan').then((items) => { S.plugins = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.pluginsLoading = null; });
   if (!S.apps && !S.appsLoading) S.appsLoading = api.invoke('apps:list').then((items) => { S.apps = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.appsLoading = null; });
+}
+
+function bikePreviewStamp(item) { return `1|${item.key}|${item.size}|${item.mtime}|${item.kind}`; }
+function bikePreviewPending() { return S.items.filter((item) => item.group === 'bikes' && !item.disabled && item.kind !== 'archive' && !item.bikePreview && !item.bikePreviewFailed); }
+function drawBikePreviewProgress() {
+  const sc = $('#libScroll');
+  if (!sc || S.view !== 'library' || S.lib.scope !== 'mods' || S.lib.tab !== 'bikes') return;
+  const progress = S.lib.bikePreviewProgress;
+  sc.classList.toggle('bike-setup-running', !!progress && progress.first);
+  const old = $('#bikePreviewProgress', sc);
+  if (!progress) { old?.remove(); return; }
+  const html = `<div class="bike-preview-progress ${progress.first ? 'first' : 'incremental'}" id="bikePreviewProgress" role="status">
+    <span class="bike-preview-progress-icon">${icon('bike')}</span><div class="bike-preview-progress-copy"><b>${progress.first ? 'Preparing your bike gallery' : 'Rendering new bike images'}</b>
+    <span>${progress.done} of ${progress.total} bikes processed${progress.failed ? ` · ${progress.failed} could not be previewed` : ''}</span>
+    <progress value="${progress.done}" max="${progress.total || 1}"></progress></div></div>`;
+  if (old) old.outerHTML = html; else sc.insertAdjacentHTML('afterbegin', html);
+}
+function showBikePreview(item) {
+  const card = $(`[data-item="${CSS.escape(item.id)}"]`, $('#libScroll'));
+  const box = card?.querySelector('.thumb');
+  if (!box || item.customImage) return;
+  box.querySelectorAll('img').forEach((img) => img.remove());
+  const img = document.createElement('img');
+  img.className = 'bike-render-thumb'; img.alt = ''; img.src = item.bikePreview;
+  img.onload = () => img.classList.add('loaded');
+  box.appendChild(img);
+}
+function startBikePreviews() {
+  if (!S.scanned || S.lib.bikePreviewTask) { drawBikePreviewProgress(); return; }
+  if (S.env?.settings?.setupDone === false) return;
+  const pending = bikePreviewPending();
+  if (!pending.length) return;
+  const progress = S.lib.bikePreviewProgress = { first: !S.lib.bikePreviewsInitialized, done: 0, total: pending.length, failed: 0 };
+  drawBikePreviewProgress();
+  S.lib.bikePreviewTask = (async () => {
+    if (!window.RiderViewer) await new Promise((resolve) => window.addEventListener('riderviewer-ready', resolve, { once: true }));
+    for (const item of pending) {
+      try {
+        const model = await api.invoke('library:bikeThumbnailModel', item.key);
+        if (!model?.parts?.length) throw new Error('No readable geometry');
+        const image = await window.RiderViewer.thumb(model, 'full', 480);
+        if (!image) throw new Error('Empty bike render');
+        const url = await api.invoke('library:saveBikeThumbnail', item.key, bikePreviewStamp(item), image);
+        const current = S.items.find((entry) => entry.key === item.key && bikePreviewStamp(entry) === bikePreviewStamp(item));
+        for (const entry of [item, current].filter(Boolean)) { entry.bikePreview = url; entry.hasImage = true; }
+        showBikePreview(current || item);
+      } catch (error) {
+        progress.failed++;
+        item.bikePreviewFailed = true;
+        const current = S.items.find((entry) => entry.key === item.key && bikePreviewStamp(entry) === bikePreviewStamp(item));
+        if (current) current.bikePreviewFailed = true;
+        await api.invoke('library:bikeThumbnailUnavailable', item.key, bikePreviewStamp(item)).catch(() => {});
+      }
+      progress.done++;
+      drawBikePreviewProgress();
+      // Keep navigation and card interactions responsive during a large first run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (progress.first) {
+      await api.invoke('library:finishBikeThumbnails').catch(() => {});
+      S.lib.bikePreviewsInitialized = true;
+    }
+  })().finally(() => {
+    S.lib.bikePreviewTask = null;
+    S.lib.bikePreviewProgress = null;
+    drawBikePreviewProgress();
+    if (S.view === 'library' && S.lib.scope === 'mods' && S.lib.tab === 'bikes') renderLibItems();
+    else if (bikePreviewPending().length) startBikePreviews();
+  });
 }
 
 // At-a-glance strip for My Mods. Each tile is a shortcut to that list.
@@ -511,6 +582,10 @@ function renderLibItems() {
   }
   const extra = [];
   if (S.lib.quick === 'dups') extra.push(`<div class="notice warn">${icon('dup')}<div>These were downloaded twice (names ending in “(1)”). The ones marked Duplicate are identical copies — safe to delete. <button class="btn btn-sm" style="margin-left:6px" data-act="select-dupes">Select all identical copies</button></div></div>`);
+  if (currentTab().id === 'bikes' && S.lib.bikePreviewsInitialized && !S.lib.bikePreviewTask) {
+    const failed = S.items.filter((item) => item.group === 'bikes' && item.bikePreviewFailed).length;
+    if (failed) extra.push(`<div class="notice info">${icon('info')}<div>${failed} bike${failed === 1 ? '' : 's'} could not be rendered in 3D. Their existing pictures are shown. <button class="btn btn-sm" data-act="retry-bike-previews">Retry previews</button></div></div>`);
+  }
   const shown = xs.slice(0, S.lib.limit);
   sc.innerHTML = extra.join('') + `<div class="grid">${shown.map(cardHtml).join('')}</div>` + (xs.length > S.lib.limit ? `<div class="loadmore" id="libMore"><div class="spinner"></div></div>` : '');
   sc.classList.toggle('selecting', S.selected.size > 0);
@@ -523,6 +598,7 @@ function renderLibItems() {
     libObserver.observe(more);
   }
   renderBulk();
+  startBikePreviews();
 }
 
 async function renderAppsInto(sc) {
@@ -625,6 +701,7 @@ async function rescan(quiet) {
   const r = await api.invoke('library:scan');
   S.items = r.items;
   S.scanned = true;
+  S.lib.bikePreviewsInitialized = r.bikePreviewsInitialized;
   buildNameIndex();
   for (const id of [...S.selected]) if (!S.items.some((i) => i.id === id)) S.selected.delete(id);
   if (S.view === 'library' || (S.view === 'rider' && S.riderTab === 'gear')) renderLibrary($('#content'));
@@ -633,6 +710,7 @@ async function rescan(quiet) {
     if (cur) openItem(cur.id, true); else closeDrawer();
   }
   if (!quiet) toast(`Scanned ${r.items.length} mods in ${r.ms} ms`, 'ok', 2200);
+  startBikePreviews();
 }
 
 // ---------- item drawer ----------
@@ -1270,16 +1348,18 @@ async function openNotifications() {
   } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
 }
 async function shareModDialog(post) {
-  const m = modal({ title: `Share ${esc(post.title)}`, body: '<div class="loadmore"><div class="spinner"></div></div>', size: 'sm' });
+  const m = modal({ title: `Share ${esc(post.title)}`, body: '<div class="loadmore"><div class="spinner"></div></div>', size: 'sm', foot: '<button class="btn" data-close>Cancel</button><button class="btn btn-primary" id="shareSend" disabled>Share mod</button>' });
   try {
     const friends = (await api.invoke('online:friends')).filter((f) => f.status === 'ok');
     if (!m.isConnected) return;
-    $('.modal-body', m).innerHTML = friends.length ? `<p class="muted">Send this mod page to a mutual CoreMX friend.</p><div class="notification-list">${friends.map((f) => `<button class="notification-row" data-share-friend="${esc(f.id)}"><b>${esc(f.name || f.id)}</b><small>${f.online ? 'Online' : 'Offline'}</small></button>`).join('')}</div>` : '<p class="muted">No mutual CoreMX friends are available. Add each other in Friends first.</p>';
-    m.addEventListener('click', async (e) => {
-      const row = e.target.closest('[data-share-friend]'); if (!row) return;
-      row.disabled = true;
-      try { await api.invoke('online:shareMod', row.dataset.shareFriend, String(post.id), post.title); m.close(); toast('Mod shared with your friend', 'ok'); }
-      catch (error) { row.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+    $('.modal-body', m).innerHTML = friends.length ? `<p class="muted">Send this mod page to a mutual CoreMX friend.</p><label class="share-friend-field"><span>Friend</span><select id="shareFriend" class="input"><option value="">Choose a friend…</option>${friends.map((f) => `<option value="${esc(f.id)}">${esc(f.name || f.id)} · ${f.online ? 'Online' : 'Offline'}</option>`).join('')}</select></label>` : '<p class="muted">No mutual CoreMX friends are available. Add each other in Friends first.</p>';
+    const select = $('#shareFriend', m), send = $('#shareSend', m);
+    select?.addEventListener('change', () => { send.disabled = !select.value; });
+    send.addEventListener('click', async () => {
+      if (!select?.value || !friends.some((f) => String(f.id) === select.value)) return;
+      send.disabled = true;
+      try { await api.invoke('online:shareMod', select.value, String(post.id), post.title); m.close(); toast('Mod shared with your friend', 'ok'); }
+      catch (error) { send.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
     });
   } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
 }
@@ -1766,9 +1846,9 @@ async function openReview(id) {
 }
 
 // ---------- rider (loadout per bike, stored in the game profile) ----------
-S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null, drafts: {}, identityDrafts: {}, selectionDirty: false };
+S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null, drafts: {}, identityDraft: {}, selectionDirty: false };
 const riderDraftKey = () => `${S.rider.profile}|${S.rider.bike}`;
-const riderChanges = () => ({ ...(S.rider.drafts[riderDraftKey()] || {}), ...(S.rider.identityDrafts[S.rider.profile] || {}) });
+const riderChanges = () => ({ ...(S.rider.drafts[riderDraftKey()] || {}), ...S.rider.identityDraft });
 const riderDirty = () => S.rider.selectionDirty || Object.keys(riderChanges()).length > 0;
 const SLOT_ICONS = { bikePaint: 'paint', rider: 'rider', helmet: 'helmet', helmetPaint: 'paint', gogglesPaint: 'goggles', suitPaint: 'shirt', protection: 'shield', protectionPaint: 'paint', glovesPaint: 'glove', boots: 'boot', bootsPaint: 'paint' };
 const PAINT_SLOTS = new Set(['bikePaint', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'protectionPaint', 'glovesPaint', 'bootsPaint']);
@@ -1901,20 +1981,20 @@ function drawRider(c) {
       </div><div class="stage-note muted" id="stageNote"></div></div>
       <div class="rider-wrap">
       <div class="outfit-bike-context"><span class="muted">Outfit for ${esc(bikeTitle(R.bike))}</span><button class="btn btn-sm" data-rider-tab="bike">${icon('bike')}Bike & livery</button></div>
-      <div class="section-title">Rider identity</div><div class="slot-grid rider-identity-fields"><label class="field"><span>Rider name</span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.name)}" autocomplete="off" spellcheck="false"></label><label class="field"><span>Rider number</span><input class="input" id="riderNumberInput" type="number" min="0" max="999" step="1" value="${esc(lo.identity.number)}" placeholder="No number"></label></div><p class="muted" style="font-size:12px">The name and number appear in MX Bikes after you Apply. CoreMX online syncing uses your Steam account.</p>
+      <div class="section-title">Game identity</div><div class="rider-identity-card"><label class="rider-identity-row"><span><b>Nickname</b><small>The name shown to other riders in MX Bikes.</small></span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.nickname)}" autocomplete="off" spellcheck="false"></label><div class="rider-identity-row"><span><b>Race number</b><small>MX Bikes shows this in My Profiles.</small></span><span class="rider-identity-unavailable">Set in MX Bikes</span></div></div><p class="muted rider-identity-note">Nickname changes are previewed here until you click Apply. CoreMX online syncing still uses your Steam account.</p>
       ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g && s.id !== 'bikeAppearance').map(tile).join('')}</div>`).join('')}
       <p class="muted" style="margin-top:22px;font-size:12px">${icon('info')} Close MX Bikes before changing gear here. A backup of your profile is kept next to it.</p>
     </div></div></div></div></div>`;
   mountRiderViewer();
   mountProfileControls();
-  for (const [id, key] of [['riderNameInput', 'riderName'], ['riderNumberInput', 'riderNumber']]) {
+  for (const [id, key] of [['riderNameInput', 'nickname']]) {
     const input = $('#' + id);
     input?.addEventListener('change', () => {
       const value = input.value.trim();
-      const saved = key === 'riderName' ? lo.savedIdentity.name : lo.savedIdentity.number;
-      const draft = { ...(R.identityDrafts[R.profile] || {}) };
+      const saved = lo.savedIdentity.nickname;
+      const draft = { ...R.identityDraft };
       if (value === saved) delete draft[key]; else draft[key] = value;
-      if (Object.keys(draft).length) R.identityDrafts[R.profile] = draft; else delete R.identityDrafts[R.profile];
+      R.identityDraft = draft;
       R.saveState = 'Preview changes';
       renderRider($('#content'));
     });
@@ -2862,11 +2942,11 @@ document.addEventListener('click', async (e) => {
           toast('MX Bikes is open, so this will be saved automatically when you close the game', 'info', 5000);
           break;
         }
-        delete S.rider.drafts[riderDraftKey()]; delete S.rider.identityDrafts[S.rider.profile]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
+        delete S.rider.drafts[riderDraftKey()]; S.rider.identityDraft = {}; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
       catch (err) { a.disabled = false; toast(esc(cleanErr(err)), 'err', 7000); } break;
     }
     case 'rider-cancel-queued': await api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike); S.rider.queued?.delete(riderDraftKey()); await renderRider($('#content')); toast('Cancelled. Your preview is still here to Apply or Revert.', 'info', 3000); break;
-    case 'rider-revert': S.rider.queued?.delete(riderDraftKey()); api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike).catch(() => {}); delete S.rider.drafts[riderDraftKey()]; delete S.rider.identityDrafts[S.rider.profile]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
+    case 'rider-revert': S.rider.queued?.delete(riderDraftKey()); api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike).catch(() => {}); delete S.rider.drafts[riderDraftKey()]; S.rider.identityDraft = {}; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
     case 'rider-refresh': if (!riderDirty()) { S.rider.profile = null; S.rider.bike = null; } S.rider.bikes = null; S.rider.modelKey = null; S.rider.bikeModelKey = null; S.gearThumbs.clear(); await renderRider($('#content')); toast('Rider and bike refreshed from the game', 'ok'); break;
     case 'profile-delete': {
       if (!await confirmBox('Delete rider profile?', `Move <b>${esc(S.rider.profile)}</b> and its saved gear and settings to the Recycle Bin? Another profile will be selected if this one is active.`, 'Delete profile', true)) break;
@@ -2879,6 +2959,7 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'rescan': await rescan(); break;
+    case 'retry-bike-previews': await api.invoke('library:retryBikeThumbnails'); await rescan(true); break;
     case 'close-drawer': closeDrawer(); break;
     case 'enable': case 'disable': {
       const r = await api.invoke('library:enable', [it.id], act === 'enable');

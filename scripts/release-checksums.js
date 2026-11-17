@@ -13,7 +13,8 @@ for (const name of [...files]) {
   files.push(alias);
 }
 const manifest = path.join(dir, 'latest.yml');
-if (fs.existsSync(manifest)) fs.writeFileSync(manifest, fs.readFileSync(manifest, 'utf8').replaceAll('CoreMX-Setup-', 'MX-Bikes-Manager-Setup-'));
+if (fs.existsSync(manifest)) fs.writeFileSync(manifest, fs.readFileSync(manifest, 'utf8')
+  .replace(/(^\s*(?:url|path):\s*)CoreMX-Setup-/gm, '$1MX-Bikes-Manager-Setup-'));
 if (fs.existsSync(path.join(dir, 'mxbm-online-service.zip'))) files.push('mxbm-online-service.zip');
 if (fs.existsSync(path.join(dir, 'latest.yml'))) files.push('latest.yml');
 const lines = files.map((file) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, file))).digest('hex')}  ${file}`);

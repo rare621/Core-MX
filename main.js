@@ -10,6 +10,7 @@ const { Store } = require('./src/lib/store');
 const paths = require('./src/lib/paths');
 const scanner = require('./src/lib/scanner');
 const { Thumbs } = require('./src/lib/thumbs');
+const { BikePreviewCache, fingerprint: bikePreviewFingerprint } = require('./src/lib/bike-preview-cache');
 const site = require('./src/lib/site');
 const coremx = require('./src/lib/coremx');
 const { mergeBrowsePosts } = require('./src/lib/browse-sort');
@@ -167,7 +168,7 @@ if (process.env.MXB_USERDATA) app.setPath('userData', process.env.MXB_USERDATA);
 protocol.registerSchemesAsPrivileged([{ scheme: 'mxb', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 
 let mainWin = null;
-let store, thumbs, ses;
+let store, thumbs, bikePreviews, ses;
 const bikeSwaps = require('./src/lib/bike-swaps').create({
   root: () => path.join(app.getPath('userData'), 'bike-swaps'), modsDir,
   isGameRunning: () => profile.isGameRunning(), trash: (file) => shell.trashItem(file),
@@ -288,14 +289,15 @@ function decorate(items) {
       const hit = idx.find(([f]) => require('./src/lib/install-image').ownsInstallFile(p, f));
       if (hit) { it.post = { id: hit[1].postId, title: hit[1].title, link: hit[1].link, image: hit[1].image, installedAt: hit[1].installedAt }; break; }
     }
-    it.hasImage = it.customImage || !!(it.post && it.post.image) || !!(it.info && it.info.pic);
+    it.hasImage = it.customImage || !!it.bikePreview || !!(it.post && it.post.image) || !!(it.info && it.info.pic);
   }
   return items;
 }
 
 async function scan() {
   const r = await scanner.scanAll(modsDir(), disabledDir(), store.get('settings').gameInstallDir);
-  lastScan = { items: decorate(r.items), ms: r.ms, at: Date.now() };
+  const previews = await bikePreviews.reconcile(r.items);
+  lastScan = { items: decorate(r.items), ms: r.ms, at: Date.now(), bikePreviewsInitialized: previews.initialized };
   return lastScan;
 }
 
@@ -421,6 +423,12 @@ function placeholder404() { return new Response('', { status: 404 }); }
 async function handleImage(request) {
   const u = new URL(request.url);
   try {
+    if (u.hostname === 'bike-preview') {
+      const token = u.pathname.slice(1);
+      if (!/^[a-f0-9]{24}$/.test(token)) return placeholder404();
+      const bytes = await bikePreviews.image(token);
+      return bytes ? new Response(bytes, { headers: { 'content-type': 'image/webp' } }) : placeholder404();
+    }
     if (u.hostname === 'item') {
       const key = (u.searchParams.get('key') || '').toLowerCase();
       const custom = store.get('images')[key];
@@ -828,6 +836,25 @@ function registerIpc() {
   });
 
   handle('library:scan', () => scan());
+  handle('library:bikeThumbnailModel', async (key) => {
+    const item = lastScan?.items.find((i) => i.key === key && i.group === 'bikes' && !i.disabled && i.kind !== 'archive');
+    if (!item) throw new Error('Bike is no longer installed');
+    return modelWorkers.build('bike', { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir,
+      bike: item.name, bikeDir: await profile.findBikeDir(modsDir(), item.name), texMax: 384 }, true);
+  });
+  handle('library:saveBikeThumbnail', async (key, stamp, dataUrl) => {
+    const item = lastScan?.items.find((i) => i.key === key && i.group === 'bikes' && !i.disabled && bikePreviewFingerprint(i) === stamp);
+    if (!item) throw new Error('Bike changed while its image was rendering');
+    const url = await bikePreviews.save(item, dataUrl);
+    item.bikePreview = url;
+    return url;
+  });
+  handle('library:bikeThumbnailUnavailable', async (key, stamp) => {
+    const item = lastScan?.items.find((i) => i.key === key && i.group === 'bikes' && !i.disabled && bikePreviewFingerprint(i) === stamp);
+    if (item) { await bikePreviews.unavailable(item); item.bikePreviewFailed = true; }
+  });
+  handle('library:finishBikeThumbnails', async () => { await bikePreviews.finishSetup(); if (lastScan) lastScan.bikePreviewsInitialized = true; });
+  handle('library:retryBikeThumbnails', () => bikePreviews.retryUnavailable());
   handle('library:enable', async (ids, enable) => { const r = await setEnabled(ids, enable); await scan(); return r; });
   handle('library:trash', async (ids) => { const r = await trash(ids); await scan(); return r; });
   handle('library:reveal', (id) => { const it = findItem(id); if (it) shell.showItemInFolder(path.join(rootFor(it.disabled), it.parts[0])); });
@@ -1497,7 +1524,7 @@ function registerIpc() {
     // Match MX Bikes: an absent per-bike protection inherits [info] protection.
     const protection = changes.protection ?? (prof.sections.protection?.values[bike] || prof.sections.info?.values.protection || '');
     for (const [slot, value] of Object.entries(changes || {})) {
-      if (slot === 'bikeAppearance' || slot === 'riderName' || slot === 'riderNumber') continue;
+      if (slot === 'bikeAppearance' || slot === 'nickname' || slot === 'riderNumber') continue;
       const desc = profile.SLOTS.find((s) => s.id === slot);
       if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
       next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
@@ -1521,8 +1548,9 @@ function registerIpc() {
     lo.appearances = appearances.options;
     lo.current.bikeAppearance = changes.bikeAppearance ?? appearances.active;
     lo.savedCurrent.bikeAppearance = appearances.active;
-    lo.identity = { ...profile.riderIdentity(prof), ...(Object.hasOwn(changes, 'riderName') ? { name: changes.riderName } : {}), ...(Object.hasOwn(changes, 'riderNumber') ? { number: changes.riderNumber } : {}) };
-    lo.savedIdentity = profile.riderIdentity(prof);
+    const nickname = await profile.readNickname(profUserDir());
+    lo.identity = { ...profile.riderIdentity(prof, nickname), ...(Object.hasOwn(changes, 'nickname') ? { nickname: changes.nickname } : {}) };
+    lo.savedIdentity = profile.riderIdentity(prof, nickname);
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
     lo.options.bikePaint = [...new Set(['', ...lo.options.bikePaint, ...packed])];
@@ -1560,11 +1588,15 @@ function registerIpc() {
     values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);
     const previousAppearance = bikeSwaps.list(bike).active;
     if (Object.hasOwn(changes, 'bikeAppearance')) await bikeSwaps.select(bike, changes.bikeAppearance);
-    try { await profile.writeValues(profUserDir(), name, values); await profile.activateProfile(profUserDir(), name); }
+    try {
+      await profile.writeValues(profUserDir(), name, values);
+      await profile.activateProfile(profUserDir(), name);
+      if (Object.hasOwn(changes, 'nickname')) await profile.writeNickname(profUserDir(), changes.nickname);
+    }
     catch (error) { if (Object.hasOwn(changes, 'bikeAppearance')) await bikeSwaps.select(bike, previousAppearance); throw error; }
     const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
-    const identity = profile.riderIdentity(saved);
-    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : slot === 'riderName' ? identity.name : slot === 'riderNumber' ? identity.number : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
+    const identity = profile.riderIdentity(saved, await profile.readNickname(profUserDir()));
+    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : slot === 'nickname' ? identity.nickname : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
     online?.syncPaints().catch(() => {}); return { saved: true };
   }
   let pendingWatch = null;
@@ -1838,6 +1870,7 @@ ipcMain.handle('deeplink:ready', () => linkInbox.ready());
 app.whenReady().then(async () => {
   store = new Store(path.join(app.getPath('userData'), 'data.json'), { settings: {}, installs: {}, images: {}, favorites: [], servers: [], recentServers: [], friends: [], apps: [] });
   thumbs = new Thumbs(path.join(app.getPath('userData'), 'thumbs'), () => Object.values(store.get('images')));
+  bikePreviews = new BikePreviewCache(path.join(app.getPath('userData'), 'bike-previews'));
   await thumbs.prune().catch(() => {});
   initSettings();
   updates = appUpdates.create({ updater: require('electron-updater').autoUpdater, packaged: app.isPackaged && !process.env.MXB_DEBUG_SHOT, version: app.getVersion(), notify: (state) => send('app:update', state) });
