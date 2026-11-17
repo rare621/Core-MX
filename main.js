@@ -1009,6 +1009,7 @@ function registerIpc() {
   handle('coremx:login', (name, password) => coremx.websiteLogin(name, password));
   handle('coremx:session', () => coremx.websiteSession());
   handle('coremx:report', (id, details) => coremx.reportMod(id, details));
+  handle('coremx:stats', (ids) => coremx.stats(ids));
   handle('coremx:notifications', () => coremx.websiteNotifications());
   handle('site:installedIds', () => Object.values(store.get('installs')).filter((r) => r.postId).map((r) => r.postId));
   handle('installs:keys', () => Object.values(store.get('installs')).map((r) => ({ postId: r.postId, shopKey: r.shopKey, title: r.title, siteModified: r.siteModified })));
