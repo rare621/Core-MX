@@ -118,13 +118,18 @@ function setAmbient(url) {
 function pushAmbient(url) { ambientStack.push(url || null); setAmbient(url); }
 function popAmbient() { ambientStack.pop(); setAmbient(ambientStack[ambientStack.length - 1]); }
 function renderRail() {
+  const rail = $('#rail');
+  const previousScroll = rail.scrollLeft;
   const active = [...S.jobs.values()].filter((j) => !['done', 'error'].includes(j.status)).length;
   const review = [...S.jobs.values()].filter((j) => j.status === 'review' || j.status === 'browser').length;
   const upd = (S.updates && S.updates.length) || 0;
   const packUpd = S.packsNeed || 0;
   const btn = (v, badge) => `<button class="rail-btn ${S.view === v.id ? 'active' : ''}" data-view="${v.id}" title="${esc(v.label + ' — ' + v.hint)}">${icon(v.icon)}<span>${v.label}</span>${badge ? `<span class="rail-badge">${badge}</span>` : ''}</button>`;
-  $('#rail').innerHTML = '<span class="rail-ind" aria-hidden="true"></span>' + VIEWS.map((v) => btn(v, v.id === 'packs' ? (packUpd || '') : '')).join('');
-  moveRailIndicator();
+  rail.innerHTML = '<span class="rail-ind" aria-hidden="true"></span>' + VIEWS.map((v) => btn(v, v.id === 'packs' ? (packUpd || '') : '')).join('');
+  rail.scrollLeft = previousScroll;
+  const revealActive = railView !== S.view;
+  railView = S.view;
+  moveRailIndicator(revealActive);
   const dl = review || active || upd || '';
   const steam = S.accounts?.steam;
   const activeUsers = S.live?.status?.service?.activeUsers;
@@ -135,8 +140,8 @@ function renderRail() {
     + `<button class="top-avatar" data-view="friends" title="${esc((steam?.name || 'Steam account') + ' — friends, sync & status')}">${steam?.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}</button>`;
 }
 // The white pill behind the current page slides between nav items.
-let railInd = null;
-function moveRailIndicator() {
+let railInd = null, railView = null;
+function moveRailIndicator(revealActive = false) {
   const rail = $('#rail'), ind = $('.rail-ind', rail), on = $('.rail-btn.active', rail);
   if (!ind) return;
   if (!on) { ind.style.opacity = '0'; railInd = null; return; }
@@ -148,11 +153,17 @@ function moveRailIndicator() {
     ind.style.transition = '';
     place(on.offsetLeft, on.offsetWidth);
     railInd = { x: on.offsetLeft, w: on.offsetWidth };
-    on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (revealActive) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }));
 }
-window.addEventListener('resize', () => { railInd = null; moveRailIndicator(); });
+window.addEventListener('resize', () => { railInd = null; moveRailIndicator(true); });
 $('#rail').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
+$('#rail').addEventListener('wheel', (e) => {
+  const rail = e.currentTarget;
+  if (rail.scrollWidth <= rail.clientWidth || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  rail.scrollLeft += e.deltaY;
+}, { passive: false });
 $('#railAccount').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
 function go(view) {

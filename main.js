@@ -847,7 +847,7 @@ function registerIpc() {
     if (!['free', 'addons'].includes(q?.scope)) return site.search(q);
     const [legacy, community] = await Promise.allSettled([site.search(q), coremx.search(q)]);
     if (q.orderby?.startsWith('popular') && legacy.status === 'rejected') throw legacy.reason;
-    if (legacy.status === 'rejected' && community.status === 'rejected') throw legacy.reason;
+    if (legacy.status === 'rejected' && (community.status === 'rejected' || !community.value.posts.length)) throw legacy.reason;
     const a = legacy.status === 'fulfilled' ? legacy.value : { posts: [], total: 0, page: q.page || 1, totalPages: 1 };
     const b = community.status === 'fulfilled' ? community.value : { posts: [], total: 0, totalPages: 1 };
     return { ...a, posts: mergeBrowsePosts(a.posts, b.posts, q.orderby, q.query), total: a.total + b.total, totalPages: Math.max(a.totalPages, b.totalPages), communityError: community.status === 'rejected' ? community.reason.message : null };
@@ -1643,7 +1643,7 @@ function createWindow() {
   const area = screen.getPrimaryDisplay().workAreaSize;
   mainWin = new BrowserWindow({
     show: !process.env.MXB_DEBUG_SHOT,
-    width: Math.min(1560, area.width - 24), height: Math.min(960, area.height - 24), minWidth: 980, minHeight: 640,
+    width: Math.min(1720, area.width - 24), height: Math.min(1000, area.height - 24), minWidth: 980, minHeight: 640,
     backgroundColor: '#08090b',
     title: 'CoreMX',
     titleBarStyle: 'hidden',

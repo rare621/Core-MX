@@ -1,7 +1,7 @@
-CoreMX 1.0.23 — Get Mods rankings and activity
+CoreMX 1.0.24 — Full mod categories and window navigation
 
-Popular today, this week, this month, and all time use MXB Mods' actual ranked lists without filling them with recent posts. If the ranking is unavailable, the app shows a refreshable error rather than an incorrect list. Searching keeps the selected sort.
+Best match now fills every Get Mods category from the full catalog after any ranked items. Add-ons and narrow categories no longer appear empty when the site's global popularity list has few matches. The explicit Popular filters still show only ranked posts. Catalog failures show an error rather than "No mods found" when neither source returns results.
 
-Mod cards and details display post views when supplied by their source. The top bar links to coremx.app and shows the number of recently active CoreMX users. Deploy the included online-service ZIP to enable the count on the live service.
+The app opens in a slightly wider window where the screen allows it. The top navigation scrolls horizontally in smaller windows, supports the mouse wheel, and preserves its position when the page updates.
 
-The update manifest points to the identical legacy-named setup copy for existing Google Drive updaters. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.23-x64.exe together to the shared Drive folder to make this version available there.
+The update manifest points to the identical legacy-named setup copy for existing Google Drive updaters. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.24-x64.exe together to the shared Drive folder to make this version available there.

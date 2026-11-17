@@ -253,8 +253,16 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     && (!scoped.exclude || !p.categories.some((id) => scoped.exclude.includes(id)))
     && (!p.contentKind || tab === 'all' || p.contentKind === tab)
     && (!query || p.title.toLowerCase().includes(query.toLowerCase()));
-  const sort = orderby === 'relevance' && !query ? 'popular-month' : orderby;
-  const featured = sort.startsWith('popular') ? scopePosts(await enrichListings((await popular(sort.split('-')[1] || 'month')).filter(matches), deadline), scope) : [];
+  const sort = orderby === 'relevance' && !query ? 'best-match' : orderby;
+  let featured = [];
+  if (sort === 'best-match' || sort.startsWith('popular')) {
+    try {
+      featured = scopePosts(await enrichListings((await popular(sort === 'best-match' ? 'month' : sort.split('-')[1] || 'month')).filter(matches), deadline), scope);
+    } catch (error) {
+      // Best match can still browse the category when the separate ranking is down.
+      if (sort !== 'best-match') throw error;
+    }
+  }
   let offset = Math.max(0, Number(cursor?.offset) || 0), featuredOffset = Math.max(0, Number(cursor?.featuredOffset) || 0), total = Infinity;
   const posts = featured.slice(featuredOffset, featuredOffset + perPage); featuredOffset += posts.length;
   if (sort.startsWith('popular')) {
@@ -289,8 +297,8 @@ async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', pa
   if (scope === 'free' || scope === 'addons') return scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats);
   let t = browseCategory(tab, kind);
   if (scope === 'addons') t = { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() };
-  // "Best match" without a search reads as popular-first, like the popular sorts.
-  if (orderby === 'relevance' && !query) orderby = 'popular-month';
+  // Unscoped lookups have no ranked-then-catalog cursor; show the full catalog.
+  if (orderby === 'relevance' && !query) orderby = 'date';
   if (orderby.startsWith('popular')) {
     // Keep this view faithful to the website ranking. Never fill it with new posts.
     let xs = await popular(orderby.split('-')[1] || 'month');
