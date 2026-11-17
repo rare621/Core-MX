@@ -182,6 +182,7 @@ function summarizePost(p, cats) {
   const catNames = (p.categories || []).map((id) => cats[id] && cats[id].name).filter(Boolean);
   return {
     id: p.id,
+    slug: p.slug,
     title: decode(p.title && p.title.rendered),
     link: p.link,
     date: p.date,

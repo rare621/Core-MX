@@ -7,6 +7,11 @@ test('CoreMX community uploads enter Free mods with unique IDs, categories, and 
  assert.equal(r.posts[0].id,'coremx:qnuO9d1Lr7Ij');assert.deepEqual(r.posts[0].categories,[365]);assert.equal(r.totalPages,1);assert.equal(r.posts[0].version,'2.0');assert.equal(r.posts[0].image,'https://coremx.app/img/qnuO9d1Lr7Ij-cover.png');assert.equal(r.posts[0].date,new Date(sample.createdAt).toISOString());
  const addons=await coremx.search({scope:'addons'},fake({mods:[sample],total:1,page:1,per:24}));assert.equal(addons.posts.length,0);
 });
+test('CoreMX searches use supported sorting values',async()=>{
+ const seen=[];const fetcher=async url=>{seen.push(new URL(url).searchParams.get('sort'));return {ok:true,json:async()=>({mods:[],page:1,per:24,total:0})}};
+ for(const orderby of ['popular-week','popular-month','popular-all','modified','title','date']) await coremx.search({orderby},fetcher);
+ assert.deepEqual(seen,['trending','popular','popular','updated','name','new']);
+});
 test('CoreMX detail downloads through its route and retains creator instructions and dependencies',async()=>{
  const urls=[];const fetcher=async url=>{urls.push(url);return {ok:true,json:async()=>({mod:sample})}};
  const p=await coremx.post('coremx:qnuO9d1Lr7Ij',fetcher);assert.equal(urls[0],'https://coremx.app/api/mods/qnuO9d1Lr7Ij');assert.equal(p.downloads[0].url,'https://coremx.app/dl/qnuO9d1Lr7Ij');assert.equal(p.dependencies[0].url,'https://coremx.app/#/mod/otherModel9');assert.match(p.description,/Put in riders/);assert.equal(p.categories[0],365);assert.equal(p.modified,new Date(sample.updatedAt).toISOString());

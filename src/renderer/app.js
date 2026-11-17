@@ -955,7 +955,6 @@ function renderBrowse(c) {
     $('#brSearch').addEventListener('input', debounce((e) => {
       if (!e.target.isConnected) return;
       S.browse.query = e.target.value.trim();
-      if (S.browse.query && (S.browse.sort === 'date' || S.browse.sort.startsWith('popular'))) { S.browse.sort = 'relevance'; $('#brSort').value = 'relevance'; }
       browseReset();
     }, 380));
     $('#brSort').addEventListener('change', (e) => { S.browse.sort = e.target.value; browseReset(); });

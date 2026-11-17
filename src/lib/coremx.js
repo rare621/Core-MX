@@ -69,7 +69,12 @@ async function search({ query = '', tab = 'all', scope = 'free', page = 1, perPa
   url.searchParams.set('per', String(perPage));
   if (query) url.searchParams.set('q', query);
   if (tab !== 'all') url.searchParams.set('cat', tab);
-  url.searchParams.set('sort', orderby === 'title' ? 'name' : orderby === 'modified' ? 'updated' : 'new');
+  // CoreMX uses its own sort names. Its trending list covers recent activity;
+  // most-viewed is the closest available ranking for longer popularity ranges.
+  const sort = orderby === 'title' ? 'name' : orderby === 'modified' ? 'updated'
+    : orderby === 'popular-week' || orderby === 'popular-today' || orderby === 'relevance' && !query ? 'trending'
+    : orderby === 'popular-month' || orderby === 'popular-all' ? 'popular' : 'new';
+  url.searchParams.set('sort', sort);
   const data = await json(url.href, fetcher);
   const posts = (data.mods || []).map(m => normalize(m)).filter(Boolean).filter(m => scope === 'addons' ? m.addon : !m.addon);
   return { posts, total: Number(data.total) || 0, page: Number(data.page) || page, totalPages: Math.max(1, Math.ceil((Number(data.total) || 0) / (Number(data.per) || perPage))) };

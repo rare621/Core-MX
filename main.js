@@ -12,6 +12,7 @@ const scanner = require('./src/lib/scanner');
 const { Thumbs } = require('./src/lib/thumbs');
 const site = require('./src/lib/site');
 const coremx = require('./src/lib/coremx');
+const { mergeBrowsePosts } = require('./src/lib/browse-sort');
 const hosts = require('./src/lib/hosts');
 const archive = require('./src/lib/archive');
 const installer = require('./src/lib/installer');
@@ -848,7 +849,7 @@ function registerIpc() {
     if (legacy.status === 'rejected' && community.status === 'rejected') throw legacy.reason;
     const a = legacy.status === 'fulfilled' ? legacy.value : { posts: [], total: 0, page: q.page || 1, totalPages: 1 };
     const b = community.status === 'fulfilled' ? community.value : { posts: [], total: 0, totalPages: 1 };
-    return { ...a, posts: [...b.posts, ...a.posts], total: a.total + b.total, totalPages: Math.max(a.totalPages, b.totalPages), communityError: community.status === 'rejected' ? community.reason.message : null };
+    return { ...a, posts: mergeBrowsePosts(a.posts, b.posts, q.orderby, q.query), total: a.total + b.total, totalPages: Math.max(a.totalPages, b.totalPages), communityError: community.status === 'rejected' ? community.reason.message : null };
   });
   handle('site:findDependency', async (dependency) => {
     const label = String(dependency?.label || '').trim().slice(0, 120);
