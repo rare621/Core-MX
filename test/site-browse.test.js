@@ -31,8 +31,26 @@ test('popular browsing keeps the website rank instead of silently showing newest
   assert.deepEqual(Array.from(week.posts, p => p.rank), [1, 2]);
   assert.deepEqual(Array.from(week.posts, p => p.views), [100, 99]);
   assert.equal(calls.some(pathname => pathname.includes('/pages')), false);
+  const best = await site.search({ tab: 'tracks', scope: 'free', perPage: 3, orderby: 'relevance' });
+  assert.deepEqual(Array.from(best.posts, p => p.id), [1, 2, 3]);
   const newest = await site.search({ tab: 'tracks', scope: 'all', perPage: 3, orderby: 'date' });
   assert.equal(newest.posts[0].views, 1234);
+});
+
+test('Best match finds add-ons even when the global popular list has none in that category', async () => {
+  const boot = { id: 7, slug: 'boot-paint', title: { rendered: 'Boot paint' }, categories: [126], link: 'https://mxb-mods.com/boot-paint/' };
+  const fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.includes('/categories')) return new Response(JSON.stringify([{ id: 22, name: 'Tracks' }, { id: 126, name: 'Boot Paints' }]));
+    if (u.pathname.startsWith('/popular-')) return new Response('Ranking unavailable', { status: 503 });
+    if (u.pathname.includes('/pages')) return new Response(JSON.stringify([]));
+    if (u.searchParams.has('slug')) return new Response(JSON.stringify([{ id: 1, slug: 'track', title: { rendered: 'Track' }, categories: [22] }]));
+    return new Response(JSON.stringify([boot]), { headers: { 'x-wp-total': '1' } });
+  };
+  const module = { exports: {} }, context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch } } : require(name) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
+  const result = await module.exports.search({ tab: 'boots', scope: 'addons', perPage: 30, orderby: 'relevance' });
+  assert.deepEqual(Array.from(result.posts, p => p.id), [7]);
 });
 test('filtered browsing reads separate instructions, keeps stock kits in MXB Mods and advances raw cursors without skipping matches', async () => {
   const calls = [];

@@ -1,3 +1,9 @@
+## 1.0.24 — Full mod categories and window navigation
+
+- Best match now fills each Get Mods category from the full catalog after its ranked items. Add-ons and narrow categories no longer appear empty just because the site's global popularity list has few matches. If that ranking is unavailable, Best match still loads the category.
+- A catalog connection error is shown instead of an incorrect “No mods found” message when neither source returns mods.
+- The app opens in a slightly wider window when screen space permits. The top navigation has a visible horizontal scrollbar in smaller windows, supports wheel scrolling, and keeps its position as the page updates.
+
 ## 1.0.23 — Get Mods rankings and CoreMX activity
 
 - Popular filters now use MXB Mods' ranked lists and stop filling the results with newly posted mods. A failed ranking request shows an error instead of a misleading list.
