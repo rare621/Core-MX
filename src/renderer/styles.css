@@ -868,3 +868,8 @@ select option { background: var(--panel); }
 .download-requirements > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
 .download-requirements b { flex-basis: 100%; }
 .download-requirements .ok-text { color: var(--ok); }
+
+/* Mod window: Description / Installation tabs (same as the CoreMX website) */
+.post-tabs { margin-top: 20px; }
+.post-tabs + .desc, .post-tabs ~ .post-install { margin-top: 14px; }
+.desc[hidden] { display: none; }
