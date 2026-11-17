@@ -459,7 +459,9 @@ async function post(id) {
   const betas = $('p.betas').first().text().replace(/\s+/g, ' ').trim();
   const pageAuthor = $('a.nd-meta-author').first().text().replace(/^\s*by\s+/i, '').trim()
     || ((html.match(/"author":\{"@type":"Person"[^}]*?"name":"([^"]+)"/) || [])[1] || '');
-  const dlCount = $('[class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
+  // mxb-mods.com shows the all-time total as "Total downloads 77,967" (.dmd-info-total); older pages used other classes.
+  const dlText = $('.dmd-info-total .dmd-stat-value, [class*="total-downloads"], .dmkrtz-lt-total').first().text().replace(/\s+/g, ' ').trim();
+  const dlCount = /\d/.test(dlText) ? Number((dlText.match(/[\d,.]+/) || ['0'])[0].replace(/[,.]/g, '')) : null;
   const details = await parseOff('requirements', [html, p.content && p.content.rendered || '', summary]);
   details.dependencies = require('./download-dependencies').enrich(details.dependencies, downloads, p.content && p.content.rendered || '');
   const needsModelNotice = !summary.categories.includes(365) && !standalone(summary.categories) && details.needsModelNotice;
