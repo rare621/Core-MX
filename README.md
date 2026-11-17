@@ -6,20 +6,20 @@
 
 CoreMX is a Windows desktop app for organizing your MX Bikes mods, finding new content, building rider outfits, and getting ready to ride. Browse your installed collection with pictures, preview your bike and gear in 3D, and install downloads into the right folders.
 
-[**Download the Windows installer**](https://github.com/rare621/MXB-MANAGER/releases/latest) · [Report a problem](https://github.com/rare621/MXB-MANAGER/issues) · [Build from source](#build-from-source)
+[**Download the Windows installer**](https://github.com/rare621/Core-MX/releases/latest) · [Report a problem](https://github.com/rare621/Core-MX/issues) · [Build from source](#build-from-source)
 
 ![Installed bike library with brand, engine size, and class filters](docs/screenshots/library.png)
 
 ## Install and get started
 
-1. Open [Releases](https://github.com/rare621/MXB-MANAGER/releases/latest) and download the latest **CoreMX-Setup-…-x64.exe**.
+1. Open [Releases](https://github.com/rare621/Core-MX/releases/latest) and download the latest **CoreMX-Setup-…-x64.exe**.
 2. Run the setup and choose where to install it. The setup adds desktop and Start menu shortcuts.
 3. Open **CoreMX**. It looks for your Steam game install and your `Documents\PiBoSo\MX Bikes` folder. You can choose the folders yourself if needed.
 4. Browse **My Mods**, build an outfit under **Rider**, or find something new in **Get Mods**.
 
 You need 64-bit Windows and your own copy of MX Bikes. The installed app includes its runtime, so you do **not** need Node.js, npm, or the source code. Game and mod assets shown in the screenshots are installed separately.
 
-From version 1.0.10, the app checks the [shared Google Drive update folder](https://drive.google.com/drive/folders/1giNr8lC7cCLE_L62fSCIfRR-vfiwbMVk) at startup, downloads an available update in the background, and installs it when you close the app or choose **Restart to update**. **Settings → General → App updates** also has Check now. No private GitHub access is required. Older versions need the new installer once to switch feeds. Updates preserve the manager's settings and installed mods.
+The installed app checks the public [Core-MX GitHub releases](https://github.com/rare621/Core-MX/releases) at startup and offers an update dialog. It downloads only after you choose Install, then restarts to apply it. **Settings → General → App updates** also has Check now. Updates preserve the manager's settings and installed mods.
 
 This first release is unsigned, so Windows may show an unknown-publisher warning. Each release includes `SHA256SUMS.txt` for checking the installer download. Uninstalling the manager keeps your game mods and manager settings.
 
@@ -113,7 +113,7 @@ The setup EXE and checksum are written to `dist/`. [Release instructions](docs/R
 
 ## Feedback and credits
 
-Found a problem? [Open an issue](https://github.com/rare621/MXB-MANAGER/issues) with the app version, what you clicked, and a screenshot if possible. Do not include account tokens or passwords.
+Found a problem? [Open an issue](https://github.com/rare621/Core-MX/issues) with the app version, what you clicked, and a screenshot if possible. Do not include account tokens or passwords.
 
 An independent community project, not affiliated with PiBoSo or the supported mod stores. Game assets, mod content, and screenshots of installed content belong to their respective creators. Third-party format work and library notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -137,4 +137,4 @@ Links are queued until app startup finishes. Purchase/login, dependency checks a
 
 CoreMX keeps the original Windows application ID, internal package ID, `mxbm://` protocol, data directory and disabled-mod folder so upgrades preserve user data and installed files. The Windows display name, executable, shortcuts and primary setup filename are CoreMX.
 
-For Google Drive updates, upload `latest.yml` and the matching **MX-Bikes-Manager-Setup-1.0.18-x64.exe** compatibility copy together. This is byte-for-byte the same CoreMX installer as **CoreMX-Setup-1.0.18-x64.exe**; older installed versions require the legacy filename. Do not rename the file referenced by `latest.yml`. GitHub releases do not automatically upload files to Google Drive.
+Versions through 1.0.27 still check Google Drive. To deliver the first GitHub-updater release to them automatically, upload that release's `latest.yml` and matching **CoreMX-Setup-…-x64.exe** to the shared Drive folder once. The 1.0.27 updater accepts the CoreMX filename. After they install it, updates come from GitHub. Users on much older builds may need to run the CoreMX installer manually.

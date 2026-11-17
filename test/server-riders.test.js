@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 8);
+  assert.equal(health.version, 9);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -44,4 +44,6 @@ test('riders on the same server share gear by plugin report or Steam name match'
   assert.equal(inbox.notifications[0].postId, 'coremx:fixture_mod');
   await plugin.c('POST', '/v1/notifications/read', { id: inbox.notifications[0].id });
   assert.equal((await plugin.c('GET', '/v1/notifications')).unread, 0);
+  await plugin.c('POST', '/v1/notifications/delete', { id: inbox.notifications[0].id });
+  assert.equal((await plugin.c('GET', '/v1/notifications')).notifications.length, 0);
 });

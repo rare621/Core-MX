@@ -1,7 +1,7 @@
 {
   "name": "mx-bikes-manager",
   "productName": "CoreMX",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "CoreMX — Content manager for MX Bikes",
   "main": "main.js",
   "private": true,
@@ -9,7 +9,7 @@
   "homepage": "https://coremx.app/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rare621/MXB-MANAGER.git"
+    "url": "https://github.com/rare621/Core-MX.git"
   },
   "scripts": {
     "start": "electron .",

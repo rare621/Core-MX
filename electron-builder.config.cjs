@@ -8,7 +8,7 @@ module.exports = {
   npmRebuild: false,
   compression: 'normal',
   releaseInfo: { releaseNotes: require('fs').readFileSync(require('path').join(__dirname, 'build/release-notes.md'), 'utf8') },
-  publish: [{ provider: 'github', owner: 'rare621', repo: 'MXB-MANAGER' }],
+  publish: [{ provider: 'github', owner: 'rare621', repo: 'Core-MX' }],
   directories: { output: 'dist', buildResources: 'build' },
   files: [
     'main.js', 'preload.js', 'src/**/*', 'package.json', 'THIRD_PARTY_NOTICES.md',

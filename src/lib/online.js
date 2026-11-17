@@ -11,6 +11,7 @@ const STATE_FILE = 'mxbm_presence.json';
 const REPORT_EVERY = 30 * 1000;
 const PAINT_EVERY = 60 * 1000;
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
+const ADMIN_STEAM_ID = '76561198098586128';
 
 function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
   let current = null;        // parsed plugin state, or null
@@ -27,6 +28,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let pluginCache = { key: '' };
   const pendingCalls = new Map();
   let retryKey = '', retryAt = 0;
+  let adminKey = '';
   const progress = (value) => { paint.progress = value; if (Date.now() - progressAt > 150 || value.loaded === 0) { progressAt = Date.now(); onChange(status()); } };
 
   const cfg = () => store.get('online') || {};
@@ -252,6 +254,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   async function disconnect() {
     if (cfg().token) await call('POST', '/v1/unregister').catch(() => {});
     setCfg({ token: null, id: null, optedOut: true });
+    adminKey = '';
     return status();
   }
   function setShare(share) { setCfg({ share: !!share }); lastSent = ''; report(true).catch(() => {}); return status(); }
@@ -357,10 +360,29 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   function noteJoin(address) { setCfg({ lastJoin: { address, at: Date.now() } }); }
 
+  function requireAdmin() {
+    if (steamId() !== ADMIN_STEAM_ID || cfg().id !== ADMIN_STEAM_ID || !adminKey) throw new Error('Unlock Admin with your Steam account and server admin key first.');
+    if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
+  }
+  async function unlockAdmin(key) {
+    if (steamId() !== ADMIN_STEAM_ID || cfg().id !== ADMIN_STEAM_ID) throw new Error('Admin is available only to the registered Steam account.');
+    if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
+    const value = String(key || '').trim();
+    if (!value) throw new Error('Enter the server admin key.');
+    const result = await call('POST', '/v1/admin/status', { key: value });
+    adminKey = value;
+    return result;
+  }
+
   return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),
+    seenAnnouncements: (ids) => call('POST', '/v1/notifications/seen', { ids }),
+    deleteNotification: (id) => call('POST', '/v1/notifications/delete', { id }),
+    unlockAdmin,
+    adminStatus: () => { requireAdmin(); return call('POST', '/v1/admin/status', { key: adminKey }); },
+    createAnnouncement: (title, message) => { requireAdmin(); return call('POST', '/v1/admin/announcements', { key: adminKey, title, message }); },
   };
 }
 

@@ -34,7 +34,6 @@ jobs:
           name: windows-setup
           path: |
             dist/CoreMX-Setup-*.exe
-            dist/MX-Bikes-Manager-Setup-*.exe
             dist/SHA256SUMS.txt
             dist/mxbm-online-service.zip
             dist/latest.yml
@@ -48,4 +47,7 @@ jobs:
         run: |
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -eq 0) { Write-Output 'Release already exists; leaving its assets unchanged.'; exit 0 }
-          gh release create $env:GITHUB_REF_NAME dist/CoreMX-Setup-*.exe dist/MX-Bikes-Manager-Setup-*.exe dist/mxbm-online-service.zip dist/SHA256SUMS.txt dist/latest.yml --verify-tag --title "CoreMX $env:GITHUB_REF_NAME" --notes-file build/release-notes.md
+          $installers = @(Get-ChildItem dist/CoreMX-Setup-*.exe)
+          if ($installers.Count -ne 1) { throw "Expected exactly one CoreMX installer; found $($installers.Count)" }
+          gh release create $env:GITHUB_REF_NAME $installers[0].FullName dist/mxbm-online-service.zip dist/SHA256SUMS.txt dist/latest.yml --verify-tag --title "CoreMX $env:GITHUB_REF_NAME" --notes-file build/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
