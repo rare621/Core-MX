@@ -69,7 +69,7 @@ const GROUP_COLORS = { tracks: ['#4d6b2f', '#1b2512'], rider: ['#5b3d8f', '#1d14
 
 // ---------- images ----------
 function itemImage(it) {
-  if (it.group === 'bikes' && it.bikePreview && !it.customImage) return it.bikePreview;
+  if (it.group === 'bikes' && it.bikePreview) return it.bikePreview;
   if (!it.hasImage) return null;
   const root = it.disabled ? S.env.disabledDir : S.env.modsDir;
   const p = it.abs ? it.abs : `${root}\\${it.parts[0].replace(/\//g, '\\')}`;
@@ -376,12 +376,16 @@ function drawBikePreviewProgress() {
 function showBikePreview(item) {
   const card = $(`[data-item="${CSS.escape(item.id)}"]`, $('#libScroll'));
   const box = card?.querySelector('.thumb');
-  if (!box || item.customImage) return;
-  box.querySelectorAll('img').forEach((img) => img.remove());
-  const img = document.createElement('img');
-  img.className = 'bike-render-thumb'; img.alt = ''; img.src = item.bikePreview;
-  img.onload = () => img.classList.add('loaded');
-  box.appendChild(img);
+  if (!item.bikePreview) return;
+  if (box) {
+    box.querySelectorAll('img').forEach((img) => img.remove());
+    const img = document.createElement('img');
+    img.className = 'bike-render-thumb'; img.alt = '';
+    img.onload = () => img.classList.add('loaded');
+    img.src = item.bikePreview;
+    box.appendChild(img);
+  }
+  if (S.drawerId === item.id) openItem(item.id, true);
 }
 function startBikePreviews() {
   if (!S.scanned || S.lib.bikePreviewTask) { drawBikePreviewProgress(); return; }
@@ -750,8 +754,9 @@ async function openItem(id, keepScroll) {
   if (it.group === 'tracks' && it.sub === '(loose)') notices.push(`<div class="notice warn">${icon('alert')}<div>This track is directly in <span class="mono">tracks/</span>. MX Bikes only loads tracks from a type folder like <span class="mono">tracks/motocross</span>.</div></div>`);
 
   const src = itemImage(it);
-  const modelPreview = ['bikes', 'bikePaints'].includes(it.group) || (it.group === 'rider' && it.sub === 'riders');
-  d.innerHTML = `<div class="drawer-hero ${modelPreview ? 'drawer-bike-hero' : ''}">${modelPreview ? '<div id="drawerBikeModel" class="drawer-bike-model"><div class="spinner"></div></div>' : placeholder(it) + (src ? `<img src="${esc(src)}" alt="">` : '')}<button class="btn btn-icon close" data-act="close-drawer">${icon('x')}</button></div>
+  const modelPreview = it.group === 'bikePaints' || (it.group === 'rider' && it.sub === 'riders');
+  const bikeRender = it.group === 'bikes' && src === it.bikePreview;
+  d.innerHTML = `<div class="drawer-hero ${modelPreview || it.group === 'bikes' ? 'drawer-bike-hero' : ''}">${modelPreview ? '<div id="drawerBikeModel" class="drawer-bike-model"><div class="spinner"></div></div>' : placeholder(it) + (src ? `<img ${bikeRender ? 'class="drawer-bike-render"' : ''} src="${esc(src)}" alt="">` : '')}<button class="btn btn-icon close" data-act="close-drawer">${icon('x')}</button></div>
     <div class="drawer-body">
       <h2>${esc(it.title)}</h2>
       <div class="subtitle">${badgesHtml(it)}<span class="mono">${esc(it.name)}</span></div>
@@ -764,12 +769,12 @@ async function openItem(id, keepScroll) {
         <button class="btn btn-danger" data-act="delete">${icon('trash')}Delete</button>`}
       </div>
       ${it.stock && it.info && it.info.layoutNames && it.info.layoutNames.length ? `<div class="muted" style="font-size:13px;margin:-8px 4px 14px">Layouts: ${esc([it.title, ...it.info.layoutNames].join(' · '))}</div>` : ''}
-      <div class="section-title">Image</div>
-      <div class="actions">
+      <div class="section-title">${bikeRender ? 'Saved 3D image' : 'Image'}</div>
+      ${bikeRender ? '<p class="muted" style="font-size:12px;margin:0 0 16px">This render is stored on your PC and refreshes when the bike changes.</p>' : `<div class="actions">
         <button class="btn btn-sm" data-act="find-image">${icon('search')}Find image</button>
         <button class="btn btn-sm" data-act="pick-image">${icon('upload')}Choose file…</button>
         ${it.customImage ? `<button class="btn btn-sm btn-ghost" data-act="clear-image">${icon('x')}Reset</button>` : ''}
-      </div>
+      </div>`}
       <div class="section-title">Details</div>
       <div class="kv">${kv.map(([k, v]) => `<div class="k">${k}</div><div class="v">${v}</div>`).join('')}</div>
       <div id="paintsBox"></div>
