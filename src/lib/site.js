@@ -180,6 +180,8 @@ function pickImage(media, pref = ['medium_large', 'large', 'medium', 'full']) {
 function summarizePost(p, cats) {
   const media = p._embedded && p._embedded['wp:featuredmedia'] && p._embedded['wp:featuredmedia'][0];
   const catNames = (p.categories || []).map((id) => cats[id] && cats[id].name).filter(Boolean);
+  const rawViews = p.views ?? p.view_count ?? p.post_views_count ?? p.meta?.views ?? p.meta?.post_views_count;
+  const parsedViews = typeof rawViews === 'string' ? Number(rawViews.replace(/,/g, '')) : Number(rawViews);
   return {
     id: p.id,
     slug: p.slug,
@@ -194,6 +196,7 @@ function summarizePost(p, cats) {
     paid: (p.categories || []).some((c) => c === 359 || (cats[c] && cats[c].parent === 359)),
     image: pickImage(media, ['medium_large', 'medium', 'large', 'full']),
     excerpt: decode(p.excerpt && p.excerpt.rendered).replace(/\s+/g, ' ').trim().slice(0, 220),
+    views: rawViews == null || !Number.isFinite(parsedViews) || parsedViews < 0 ? null : parsedViews,
   };
 }
 
@@ -204,8 +207,21 @@ async function fetchPopular(range) {
   const hit = popularCache.get(range);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.posts;
   const cats = await categories();
-  const { json } = await getJson(`${BASE}/wp-json/wp/v2/pages?slug=${POPULAR[range] || POPULAR.month}&_fields=content`);
-  const $ = cheerio.load((json[0] && json[0].content.rendered) || '');
+  const slug = POPULAR[range] || POPULAR.month;
+  // The public page renders the ranking; the WordPress page body can contain
+  // only its shortcode, which silently produced an empty ranking before.
+  let html = '';
+  try {
+    const page = await net.fetch(`${BASE}/${slug}/`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
+    if (page.ok) html = await page.text();
+  } catch { /* the WordPress endpoint below may still work */ }
+  let $ = cheerio.load(html);
+  if (!$('li.dmpop-card').length) {
+    const { json } = await getJson(`${BASE}/wp-json/wp/v2/pages?slug=${slug}&_fields=content`);
+    html = (json[0] && json[0].content.rendered) || '';
+    $ = cheerio.load(html);
+  }
+  if (!$('li.dmpop-card').length) throw new Error('MXB Mods did not provide its popularity ranking. Try refreshing later.');
   const ranked = [];
   $('li.dmpop-card').each((_, li) => {
     const href = $(li).find('a.dmpop-title').attr('href') || '';
@@ -216,7 +232,7 @@ async function fetchPopular(range) {
   const bySlug = new Map();
   for (let i = 0; i < ranked.length; i += 50) {
     const slugs = ranked.slice(i, i + 50).map((r) => r.slug).join(',');
-    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,_links,_embedded' });
+    const params = new URLSearchParams({ slug: slugs, per_page: '50', _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded' });
     const { json: posts } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
     for (const p of await summarizeAll(posts, cats)) bySlug.set(p.slug, p);
   }
@@ -241,10 +257,14 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
   const featured = sort.startsWith('popular') ? scopePosts(await enrichListings((await popular(sort.split('-')[1] || 'month')).filter(matches), deadline), scope) : [];
   let offset = Math.max(0, Number(cursor?.offset) || 0), featuredOffset = Math.max(0, Number(cursor?.featuredOffset) || 0), total = Infinity;
   const posts = featured.slice(featuredOffset, featuredOffset + perPage); featuredOffset += posts.length;
+  if (sort.startsWith('popular')) {
+    const more = featuredOffset < featured.length;
+    return { posts, total: featured.length, page, totalPages: more ? page + 1 : page, nextCursor: { featuredOffset } };
+  }
   // Inspect listing descriptions in the same request, never download archives or
   // fetch each card separately. Carry the raw cursor so filtering cannot skip/repeat pages.
   for (let batch = 0; posts.length < perPage && offset < total && batch < 3; batch++) {
-    const params = new URLSearchParams({ per_page: String(Math.min(100, Math.max(30, perPage))), offset: String(offset), _embed: 'wp:featuredmedia', _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,content,_links,_embedded', orderby: sort === 'title' ? 'title' : sort === 'modified' ? 'modified' : sort === 'relevance' && query ? 'relevance' : 'date' });
+    const params = new URLSearchParams({ per_page: String(Math.min(100, Math.max(30, perPage))), offset: String(offset), _embed: 'wp:featuredmedia', _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,content,views,view_count,post_views_count,_links,_embedded', orderby: sort === 'title' ? 'title' : sort === 'modified' ? 'modified' : sort === 'relevance' && query ? 'relevance' : 'date' });
     if (sort === 'title') params.set('order', 'asc');
     if (query) params.set('search', query);
     if (scoped.cats) params.set('categories', scoped.cats.join(','));
@@ -272,8 +292,7 @@ async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', pa
   // "Best match" without a search reads as popular-first, like the popular sorts.
   if (orderby === 'relevance' && !query) orderby = 'popular-month';
   if (orderby.startsWith('popular')) {
-    // The site's popular pages only rank a few dozen posts, so most categories have few or none
-    // there. Show the category's popular posts first, then the rest of the category, newest first.
+    // Keep this view faithful to the website ranking. Never fill it with new posts.
     let xs = await popular(orderby.split('-')[1] || 'month');
     xs = scopePosts(xs, scope);
     if (t.cats) xs = xs.filter((p) => p.categories.some((c) => t.cats.includes(c) || (cats[c] && t.cats.includes(cats[c].parent))));
@@ -281,23 +300,11 @@ async function search({ query = '', tab = 'all', kind = 'all', scope = 'all', pa
     if (query) { const q = query.toLowerCase(); xs = xs.filter((p) => p.title.toLowerCase().includes(q)); }
     const start = (page - 1) * perPage;
     const top = xs.slice(start, start + perPage);
-    const need = perPage - top.length;
-    const rest = new URLSearchParams({
-      per_page: String(Math.max(1, need)), offset: String(Math.max(0, start - xs.length)), orderby: 'date', _embed: 'wp:featuredmedia',
-      _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,_links,_embedded',
-    });
-    if (query) rest.set('search', query);
-    if (t.cats) rest.set('categories', t.cats.join(','));
-    if (t.exclude) rest.set('categories_exclude', t.exclude.join(','));
-    if (xs.length) rest.set('exclude', xs.map((p) => p.id).slice(0, 100).join(','));
-    const { json, headers } = await getJson(`${BASE}/wp-json/wp/v2/posts?${rest}`);
-    const restTotal = Number(headers.get('x-wp-total') || 0);
-    const total = xs.length + restTotal;
-    return { total: scope === 'all' ? total : 0, totalPages: Math.max(1, Math.ceil(total / perPage)), page, posts: [...top, ...(need > 0 ? scopePosts(await summarizeAll(json, cats), scope) : [])] };
+    return { total: xs.length, totalPages: Math.max(1, Math.ceil(xs.length / perPage)), page, posts: top };
   }
   const params = new URLSearchParams({
     per_page: String(perPage), page: String(page), _embed: 'wp:featuredmedia',
-    _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,_links,_embedded',
+    _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,views,view_count,post_views_count,_links,_embedded',
   });
   if (query) params.set('search', query);
   if (t.cats) params.set('categories', t.cats.join(','));
@@ -323,7 +330,7 @@ async function postsByIds(ids) {
     const chunk = ids.slice(i, i + 50);
     const params = new URLSearchParams({
       include: chunk.join(','), per_page: '50', _embed: 'wp:featuredmedia',
-      _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,_links,_embedded',
+      _fields: 'id,title,link,date,modified,categories,featured_media,excerpt,views,view_count,post_views_count,_links,_embedded',
     });
     const { json } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
     out.push(...await summarizeAll(json, cats));

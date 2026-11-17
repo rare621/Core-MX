@@ -1,10 +1,10 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const coremx=require('../src/lib/coremx');
-const sample={id:'qnuO9d1Lr7Ij',title:'AB Hoodie',summary:'Rider hoodie',category:'riders',kind:'model',version:'2.0',images:['/img/qnuO9d1Lr7Ij-cover.png'],externalUrl:'https://drive.google.com/file/d/abc/view',deps:[{id:'otherModel9',name:'Base gear'}],description:'Wear it',install:'Put in riders',createdAt:1794868709652,updatedAt:1794868745795};
+const sample={id:'qnuO9d1Lr7Ij',title:'AB Hoodie',summary:'Rider hoodie',category:'riders',kind:'model',version:'2.0',views:42,images:['/img/qnuO9d1Lr7Ij-cover.png'],externalUrl:'https://drive.google.com/file/d/abc/view',deps:[{id:'otherModel9',name:'Base gear'}],description:'Wear it',install:'Put in riders',createdAt:1794868709652,updatedAt:1794868745795};
 const fake=body=>async url=>({ok:true,json:async()=>body,url});
 test('CoreMX community uploads enter Free mods with unique IDs, categories, and page data',async()=>{
  const r=await coremx.search({scope:'free',tab:'riders',query:'hoodie',page:1,perPage:24},fake({mods:[sample],page:1,per:24,total:1}));
- assert.equal(r.posts[0].id,'coremx:qnuO9d1Lr7Ij');assert.deepEqual(r.posts[0].categories,[365]);assert.equal(r.totalPages,1);assert.equal(r.posts[0].version,'2.0');assert.equal(r.posts[0].image,'https://coremx.app/img/qnuO9d1Lr7Ij-cover.png');assert.equal(r.posts[0].date,new Date(sample.createdAt).toISOString());
+ assert.equal(r.posts[0].id,'coremx:qnuO9d1Lr7Ij');assert.deepEqual(r.posts[0].categories,[365]);assert.equal(r.totalPages,1);assert.equal(r.posts[0].version,'2.0');assert.equal(r.posts[0].views,42);assert.equal(r.posts[0].image,'https://coremx.app/img/qnuO9d1Lr7Ij-cover.png');assert.equal(r.posts[0].date,new Date(sample.createdAt).toISOString());
  const addons=await coremx.search({scope:'addons'},fake({mods:[sample],total:1,page:1,per:24}));assert.equal(addons.posts.length,0);
 });
 test('CoreMX searches use supported sorting values',async()=>{

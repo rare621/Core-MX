@@ -127,7 +127,10 @@ function renderRail() {
   moveRailIndicator();
   const dl = review || active || upd || '';
   const steam = S.accounts?.steam;
-  $('#railAccount').innerHTML = `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
+  const activeUsers = S.live?.status?.service?.activeUsers;
+  $('#railAccount').innerHTML = `<button class="top-web-link" data-open="https://coremx.app/#/" title="Open coremx.app">${icon('globe')}<span>coremx.app</span></button>`
+    + `<span class="top-active-users" id="activeUsersCount" title="People active in CoreMX in the last two minutes"><i></i><span>${Number.isInteger(activeUsers) ? `${activeUsers} online` : 'Online —'}</span></span>`
+    + `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
     + `<button class="top-icon ${S.view === 'settings' ? 'active' : ''}" data-view="settings" title="Settings">${icon('settings')}</button>`
     + `<button class="top-avatar" data-view="friends" title="${esc((steam?.name || 'Steam account') + ' — friends, sync & status')}">${steam?.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}</button>`;
 }
@@ -1020,7 +1023,7 @@ function siteCard(p) {
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
-      <div class="card-meta">${esc(cat)}<span class="dot"></span>${p.views ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
+      <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
 }
 
 function heroCard(p) {
@@ -1029,7 +1032,7 @@ function heroCard(p) {
   const sortLabel = { 'popular-week': 'this week', 'popular-today': 'today', 'popular-all': 'of all time' }[S.browse.sort] || 'this month';
   return `<div class="feature-hero" data-post="${esc(p.id)}"><img src="${esc(p.image)}" alt=""><div class="fh-shade"></div>
     <div class="fh-body"><span class="fh-kicker">${p.rank ? `#${p.rank} most popular ${sortLabel}` : 'Featured'}${cat ? ` · ${esc(cat)}` : ''}</span><h3>${esc(p.title)}</h3>${p.excerpt ? `<p>${esc(p.excerpt)}</p>` : ''}
-    <span class="fh-actions"><span class="btn btn-primary">${icon(installed ? 'check' : 'download')}${installed ? 'Installed · view' : 'View & install'}</span>${p.views ? `<span class="fh-views">${p.views.toLocaleString()} views</span>` : ''}</span></div></div>`;
+    <span class="fh-actions"><span class="btn btn-primary">${icon(installed ? 'check' : 'download')}${installed ? 'Installed · view' : 'View & install'}</span>${Number.isFinite(p.views) ? `<span class="fh-views">${p.views.toLocaleString()} views</span>` : ''}</span></div></div>`;
 }
 let brObserver = null;
 function renderBrowseGrid() {
@@ -1126,6 +1129,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
   let p;
   try { p = await api.invoke('site:post', summary.id); }
   catch (e) { $('.post > div:last-child', m).innerHTML = `<div class="notice danger">${icon('alert')}<div>${esc(e.message)}</div></div>`; return; }
+  if (p.views == null && Number.isFinite(summary.views)) p.views = summary.views;
   if (!m.isConnected) return;
   const draw = () => {
   const scroll = $('.modal-body', m).scrollTop;
@@ -1151,7 +1155,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
     </div>
     <div>
       <h2>${esc(p.title)}</h2>
-      <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}</div>
+      <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}${Number.isFinite(p.views) ? `<span>${icon('eye')}${p.views.toLocaleString()} views</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
       ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap').length > 1 ? '<p class="muted">Choose the model swap for your bike and downloaded paint variant. The linked versions are alternatives.</p>' : ''}

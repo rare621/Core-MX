@@ -18,6 +18,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let lastSent = '';
   let lastSentAt = 0;
   let lastError = null;
+  let activeUsers = null;
   let timer = null;
   let paintTimer = null;
   let retryTimer = null;
@@ -156,9 +157,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // The manager stays online even with MX Bikes closed. Keep its heartbeat alive.
     if (!force && key === lastSent && Date.now() - lastSentAt < REPORT_EVERY) return;
     try {
-      await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
+      const result = await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
+      activeUsers = Number.isInteger(result.activeUsers) ? result.activeUsers : null;
       lastSent = key; lastSentAt = Date.now(); lastError = null;
-    } catch (e) { lastError = e.message; }
+      onChange(status());
+    } catch (e) { lastError = e.message; activeUsers = null; onChange(status()); }
   }
 
   function start() {
@@ -187,7 +190,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       plugin: pluginStatus(),
       game: { running: gameRunning },
       presence: current,
-      service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError },
+      service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers },
       serverShare: c.serverShare !== false,
       paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
     };

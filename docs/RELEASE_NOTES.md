@@ -1,3 +1,10 @@
+## 1.0.23 — Get Mods rankings and CoreMX activity
+
+- Popular filters now use MXB Mods' ranked lists and stop filling the results with newly posted mods. A failed ranking request shows an error instead of a misleading list.
+- Mod cards and details show post views when the source provides them.
+- The top bar links to coremx.app and shows the number of recently active CoreMX users when the online service reports it.
+- The online service reports active users from current presence heartbeats. Deploy the included server ZIP to enable the count.
+
 ## 1.0.21 — CoreMX mod details fix
 
 - Fixed a popup spinner that remained after opening a CoreMX upload. The website's numeric timestamps are converted before the details render.

@@ -18,6 +18,13 @@ function fixture(overrides = {}) {
   return { client, config: () => config, set: (patch) => { config = { ...config, ...patch }; } };
 }
 
+test('presence heartbeat exposes the active manager count', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ ok: true, activeUsers: 7 })));
+  const { client } = fixture();
+  await client.refresh();
+  assert.equal(client.status().service.activeUsers, 7);
+});
+
 test('moving to the public alias keeps the account without registering again', async (t) => {
   const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
