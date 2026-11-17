@@ -1395,7 +1395,7 @@ document.addEventListener('click', async (e) => {
   finally { if (button.isConnected) button.disabled = false; }
 });
 async function openPost(summary, { install = false, file = null } = {}) {
-  let refresh;
+  let refresh, postTab = 'desc';
   const m = modal({
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
@@ -1428,7 +1428,9 @@ async function openPost(summary, { install = false, file = null } = {}) {
     <div>
       <div class="gallery-main"><img id="galMain" src="${esc(p.images[0] || p.image || '')}" data-keep="1" alt=""></div>
       ${p.images.length > 1 ? `<div class="gallery-strip">${p.images.map((u, i) => `<img src="${esc(u)}" data-gal="${i}" class="${i === 0 ? 'active' : ''}" data-keep="1" loading="lazy">`).join('')}</div>` : ''}
-      <div class="desc">${p.description || '<p class="muted">No description.</p>'}</div>
+      ${p.instructions ? `<div class="seg-tabs post-tabs"><button class="${postTab === 'desc' ? 'active' : ''}" data-post-tab="desc">${icon('info')}Description</button><button class="${postTab === 'install' ? 'active' : ''}" data-post-tab="install">${icon('download')}Installation</button></div>` : ''}
+      <div class="desc" ${p.instructions && postTab === 'install' ? 'hidden' : ''}>${p.description || '<p class="muted">No description.</p>'}</div>
+      ${p.instructions ? `<div class="desc post-install" ${postTab === 'install' ? '' : 'hidden'}>${p.instructions}<p class="muted" style="margin-top:14px">MX Bikes Manager installs this for you when you press Install. These are the creator's steps for installing it by hand.</p></div>` : ''}
     </div>
     <div>
       <h2>${esc(p.title)}</h2>
@@ -1468,6 +1470,14 @@ async function openPost(summary, { install = false, file = null } = {}) {
   $('[data-report-mod]', m)?.addEventListener('click', () => reportCoremxMod(p));
   if (install && !p.paid) installLinkedDownload(p, file);
   $('.modal-body', m).addEventListener('click', async (e) => {
+    const tab = e.target.closest('[data-post-tab]');
+    if (tab) {
+      postTab = tab.dataset.postTab;
+      $$('[data-post-tab]', m).forEach((b) => b.classList.toggle('active', b === tab));
+      $('.post .desc:not(.post-install)', m).hidden = postTab === 'install';
+      $('.post-install', m).hidden = postTab !== 'install';
+      return;
+    }
     const findRequired = e.target.closest('[data-find-required]');
     if (findRequired) {
       const dependency = (p.modelDependencies || [])[Number(findRequired.dataset.findRequired)];
