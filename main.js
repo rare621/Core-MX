@@ -925,7 +925,7 @@ function registerIpc() {
     const tab = ({ boots: 'boots', helmets: 'helmets', protections: 'protection' })[kind] || 'all';
     const requests = [
       site.search({ query: label, tab, perPage: 12, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' }))).catch(() => []),
-      shops.search(ses, { shop: 'hub', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'hub' }))).catch(() => []),
+      shops.search(ses, { shop: 'hub', query: label, page: 1 }).then((r) => r.products.filter((p) => !p.creatorFiles).map((p) => ({ ...p, source: 'hub' }))).catch(() => []),
       shops.search(ses, { shop: 'mxbs', query: label, page: 1 }).then((r) => r.products.map((p) => ({ ...p, source: 'mxbs' }))).catch(() => []),
     ];
     const sets = await Promise.all(requests);
@@ -939,7 +939,7 @@ function registerIpc() {
     const requests = [];
     if (source === 'all' || source === 'free') requests.push(site.search({ query: term, tab, perPage: 24, orderby: 'relevance' }).then((r) => r.posts.map((p) => ({ ...p, source: 'mxb-mods' }))));
     for (const id of ['mxbs', 'hub']) if (source === 'all' || source === id) {
-      requests.push(shops.search(ses, { shop: id, query: term, cat: id === 'mxbs' && tab === 'tracks' ? 248 : 0 }).then((r) => r.products.map((p) => ({ ...p, categories: p.categories || [], source: shops.SHOPS[id].name }))));
+      requests.push(shops.search(ses, { shop: id, query: term, cat: id === 'mxbs' && tab === 'tracks' ? 248 : 0 }).then((r) => r.products.filter((p) => !p.creatorFiles).map((p) => ({ ...p, categories: p.categories || [], source: shops.SHOPS[id].name }))));
     }
     const results = await Promise.allSettled(requests);
     const posts = results.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
