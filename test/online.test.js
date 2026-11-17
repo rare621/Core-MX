@@ -7,15 +7,16 @@ const path = require('node:path');
 
 function fixture(overrides = {}) {
   let config = { url: 'http://192.168.0.38:60000', token: 'fixture-token', id: 'fixture-account', paintSync: false };
+  let recentServers = [];
   const client = online.create({
-    store: { get: (key) => key === 'online' ? config : key === 'friends' ? [] : undefined, set: (_key, value) => { config = value; } },
+    store: { get: (key) => key === 'online' ? config : key === 'friends' ? [] : key === 'recentServers' ? recentServers : undefined, set: (key, value) => { if (key === 'online') config = value; else if (key === 'recentServers') recentServers = value; } },
     appDir: __dirname, userDir: () => null, installDir: () => null,
     isGameRunning: async () => false, steamId: () => '76561198000000000', steamName: () => 'Fixture',
     defaultUrl: 'http://67.84.130.214:60000', previousServiceUrls: ['http://192.168.0.38:60000'],
     onChange: () => {},
     ...overrides,
   });
-  return { client, config: () => config, set: (patch) => { config = { ...config, ...patch }; } };
+  return { client, config: () => config, recentServers: () => recentServers, set: (patch) => { config = { ...config, ...patch }; } };
 }
 
 test('presence heartbeat exposes the active manager count', async (t) => {
@@ -98,10 +99,12 @@ test('discovered addresses are reported to friends and cleared when discovery ex
   await fs.writeFile(path.join(root, online.STATE_FILE), JSON.stringify({ v: 2, inEvent: 1, server: 'Fixture server', session: 5 }));
   await f.client.refresh();
   assert.equal(reports.at(-1).serverAddress, address);
+  assert.deepEqual(f.recentServers().map((server) => [server.name, server.address]), [['Fixture server', address]]);
   assert.equal(reports.at(-1).session, 5, 'Warmup reaches the online service');
   assert.equal(f.config().addresses, undefined, 'discovery must not become a permanent stale mapping');
   address = null; await f.client.refresh();
   assert.equal(reports.at(-1).serverAddress, null);
+  assert.equal(f.recentServers()[0].address, null, 'a stale address must not stay joinable');
   address = '203.0.113.22:54210'; await f.client.refresh();
   assert.equal(reports.at(-1).serverAddress, address);
   running = false; await f.client.refresh();

@@ -45,6 +45,8 @@ const S = {
   jobs: new Map(),
   installs: {},
   updates: null,
+  notifications: { notifications: [], unread: 0 },
+  apps: null,
   drawerId: null,
 };
 
@@ -137,6 +139,7 @@ function renderRail() {
     + `<span class="top-active-users" id="activeUsersCount" title="People active in CoreMX in the last two minutes"><i></i><span>${Number.isInteger(activeUsers) ? `${activeUsers} online` : 'Online —'}</span></span>`
     + `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
     + `<button class="top-icon ${S.view === 'settings' ? 'active' : ''}" data-view="settings" title="Settings">${icon('settings')}</button>`
+    + `<button class="top-icon" data-notifications title="Mod notifications">${icon('bell')}${S.notifications.unread ? `<span class="rail-badge">${S.notifications.unread}</span>` : ''}</button>`
     + `<button class="top-avatar" data-view="friends" title="${esc((steam?.name || 'Steam account') + ' — friends, sync & status')}">${steam?.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}</button>`;
 }
 // The white pill behind the current page slides between nav items.
@@ -164,7 +167,7 @@ $('#rail').addEventListener('wheel', (e) => {
   e.preventDefault();
   rail.scrollLeft += e.deltaY;
 }, { passive: false });
-$('#railAccount').addEventListener('click', (e) => { const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
+$('#railAccount').addEventListener('click', (e) => { if (e.target.closest('[data-notifications]')) { openNotifications(); return; } const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
 function go(view) {
   // old view names still used in a few places
@@ -255,6 +258,8 @@ const LIB_TABS = {
     { id: 'tracks', label: 'Tracks', icon: 'track', match: (i) => i.group === 'tracks' },
     { id: 'other', label: 'Tyres & other', icon: 'tyre', match: (i) => ['tyres', 'misc', 'other'].includes(i.group) },
     { id: 'graphics', label: 'Graphics', icon: 'sparkle', match: () => false },
+    { id: 'plugins', label: 'Plugins', icon: 'box', match: () => false },
+    { id: 'apps', label: 'Apps', icon: 'settings', match: () => false },
   ],
   rider: [
     { id: 'bikePaints', label: 'Bike paints', icon: 'paint', match: (i) => i.group === 'bikePaints' },
@@ -346,6 +351,9 @@ function renderLibrary(c) {
   }
   $('#libSearch').value = S.lib.query;
   renderLibItems();
+  if (!S.gfx && !S.gfxLoading) S.gfxLoading = api.invoke('graphics:scan').then((g) => { S.gfx = g; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.gfxLoading = null; });
+  if (!S.plugins && !S.pluginsLoading) S.pluginsLoading = api.invoke('plugins:scan').then((items) => { S.plugins = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.pluginsLoading = null; });
+  if (!S.apps && !S.appsLoading) S.appsLoading = api.invoke('apps:list').then((items) => { S.apps = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.appsLoading = null; });
 }
 
 // At-a-glance strip for My Mods. Each tile is a shortcut to that list.
@@ -376,7 +384,7 @@ document.addEventListener('click', (e) => {
 function drawLibTabs() {
   const all = libItems();
   $('#libTabs').innerHTML = LIB_TABS[S.lib.scope || 'mods'].map((t) => {
-    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length : '') : compactGearItems(all.filter(t.match)).length;
+    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length + S.gfx.installed.length : '') : t.id === 'plugins' ? (S.plugins ? S.plugins.length : '') : t.id === 'apps' ? (S.apps ? S.apps.length : '') : compactGearItems(all.filter(t.match)).length;
     if (!n && t.id === 'more') return '';
     return `<button class="bigtab ${t.id === currentTab().id ? 'active' : ''}" data-libtab="${t.id}">${icon(t.icon)}<span>${t.label}</span><span class="n">${n}</span></button>`;
   }).join('');
@@ -474,6 +482,16 @@ function cardHtml(it) {
 let libObserver = null;
 function renderLibItems() {
   if (!$('#libScroll')) return;
+  if (currentTab().id === 'plugins') {
+    drawLibTabs(); $('#libFilters').innerHTML = ''; renderBulk();
+    renderPluginsInto($('#libScroll'));
+    return;
+  }
+  if (currentTab().id === 'apps') {
+    drawLibTabs(); $('#libFilters').innerHTML = ''; renderBulk();
+    renderAppsInto($('#libScroll'));
+    return;
+  }
   if (currentTab().id === 'graphics') {
     // Graphics mods live in the game folder, not mods/ — shown as their own list
     drawLibTabs(); $('#libFilters').innerHTML = ''; renderBulk();
@@ -506,6 +524,47 @@ function renderLibItems() {
   }
   renderBulk();
 }
+
+async function renderAppsInto(sc) {
+  sc.innerHTML = '<div class="loadmore"><div class="spinner"></div></div>';
+  try {
+    S.apps = await api.invoke('apps:list');
+    if (!sc.isConnected || S.lib.tab !== 'apps') return;
+    drawLibTabs();
+    sc.innerHTML = `<div class="srv-list" style="max-width:960px">${S.apps.map((item) => `<div class="srv"><div class="srv-ico">${icon('settings')}</div><div class="srv-txt"><div class="t">${esc(item.title)}</div><div class="m">Saved in Downloads · ${esc(item.path.split(/[\\/]/).pop())}</div></div><div class="jactions"><button class="btn btn-sm btn-primary" data-run-app="${esc(item.id)}">${icon('play')}Run</button><button class="btn btn-sm btn-danger" data-remove-app="${esc(item.id)}">${icon('trash')}Remove</button></div></div>`).join('') || '<div class="set-card muted">No downloaded applications yet.</div>'}</div><p class="muted" style="margin-top:12px">Run opens the publisher’s EXE. Finish its installer to add the plugin to MX Bikes.</p>`;
+  } catch (error) { if (sc.isConnected) sc.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
+async function renderPluginsInto(sc) {
+  sc.innerHTML = '<div class="loadmore"><div class="spinner"></div></div>';
+  try {
+    S.plugins = await api.invoke('plugins:scan');
+    if (!sc.isConnected || S.lib.tab !== 'plugins') return;
+    drawLibTabs();
+    sc.innerHTML = `<div class="srv-list" style="max-width:960px">${S.plugins.map((item) => `<div class="srv"><div class="srv-ico">${icon('box')}</div><div class="srv-txt"><div class="t">${esc(item.title)}</div><div class="m">MX Bikes/plugins/${esc(item.name)}${item.managed ? ' · Installed with CoreMX' : ''}</div></div><div class="jactions"><button class="btn btn-sm" data-reveal-plugin="${esc(item.name)}">${icon('folder')}Open folder</button>${item.recordKey ? `<button class="btn btn-sm btn-danger" data-remove-plugin="${esc(item.recordKey)}">${icon('trash')}Remove</button>` : ''}</div></div>`).join('') || '<div class="set-card muted">No game plugins found in MX Bikes/plugins.</div>'}</div>`;
+  } catch (error) { if (sc.isConnected) sc.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-reveal-plugin]'); if (!button) return;
+  try { await api.invoke('plugins:reveal', button.dataset.revealPlugin); }
+  catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+});
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-remove-plugin]'); if (!button) return;
+  if (!await confirmBox('Remove game plugin', 'Move only the unchanged files CoreMX installed to the Recycle Bin? Edited or shared files are kept.', 'Remove', true)) return;
+  try {
+    const result = await api.invoke('installs:uninstall', button.dataset.removePlugin);
+    await renderPluginsInto($('#libScroll'));
+    toast(result?.kept ? `${result.kept} changed or unverified file${result.kept === 1 ? '' : 's'} kept` : 'Plugin files moved to the Recycle Bin', result?.kept ? 'info' : 'ok', 5000);
+  } catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+});
+document.addEventListener('click', async (e) => {
+  const run = e.target.closest('[data-run-app]');
+  if (run) { try { await api.invoke('apps:run', run.dataset.runApp); } catch (error) { toast(esc(cleanErr(error)), 'err', 6000); } return; }
+  const remove = e.target.closest('[data-remove-app]');
+  if (remove && await confirmBox('Remove downloaded application', 'Move this EXE from Downloads to the Recycle Bin?', 'Remove', true)) {
+    try { await api.invoke('apps:remove', remove.dataset.removeApp); renderAppsInto($('#libScroll')); } catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+  }
+});
 
 
 function renderBulk() {
@@ -812,7 +871,7 @@ async function autoFindImages() {
 // ---------- browse ----------
 const AUTO_HOSTS = /^(coremx\.app|mxb-mods\.com|drive\.google\.com|docs\.google\.com|mediafire\.com|mega\.nz|dropbox\.com)$/;
 function hostMode(d) {
-  if (/\/folder\/|#F!|\/drive\/folders\/|\/scl\/fo\//.test(d.url)) return 'browser';
+  if (/\/folder\/|#F!|\/drive\/folders\/|\/scl\/fo\//.test(d.url)) return 'folder';
   if (AUTO_HOSTS.test(d.host)) return 'auto';
   if (/\.(pkz|zip|rar|7z|pnt)(\?|$)/i.test(d.url)) return 'auto';
   return 'browser';
@@ -820,6 +879,59 @@ function hostMode(d) {
 
 // ---------- Get Mods: free (mxb-mods.com) + both shops behind one switch ----------
 S.getSrc = 'free';
+// Keep a bounded snapshot for each Get Mods source/filter/sort/search combination.
+// A refresh builds all previously viewed pages offscreen before swapping the list.
+const BROWSE_CACHE_KEY = 'coremx:browse:v1';
+function browseKey() { const b = S.browse; return JSON.stringify([S.getSrc, b.tab, b.kind || 'all', b.brand || '', b.sort, b.query]); }
+function browseCacheRead(key) {
+  try {
+    const all = JSON.parse(localStorage.getItem(BROWSE_CACHE_KEY) || '{}');
+    const hit = all[key];
+    if (hit && Array.isArray(hit.posts) && hit.page > 0 && Date.now() - hit.at < 30 * 86400000) return hit;
+  } catch {}
+  return null;
+}
+function browseCacheWrite(key, b) {
+  if (!b.page || !b.posts.length) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(BROWSE_CACHE_KEY) || '{}');
+    all[key] = { at: Date.now(), page: b.page, totalPages: b.totalPages, total: b.total, cursor: b.cursor, posts: b.posts };
+    for (const old of Object.keys(all).sort((a, c) => all[c].at - all[a].at).slice(24)) delete all[old];
+    localStorage.setItem(BROWSE_CACHE_KEY, JSON.stringify(all));
+  } catch { /* Full or disabled browser storage must not block browsing. */ }
+}
+function browseCachedStart() {
+  const b = S.browse, key = browseKey(), hit = browseCacheRead(key);
+  b.cacheKey = key; b.error = null; b.loading = false;
+  b.page = hit?.page || 0; b.totalPages = hit?.totalPages || 1;
+  b.total = hit?.total || 0; b.cursor = hit?.cursor || null; b.posts = hit?.posts || [];
+  renderBrowseGrid();
+  if (hit) browseRefresh(key, b.reqId, hit.page);
+  else browseLoad();
+}
+async function browseRefresh(key, reqId, pages) {
+  const b = S.browse;
+  if (b.refreshing?.key === key && b.refreshing.reqId === reqId) return;
+  b.refreshing = { key, reqId };
+  try {
+    const request = { query: b.query, tab: b.tab, kind: b.kind || 'all', brand: b.brand || '', scope: S.getSrc, perPage: 30, orderby: b.sort };
+    const fresh = { posts: [], page: 0, totalPages: 1, total: 0, cursor: null };
+    for (let n = 1; n <= pages; n++) {
+      const r = await api.invoke('site:search', { ...request, page: n, cursor: fresh.cursor });
+      if (r.communityError && request.scope === 'free') throw new Error(r.communityError);
+      fresh.page = r.page; fresh.totalPages = r.totalPages; fresh.total = r.total; fresh.cursor = r.nextCursor || null;
+      fresh.posts.push(...r.posts.filter((p) => !fresh.posts.some((x) => x.id === p.id)));
+      if (n >= r.totalPages) break;
+    }
+    if (reqId !== b.reqId || key !== browseKey()) return;
+    // A source failure must not replace a complete cached section with a partial one.
+    b.posts = fresh.posts; b.page = fresh.page; b.totalPages = fresh.totalPages;
+    b.total = fresh.total; b.cursor = fresh.cursor; b.reqId++;
+    browseCacheWrite(key, b);
+    renderBrowseGrid();
+  } catch { /* Keep the last complete snapshot and retry on the next visit. */ }
+  finally { if (b.refreshing?.key === key && b.refreshing.reqId === reqId) b.refreshing = null; }
+}
 function isFree() { return (S.view === 'get' && ['free', 'addons'].includes(S.getSrc)) || (S.view === 'graphics' && S.gfxTab === 'get'); }
 function isShop() { return S.view === 'get' && !['free', 'addons'].includes(S.getSrc); }
 function renderGet(c) {
@@ -838,7 +950,7 @@ function renderGet(c) {
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-src]');
-  if (b && S.view === 'get') { if (S.getSrc === b.dataset.src) return; S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.cursor = null; S.browse.kind = 'all'; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
+  if (b && S.view === 'get') { if (S.getSrc === b.dataset.src) return; S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.cursor = null; S.browse.kind = 'all'; S.browse.brand = ''; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
 });
 
 // ---------- OEM packs ----------
@@ -962,6 +1074,7 @@ function renderBrowse(c) {
         <button class="btn btn-icon" data-act="open-site" title="Open coremx.app">${icon('external')}</button>
       </div>
       <div class="chips" id="brTabs"></div>
+      <div class="chips browse-brands" id="brBrands"></div>
       <div class="chips browse-kind" id="brKind"></div>
       <div class="scroller" id="brScroll"></div>
     </div></div>`;
@@ -972,16 +1085,26 @@ function renderBrowse(c) {
       browseReset();
     }, 380));
     $('#brSort').addEventListener('change', (e) => { S.browse.sort = e.target.value; browseReset(); });
-    $('#brTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { S.browse.tab = b.dataset.tab; S.browse.kind = 'all'; drawBrowseKind(); browseReset(); } });
+    $('#brTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) { S.browse.tab = b.dataset.tab; S.browse.kind = 'all'; S.browse.brand = ''; drawBrowseBrands(); drawBrowseKind(); browseReset(); } });
+    $('#brBrands').addEventListener('click', (e) => { const b = e.target.closest('[data-livery-brand]'); if (b) { S.browse.brand = b.dataset.liveryBrand; if (S.browse.brand) S.browse.sort = 'date'; $('#brSort').value = S.browse.sort; drawBrowseBrands(); browseReset(); } });
     $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
   $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${icon(TAB_ICONS[t.id] || 'grid')}${esc(t.label)}</button>`).join('');
+  drawBrowseBrands();
   drawBrowseKind();
-  if (!S.browse.posts.length && !S.browse.loading) browseLoad(); else renderBrowseGrid();
+  if (S.browse.cacheKey !== browseKey()) browseReset();
+  else { renderBrowseGrid(); if (S.browse.posts.length) browseRefresh(browseKey(), S.browse.reqId, S.browse.page); else if (!S.browse.loading) browseLoad(); }
 }
 
 const TAB_ICONS = { all: 'grid', tracks: 'track', bikes: 'bike', liveries: 'paint', riderkit: 'shirt', riders: 'rider', helmets: 'helmet', boots: 'boot', gloves: 'glove', protection: 'shield', goggles: 'goggles', sounds: 'power', wheels: 'tyre', graphics: 'sparkle', modpacks: 'box', other: 'settings', paid: 'cart' };
+const LIVERY_BRANDS = ['Virtual Team Bike Liveries', 'MSM', 'Alta', 'Beta', 'Fantic', 'GasGas', 'Honda', 'Husaberg', 'Husqvarna', 'KTM', 'Kawasaki', 'Suzuki', 'TM', 'Triumph', 'Yamaha'];
+function drawBrowseBrands() {
+  const box = $('#brBrands'); if (!box) return;
+  box.hidden = !(S.view === 'get' && S.getSrc === 'free' && S.browse.tab === 'liveries');
+  box.innerHTML = box.hidden ? '' : [['', 'All liveries'], ...LIVERY_BRANDS.map((name) => [name, name])].map(([brand, label]) => `<button class="chip ${S.browse.brand === brand || !S.browse.brand && !brand ? 'active' : ''}" data-livery-brand="${esc(brand)}">${esc(label)}</button>`).join('');
+  const sort = $('#brSort'); if (sort) { sort.disabled = !box.hidden && !!S.browse.brand; sort.title = sort.disabled ? 'Brand pages use the order shown on MXB Mods' : ''; }
+}
 function drawBrowseKind() {
   const box = $('#brKind'); if (!box) return;
   const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
@@ -992,28 +1115,26 @@ function drawBrowseKind() {
 }
 
 function browseReset() {
-  S.browse.loading = false;
-  S.browse.cursor = null;
-  S.browse.page = 0; S.browse.posts = []; S.browse.totalPages = 1; S.browse.error = null;
   S.browse.reqId = (S.browse.reqId || 0) + 1;
   $$('#brTabs .chip').forEach((b) => b.classList.toggle('active', b.dataset.tab === S.browse.tab));
   const scroll = $('#brScroll'); if (scroll) scroll.scrollTop = 0;
-  browseLoad();
+  browseCachedStart();
 }
 
 async function browseLoad() {
   const b = S.browse;
-  if (b.loading || b.page >= b.totalPages) return;
+  if (b.loading || b.refreshing?.key === browseKey() || b.page >= b.totalPages) return;
   b.loading = true; b.error = null;
   const reqId = b.reqId;
   renderBrowseGrid();
   try {
     let timeout;
-    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort, cursor: b.cursor });
+    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', brand: b.brand || '', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort, cursor: b.cursor });
     const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
     b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
+    browseCacheWrite(b.cacheKey || browseKey(), b);
   } catch (e) {
     if (reqId === b.reqId) b.error = e.message;
   } finally {
@@ -1102,6 +1223,66 @@ document.addEventListener('click', (e) => {
 });
 
 const openPostRefreshers = new Set();
+async function refreshNotifications() {
+  try { S.notifications = await api.invoke('online:notifications'); renderRail(); }
+  catch { /* Offline users keep the last inbox until the service is reachable. */ }
+}
+async function reportCoremxMod(post) {
+  const m = modal({ title: `Report ${esc(post.title)}`, size: 'sm', body: '<div class="loadmore"><div class="spinner"></div></div>' });
+  const form = async () => {
+    const status = await api.invoke('coremx:session');
+    if (!m.isConnected) return;
+    $('.modal-body', m).innerHTML = `${status.signedIn ? '' : '<p class="muted">Sign in with your CoreMX website account to send a report to the site admins.</p><div class="field"><label>Website username</label><input class="input" data-report-name autocomplete="username"></div><div class="field"><label>Password</label><input class="input" type="password" data-report-password autocomplete="current-password"></div><button class="btn" data-report-login>Sign in</button>'}<div class="field"><label>Reason · Other</label><textarea class="input" data-report-details rows="5" placeholder="Describe the problem with this mod"></textarea></div><button class="btn btn-primary" data-report-send ${status.signedIn ? '' : 'disabled'}>Send report</button>`;
+  };
+  await form();
+  m.addEventListener('click', async (e) => {
+    const login = e.target.closest('[data-report-login]');
+    if (login) {
+      login.disabled = true;
+      try { await api.invoke('coremx:login', $('[data-report-name]', m).value, $('[data-report-password]', m).value); await form(); }
+      catch (error) { login.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+      return;
+    }
+    const send = e.target.closest('[data-report-send]'); if (!send) return;
+    send.disabled = true;
+    try { await api.invoke('coremx:report', post.coremxId, $('[data-report-details]', m).value); m.close(); toast('Report sent to CoreMX', 'ok'); }
+    catch (error) { send.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+  });
+}
+async function openNotifications() {
+  const m = modal({ title: 'Notifications', body: '<div class="loadmore"><div class="spinner"></div></div>', size: 'sm' });
+  try {
+    const [shares, site] = await Promise.allSettled([api.invoke('online:notifications'), api.invoke('coremx:notifications')]);
+    if (!m.isConnected) return;
+    if (shares.status === 'fulfilled') { S.notifications = shares.value; renderRail(); }
+    const items = S.notifications.notifications || [];
+    const website = site.status === 'fulfilled' ? site.value : { notifications: [] };
+    $('.modal-body', m).innerHTML = `<div class="section-title">Friend shares</div>${items.length ? `<div class="notification-list">${items.map((n) => `<button class="notification-row ${n.read ? '' : 'unread'}" data-notification="${esc(n.id)}"><b>${esc(n.fromName || 'A friend')} shared a mod</b><span>${esc(n.title)}</span><small>${timeAgo(n.at)}</small></button>`).join('')}</div>` : '<p class="muted">No mod shares yet.</p>'}${website.signedIn ? `<div class="section-title">CoreMX website</div>${website.notifications.length ? `<div class="notification-list">${website.notifications.slice(0, 20).map((n) => `<div class="notification-row"><b>${esc(n.title || n.type || 'Website notification')}</b><span>${esc(n.message || n.text || '')}</span></div>`).join('')}</div>` : '<p class="muted">No website notifications.</p>'}` : ''}`;
+    m.addEventListener('click', async (e) => {
+      const row = e.target.closest('[data-notification]'); if (!row) return;
+      const n = items.find((item) => item.id === row.dataset.notification); if (!n) return;
+      try { await api.invoke('online:readNotification', n.id); refreshNotifications(); }
+      catch (error) { toast(esc(cleanErr(error)), 'err'); }
+      m.close();
+      const id = /^coremx:/.test(n.postId) ? n.postId : Number(n.postId);
+      openPost({ id, title: n.title, image: null, link: /^coremx:/.test(n.postId) ? `https://coremx.app/#/mod/${encodeURIComponent(n.postId.slice(7))}` : `https://mxb-mods.com/` , coremxId: /^coremx:/.test(n.postId) ? n.postId.slice(7) : null });
+    });
+  } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
+async function shareModDialog(post) {
+  const m = modal({ title: `Share ${esc(post.title)}`, body: '<div class="loadmore"><div class="spinner"></div></div>', size: 'sm' });
+  try {
+    const friends = (await api.invoke('online:friends')).filter((f) => f.status === 'ok');
+    if (!m.isConnected) return;
+    $('.modal-body', m).innerHTML = friends.length ? `<p class="muted">Send this mod page to a mutual CoreMX friend.</p><div class="notification-list">${friends.map((f) => `<button class="notification-row" data-share-friend="${esc(f.id)}"><b>${esc(f.name || f.id)}</b><small>${f.online ? 'Online' : 'Offline'}</small></button>`).join('')}</div>` : '<p class="muted">No mutual CoreMX friends are available. Add each other in Friends first.</p>';
+    m.addEventListener('click', async (e) => {
+      const row = e.target.closest('[data-share-friend]'); if (!row) return;
+      row.disabled = true;
+      try { await api.invoke('online:shareMod', row.dataset.shareFriend, String(post.id), post.title); m.close(); toast('Mod shared with your friend', 'ok'); }
+      catch (error) { row.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+    });
+  } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
 function isMxbModelPage(url) {
   try { const u = new URL(url); return /^https?:$/.test(u.protocol) && /^(www\.)?mxb-mods\.com$/i.test(u.hostname) && /^\/[^/]+\/?$/.test(u.pathname); } catch { return false; }
 }
@@ -1133,7 +1314,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
   const m = modal({
     title: esc(summary.title),
     body: `<div class="post"><div><div class="gallery-main">${summary.image ? `<img src="${esc(summary.image)}" data-keep="1">` : ''}</div></div><div><div class="loadmore"><div class="spinner"></div></div></div></div>`,
-    foot: `<span class="grow">${summary.coremxId ? 'coremx.app' : 'mxb-mods.com'}</span><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
+    foot: `<span class="grow">${summary.coremxId ? 'coremx.app' : 'mxb-mods.com'}</span>${summary.coremxId ? `<button class="btn" data-report-mod>${icon('alert')}Report</button>` : ''}<button class="btn" data-share-mod>${icon('share')}Share</button><button class="btn" data-open="${esc(summary.link)}">${icon('external')}Open page</button>`,
     onClose: () => { openPostRefreshers.delete(refresh); popAmbient(); },
   });
   pushAmbient(summary.image);
@@ -1152,9 +1333,9 @@ async function openPost(summary, { install = false, file = null } = {}) {
       : p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
       : (d.installed ?? installed) ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
-      : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}Install</button>`;
+      : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}${mode === 'folder' ? 'Choose file' : 'Install'}</button>`;
     return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
-      <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${d.shop ? 'Shop' : mode === 'auto' ? 'Auto-install' : 'Via browser'}</span></div></div>
+      <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${d.shop ? 'Shop' : mode === 'auto' ? 'Auto-install' : mode === 'folder' ? 'Choose file' : 'Via browser'}</span></div>${mode === 'folder' && /mediafire\.com/i.test(d.host) ? '<small class="muted">MediaFire requires Premium for whole-folder ZIPs. Open the folder and choose each file individually.</small>' : ''}</div>
       ${action}${d.modelDependencies?.length ? `<div class="download-requirements">${d.modelDependencies.map((dep) => `<div><b>${esc(dep.label)}</b><span class="${dep.installed ? 'ok-text' : 'muted'}">${dep.installed ? 'Installed' : 'Required model not installed'}</span>${dep.installed || !dep.url ? '' : dependencyButton(dep)}</div>`).join('')}</div>` : ''}<div class="download-inline" data-download-progress hidden></div></div>`;
   }).join('') : `<div class="notice warn">${icon('alert')}<div>No download links found on this page. Open it on the site to check.</div></div>`;
 
@@ -1198,6 +1379,8 @@ async function openPost(summary, { install = false, file = null } = {}) {
   };
   openPostRefreshers.add(refresh);
   if (!renderDetails()) return;
+  $('[data-share-mod]', m).addEventListener('click', () => shareModDialog(p));
+  $('[data-report-mod]', m)?.addEventListener('click', () => reportCoremxMod(p));
   if (install && !p.paid) installLinkedDownload(p, file);
   $('.modal-body', m).addEventListener('click', async (e) => {
     const findRequired = e.target.closest('[data-find-required]');
@@ -1221,7 +1404,12 @@ async function openPost(summary, { install = false, file = null } = {}) {
     if (remove) {
       if (!(await confirmBox('Delete installed files', `Move files installed by <b>${esc(p.title)}</b> to the Recycle Bin?`, 'Delete files', true))) return;
       remove.disabled = true;
-      try { await api.invoke('installs:uninstall', String(p.id)); await refreshInstalledIds(); await rescan(true); m.close(); toast('Installed files removed', 'ok'); }
+      try {
+        const result = await api.invoke('installs:uninstall', String(p.id));
+        await refreshInstalledIds(); await rescan(true);
+        if (!result?.kept) m.close(); else refresh().catch(() => {});
+        toast(result?.kept ? `Removed ${result.removed} plugin file(s); kept ${result.kept} edited or shared file(s).` : 'Installed files removed', result?.kept ? 'info' : 'ok', 6000);
+      }
       catch (error) { remove.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
       return;
     }
@@ -1406,7 +1594,7 @@ document.addEventListener('click', async (e) => {
   if (b.dataset.jobAct === 'delete-files') {
     const id = b.closest('[data-job]').dataset.job, j = S.jobs.get(id);
     if (!(await confirmBox('Delete files', j.status === 'done' ? `Move the files installed by <b>${esc(j.title)}</b> to the Recycle Bin?` : `Move the downloaded file for <b>${esc(j.title)}</b> to the Recycle Bin?`, 'Delete files', true))) return;
-    try { await api.invoke('jobs:deleteFiles', id); toast('Files deleted', 'ok'); }
+    try { const result = await api.invoke('jobs:deleteFiles', id); toast(result?.kept ? `Removed ${result.removed} plugin file(s); kept ${result.kept} edited or shared file(s).` : 'Files deleted', result?.kept ? 'info' : 'ok', 6000); }
     catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
     return;
   }
@@ -1450,6 +1638,7 @@ const UPLOAD_TYPES = [
   { id: 'protection', label: 'Chest protector', icon: 'shield', hint: 'or neck brace' },
   { id: 'protectionPaint', label: 'Protector paint', icon: 'paint' },
   { id: 'tyre', label: 'Tyres', icon: 'tyre' },
+  { id: 'plugin', label: 'Game plugin', icon: 'box', hint: '.dlo and its companion folder' },
   { id: 'custom', label: 'Something else', icon: 'folder', hint: 'choose the folder' },
 ];
 let reviewOpen = null;
@@ -1498,6 +1687,7 @@ async function openReview(id) {
     const bikeTarget = p.kind === 'bikePaint' || p.paintModelsBase === 'bikes';
     const typeControl = `<div class="field"><label>Content type</label><select data-opt="kind">${p.kinds.map((k) => `<option value="${k.id}" ${k.id === p.kind ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></div>`;
     if (p.kind === 'track') ctl.push(`<div class="field"><label>Track type</label><select data-opt="trackType">${p.trackTypes.map((t) => `<option ${t === p.options.trackType ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`);
+    if (p.kind === 'sound' && (p.needsSoundBike || p.options.soundBike)) ctl.push(`<div class="field"><label>Install sound on bike</label><select data-opt="soundBike"><option value="">Choose an installed bike…</option>${(p.soundBikes || []).map((n) => `<option value="${esc(n)}" ${n === p.options.soundBike ? 'selected' : ''}>${esc(bikeTitle(n))}</option>`).join('')}</select><small class="muted">Sound files replace the selected bike's current sounds. Close MX Bikes before installing.</small></div>`);
     if (p.riderModels?.length) {
       const choices = p.riderModels.filter((r) => r.compatible || r.unverified);
       ctl.push(choices.length
@@ -1522,13 +1712,13 @@ async function openReview(id) {
     const bikeHelp = p.bikeCompatibility?.messages.length ? `<div class="notice ${p.bikeCompatibility.blocked ? 'warn' : 'info'}">${icon(p.bikeCompatibility.blocked ? 'alert' : 'info')}<div>${p.bikeCompatibility.messages.map(esc).join('<br>')}</div></div>` : '';
     const swapHelp = (p.dependencies || []).filter((d) => d.kind === 'bikeSwap').map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model swap: ${esc(d.label)}</b><div>${d.installed ? 'Installed. Select this appearance on the matching bike before riding.' : 'This paint needs the matching model swap. Buy or install that model before using the paint.'}</div>${d.url ? dependencyButton(d) : ''}</div></div>`).join('');
     const warn = swapHelp + bikeHelp + p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
-    const waiting = p.needsPaintTarget || p.needsRiderTarget;
+    const waiting = p.needsPaintTarget || p.needsRiderTarget || p.needsSoundBike;
     const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || e.bikeMatch?.message || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${e.bikeMatch?.status === 'missing' ? 'Bike mod not installed' : e.bikeMatch?.status === 'incompatible' ? 'Incompatible bike' : waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
     $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Install for <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the base bike this download was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
       <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
-    $('#rvSummary', m).textContent = waiting ? `Choose ${bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
+    $('#rvSummary', m).textContent = waiting ? `Choose ${p.needsSoundBike ? 'an installed bike' : bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
     $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : p.kind === 'bikeSwap' ? 'Install model swap' : bikeTarget ? 'Install livery' : 'Install'}`;
-    $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || p.needsRiderTarget || p.bikeCompatibility?.blocked || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
+    $('#rvInstall', m).disabled = !p.installable || p.needsPaintTarget || p.needsRiderTarget || p.needsSoundBike || p.bikeCompatibility?.blocked || (p.paintModelsBase === 'bikes' && p.options.paintTarget && !targetMatches(p.options.paintTarget));
   };
   draw(j);
   if (j.plan.needsRiderTarget || (j.plan.requiredModels || []).some((r) => !r.installed && !r.included)) {
@@ -1576,9 +1766,10 @@ async function openReview(id) {
 }
 
 // ---------- rider (loadout per bike, stored in the game profile) ----------
-S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null, drafts: {}, selectionDirty: false };
+S.rider = { profile: null, profiles: [], bikes: null, bike: null, lo: null, drafts: {}, identityDrafts: {}, selectionDirty: false };
 const riderDraftKey = () => `${S.rider.profile}|${S.rider.bike}`;
-const riderDirty = () => S.rider.selectionDirty || Object.keys(S.rider.drafts[riderDraftKey()] || {}).length > 0;
+const riderChanges = () => ({ ...(S.rider.drafts[riderDraftKey()] || {}), ...(S.rider.identityDrafts[S.rider.profile] || {}) });
+const riderDirty = () => S.rider.selectionDirty || Object.keys(riderChanges()).length > 0;
 const SLOT_ICONS = { bikePaint: 'paint', rider: 'rider', helmet: 'helmet', helmetPaint: 'paint', gogglesPaint: 'goggles', suitPaint: 'shirt', protection: 'shield', protectionPaint: 'paint', glovesPaint: 'glove', boots: 'boot', bootsPaint: 'paint' };
 const PAINT_SLOTS = new Set(['bikePaint', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'protectionPaint', 'glovesPaint', 'bootsPaint']);
 // Choosing a new model resets the paints that belonged to the old one.
@@ -1638,7 +1829,7 @@ async function renderRider(c) {
     }
     if (!R.bikes) { const bikes = await api.invoke('rider:bikes', R.profile); if (request !== R.renderRequest) return; R.bikes = bikes; }
     if (!R.bike) R.bike = (R.bikes.find((b) => b.selected) || R.bikes.find((b) => b.installed) || R.bikes[0] || {}).id;
-    const loadout = await api.invoke('rider:loadout', R.profile, R.bike, R.drafts[riderDraftKey()] || {});
+    const loadout = await api.invoke('rider:loadout', R.profile, R.bike, riderChanges());
     if (request !== R.renderRequest) return;
     R.lo = loadout;
   } catch (e) {
@@ -1710,11 +1901,24 @@ function drawRider(c) {
       </div><div class="stage-note muted" id="stageNote"></div></div>
       <div class="rider-wrap">
       <div class="outfit-bike-context"><span class="muted">Outfit for ${esc(bikeTitle(R.bike))}</span><button class="btn btn-sm" data-rider-tab="bike">${icon('bike')}Bike & livery</button></div>
+      <div class="section-title">Rider identity</div><div class="slot-grid rider-identity-fields"><label class="field"><span>Rider name</span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.name)}" autocomplete="off" spellcheck="false"></label><label class="field"><span>Rider number</span><input class="input" id="riderNumberInput" type="number" min="0" max="999" step="1" value="${esc(lo.identity.number)}" placeholder="No number"></label></div><p class="muted" style="font-size:12px">The name and number appear in MX Bikes after you Apply. CoreMX online syncing uses your Steam account.</p>
       ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g && s.id !== 'bikeAppearance').map(tile).join('')}</div>`).join('')}
       <p class="muted" style="margin-top:22px;font-size:12px">${icon('info')} Close MX Bikes before changing gear here. A backup of your profile is kept next to it.</p>
     </div></div></div></div></div>`;
   mountRiderViewer();
   mountProfileControls();
+  for (const [id, key] of [['riderNameInput', 'riderName'], ['riderNumberInput', 'riderNumber']]) {
+    const input = $('#' + id);
+    input?.addEventListener('change', () => {
+      const value = input.value.trim();
+      const saved = key === 'riderName' ? lo.savedIdentity.name : lo.savedIdentity.number;
+      const draft = { ...(R.identityDrafts[R.profile] || {}) };
+      if (value === saved) delete draft[key]; else draft[key] = value;
+      if (Object.keys(draft).length) R.identityDrafts[R.profile] = draft; else delete R.identityDrafts[R.profile];
+      R.saveState = 'Preview changes';
+      renderRider($('#content'));
+    });
+  }
 }
 
 function profileControlsHtml() {
@@ -1730,7 +1934,7 @@ function mountProfileControls() {
   if (view && riderDirty()) {
     view.classList.add('has-save-bar');
     // Still the same setup that was queued? (Further edits need Apply again.)
-    const queued = S.rider.queued?.get(riderDraftKey()) === JSON.stringify(S.rider.drafts[riderDraftKey()] || {});
+    const queued = S.rider.queued?.get(riderDraftKey()) === JSON.stringify(riderChanges());
     view.insertAdjacentHTML('beforeend', queued
       ? `<div class="save-bar queued"><span class="save-dot"></span><div><b>Waiting for MX Bikes to close</b><small>This outfit is saved automatically a few seconds after you exit the game.</small></div><button class="btn" data-act="rider-cancel-queued">Cancel</button></div>`
       : `<div class="save-bar"><span class="save-dot"></span><div><b>Unsaved changes</b><small>You're previewing. Apply saves it to the game.</small></div><button class="btn" data-act="rider-revert">Revert</button><button class="btn btn-primary" data-act="rider-apply">${icon('check')}Apply to game</button></div>`);
@@ -2650,19 +2854,19 @@ document.addEventListener('click', async (e) => {
     case 'rider-apply': {
       a.disabled = true;
       try {
-        const result = await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {});
+        const result = await api.invoke('rider:apply', S.rider.profile, S.rider.bike, riderChanges());
         if (result && result.queued) {
           // The game is open: the preview stays on screen and is saved when MX Bikes closes.
-          (S.rider.queued ||= new Map()).set(riderDraftKey(), JSON.stringify(S.rider.drafts[riderDraftKey()] || {}));
+          (S.rider.queued ||= new Map()).set(riderDraftKey(), JSON.stringify(riderChanges()));
           await renderRider($('#content'));
           toast('MX Bikes is open, so this will be saved automatically when you close the game', 'info', 5000);
           break;
         }
-        delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
+        delete S.rider.drafts[riderDraftKey()]; delete S.rider.identityDrafts[S.rider.profile]; S.rider.selectionDirty = false; S.rider.saveState = 'Saved'; S.rider.bikes = null; await renderRider($('#content')); toast('Saved to your active game profile', 'ok'); }
       catch (err) { a.disabled = false; toast(esc(cleanErr(err)), 'err', 7000); } break;
     }
     case 'rider-cancel-queued': await api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike); S.rider.queued?.delete(riderDraftKey()); await renderRider($('#content')); toast('Cancelled. Your preview is still here to Apply or Revert.', 'info', 3000); break;
-    case 'rider-revert': S.rider.queued?.delete(riderDraftKey()); api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike).catch(() => {}); delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
+    case 'rider-revert': S.rider.queued?.delete(riderDraftKey()); api.invoke('rider:cancelPendingApply', S.rider.profile, S.rider.bike).catch(() => {}); delete S.rider.drafts[riderDraftKey()]; delete S.rider.identityDrafts[S.rider.profile]; S.rider.selectionDirty = false; S.rider.saveState = ''; S.rider.profile = null; S.rider.bike = null; S.rider.bikes = null; await renderRider($('#content')); break;
     case 'rider-refresh': if (!riderDirty()) { S.rider.profile = null; S.rider.bike = null; } S.rider.bikes = null; S.rider.modelKey = null; S.rider.bikeModelKey = null; S.gearThumbs.clear(); await renderRider($('#content')); toast('Rider and bike refreshed from the game', 'ok'); break;
     case 'profile-delete': {
       if (!await confirmBox('Delete rider profile?', `Move <b>${esc(S.rider.profile)}</b> and its saved gear and settings to the Recycle Bin? Another profile will be selected if this one is active.`, 'Delete profile', true)) break;
@@ -2920,6 +3124,7 @@ api.on('jobs:review', (id) => {
 });
 const onLibraryChanged = debounce(async () => {
   S.gearThumbs.clear();
+  S.gfx = null; S.plugins = null; S.apps = null;
   await refreshInstalledIds(); await rescan(true);
   for (const refresh of openPostRefreshers) refresh().catch(() => {});
   S.friendDialog?.refresh(true);
@@ -2977,6 +3182,8 @@ function updateFor(postId, modified) {
   renderRail();
   render();
   refreshAccounts().catch(() => {});
+  setTimeout(refreshNotifications, 3000);
+  setInterval(refreshNotifications, 30000);
   api.invoke('app:updates').then((state) => { if (state) { S.appUpdate = state; drawAppUpdate(); } }).catch(() => {});
   api.invoke('site:tabs').then((t) => { S.tabs = t; if (isFree()) render(); });
   refreshInstalledIds();

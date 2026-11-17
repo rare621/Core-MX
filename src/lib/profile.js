@@ -93,6 +93,26 @@ function currentBike(prof) {
   return pick(sec('category'), info.class) || pick(sec('bike'), info.class) || info.bikeid || null;
 }
 
+function riderIdentity(prof) {
+  const info = prof.sections.info?.values || {};
+  return { name: info.name || '', number: info.race_number || '' };
+}
+
+function validateRiderIdentity(changes) {
+  const values = [];
+  if (Object.hasOwn(changes, 'riderName')) {
+    const name = String(changes.riderName || '').trim();
+    if (!name || name.length > 40 || /[=\r\n\x00-\x1f]/.test(name) || [...name].some((char) => char.codePointAt(0) > 255)) throw new Error('Rider name must be 1–40 characters supported by MX Bikes');
+    values.push(['info', 'name', name]);
+  }
+  if (Object.hasOwn(changes, 'riderNumber')) {
+    const number = String(changes.riderNumber ?? '').trim();
+    if (number && (!/^\d{1,3}$/.test(number) || Number(number) > 999)) throw new Error('Rider number must be between 0 and 999');
+    values.push(['info', 'race_number', number]);
+  }
+  return values;
+}
+
 async function listBikes(modsDir, prof) {
   const set = new Map();
   for (const d of await bikeDirs(modsDir)) {
@@ -294,4 +314,4 @@ async function deleteProfile(userDir, value, trash) {
   return listProfiles(userDir);
 }
 
-module.exports = { SLOTS, currentBike, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile, deleteProfile };
+module.exports = { SLOTS, currentBike, riderIdentity, validateRiderIdentity, findBikeDir, gearDir, listProfiles, readProfile, listBikes, loadout, saveLoadouts, writeValues, isGameRunning, createProfile, activateProfile, deleteProfile };

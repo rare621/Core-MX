@@ -55,6 +55,42 @@ test('sealed store rider hoodie packages route as rider models from their packag
   const kind = await detectKind([{ rel: 'Rider-Hoodie-ABDesigns.pkz', abs: 'missing-but-sealed.pkz' }]);
   assert.deepEqual(kind, { kind: 'riderModel', reason: 'package-name' });
 });
+test('loose sound packs require a bike and skip other engine sizes', async (t) => {
+  const root = await folder(t), modsDir = path.join(root, 'mods');
+  await fs.mkdir(path.join(modsDir, 'bikes'), { recursive: true });
+  await fs.writeFile(path.join(modsDir, 'bikes', 'KX250.pkz'), 'bike');
+  const files = [
+    { rel: '250/engine.scl', abs: '250', size: 1 },
+    { rel: '450/engine.scl', abs: '450', size: 1 },
+  ];
+  const context = { modsDir, categories: [46], title: 'Two bike sounds' };
+  const pending = installer.plan(files, context);
+  assert.equal(pending.needsSoundBike, true);
+  assert.equal(pending.installable, 0);
+  const selected = installer.plan(files, context, { soundBike: 'KX250' });
+  assert.equal(selected.needsSoundBike, false);
+  assert.equal(selected.entries[0].dest, 'bikes/KX250/engine.scl');
+  assert.equal(selected.entries[1].status, 'skip');
+  assert.equal(selected.installable, 1);
+});
+test('damage plugin archives go to game plugins even when tagged as graphics', async (t) => {
+  const root = await folder(t);
+  const files = [
+    { rel: 'mxb_damage.dlo', abs: 'a', size: 1 },
+    { rel: 'mxb_damage/settings.ini', abs: 'b', size: 1 },
+    { rel: 'mxb_damage/parts/KX250.ini', abs: 'c', size: 1 },
+    { rel: 'mxb_damage/mxb_damage_updater.exe', abs: 'd', size: 1 },
+  ];
+  assert.equal((await detectKind(files)).kind, 'plugin');
+  const plan = installer.plan(files, { modsDir: path.join(root, 'mods'), installDir: root, categories: [174], title: 'MXB Damage' }, { kind: 'graphics' });
+  assert.equal(plan.kind, 'plugin');
+  assert.equal(plan.root, 'game');
+  assert.deepEqual(plan.entries.map((entry) => entry.dest), [
+    'plugins/mxb_damage.dlo', 'plugins/mxb_damage/settings.ini',
+    'plugins/mxb_damage/parts/KX250.ini', 'plugins/mxb_damage/mxb_damage_updater.exe',
+  ]);
+  assert.equal(plan.confident, false);
+});
 
 test('mixed gear archives route body, gloves and boot paints from their own paths', () => {
   const files = [

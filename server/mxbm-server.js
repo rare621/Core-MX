@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 6;
+const VERSION = 8;
 
 const SERVER_TTL = 2 * 60 * 1000;    // live rows only: the manager reports every 30 seconds
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
@@ -147,6 +147,7 @@ const routes = {
     const state = {
       inGame: !!s.inGame, inEvent: !!s.inEvent, server: str(s.server, 64) || null, serverAddress: isAddress(s.serverAddress) ? s.serverAddress : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
+      riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
     };
     // The game plugin reports a fresh non-event state as soon as MX Bikes
@@ -184,7 +185,17 @@ const routes = {
   'GET /v1/servers': async () => {
     const now = Date.now();
     const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL)
-      .map((s) => ({ name: s.name, address: s.address, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders: s.riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length }))
+      .map((s) => {
+        const reporters = (s.seenBy || []).map((id) => ({ id, user: db.users[id], presence: presence.get(id) }))
+          .filter(({ user, presence: p }) => user && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name));
+        const riders = s.riders.map((r) => {
+          const matchingRows = s.riders.filter((other) => normName(other.name) === normName(r.name));
+          const matchingUsers = reporters.filter(({ presence: p }) => [p.state.riderName, p.state.riderProfile].some((n) => n && normName(n) === normName(r.name)));
+          return matchingRows.length === 1 && matchingUsers.length === 1
+            ? { ...r, coremxName: matchingUsers[0].user.name } : r;
+        });
+        return { name: s.name, address: s.address, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
+      })
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];
   },
@@ -207,6 +218,35 @@ const routes = {
       return { ...presenceView(id), status: 'ok' };
     });
     return [200, { friends: out }];
+  },
+
+  // Small, private inbox for mod links shared by mutual friends. No files are
+  // uploaded here and a link never grants access to a paid download.
+  'POST /v1/modshare': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const to = String(body.to || ''), recipient = db.users[to];
+    if (!isSteamId(to) || !recipient || !(me.user.friends || []).includes(to) || !(recipient.friends || []).includes(me.id)) return [403, { error: 'You can only share with a mutual CoreMX friend.' }];
+    const postId = str(body.postId, 90), title = str(body.title, 140);
+    const validId = /^coremx:[A-Za-z0-9_-]{1,80}$/.test(postId) || /^\d{1,12}$/.test(postId);
+    if (!validId || !title) return [400, { error: 'Invalid mod link.' }];
+    const inbox = recipient.notifications || (recipient.notifications = []);
+    inbox.unshift({ id: crypto.randomUUID(), from: me.id, fromName: me.user.name, postId, title, at: Date.now(), read: false });
+    recipient.notifications = inbox.slice(0, 100);
+    save();
+    return [200, { ok: true }];
+  },
+  'GET /v1/notifications': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const now = Date.now();
+    const list = (me.user.notifications || []).filter((n) => now - n.at < 30 * 86400000);
+    if (list.length !== (me.user.notifications || []).length) { me.user.notifications = list; save(); }
+    return [200, { notifications: list, unread: list.filter((n) => !n.read).length }];
+  },
+  'POST /v1/notifications/read': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const notification = (me.user.notifications || []).find((n) => n.id === body.id);
+    if (!notification) return [404, { error: 'Notification not found.' }];
+    notification.read = true; save(); return [200, { ok: true }];
   },
 
   // Which of these Steam IDs use this service (for "add from Steam friends").

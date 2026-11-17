@@ -26,6 +26,7 @@ const health = require('./src/lib/health');
 const ranked = require('./src/lib/ranked');
 const graphics = require('./src/lib/graphics');
 const graphicsPackages = require('./src/lib/graphics-packages');
+const pluginFiles = require('./src/lib/plugin-files');
 const recentInstalls = require('./src/lib/recent-installs');
 const equipInstalled = require('./src/lib/equip-installed');
 const serverPing = require('./src/lib/server-ping');
@@ -450,6 +451,7 @@ function jobView(j) {
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable, bikeCompatibility: p.bikeCompatibility,
+      needsSoundBike: p.needsSoundBike, soundBikes: p.soundBikes,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
       requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget, requiresModelWarning: p.requiresModelWarning,
@@ -492,6 +494,19 @@ async function afterDownload(j, file) {
   j.file = file;
   j.status = 'extracting'; emitJob(j);
   try {
+    if (/\.exe$/i.test(file)) {
+      const downloads = app.getPath('downloads');
+      await fsp.mkdir(downloads, { recursive: true });
+      const ext = path.extname(file), base = path.basename(file, ext);
+      let target = path.join(downloads, path.basename(file)), n = 2;
+      while (fs.existsSync(target)) target = path.join(downloads, `${base} (${n++})${ext}`);
+      await fsp.copyFile(file, target);
+      const appId = crypto.randomUUID();
+      store.update('apps', (all) => [{ id: appId, title: j.title, path: target, link: j.link, downloadedAt: Date.now() }, ...(all || [])].slice(0, 100));
+      j.status = 'done'; j.note = `Application saved to Downloads: ${path.basename(target)}. Open My Mods → Apps to run it.`;
+      j.appId = appId; j.installed = []; emitJob(j); cleanupStage(j); send('library:changed', {});
+      return;
+    }
     j.files = await archive.stage(file, j.stageDir, store.get('settings'));
     j.ctx = {
       modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, categories: j.categories || [], categoryNames: j.categoryNames || [], title: j.title,
@@ -515,7 +530,7 @@ async function afterDownload(j, file) {
     const targetRoot = j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
     if (j.plan.kind !== 'bikeSwap' && j.plan.root !== 'game' && !j.plan.counts.unresolved && await filesMatch(placed, targetRoot)) {
       if (j.abort.signal.aborted) throw new Error('Cancelled');
-      recordInstall(j, placed.map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest));
+      await recordInstall(j, placed.map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest));
       j.status = 'done'; j.installed = []; j.note = 'Already installed — you have these exact files, nothing was changed.';
       await recycleSourceArchive(j);
       emitJob(j); cleanupStage(j); send('library:changed', {});
@@ -531,6 +546,9 @@ async function doInstall(j, opts) {
   try {
     j.status = 'installing'; emitJob(j);
     j.plan = installer.plan(j.files, j.ctx, opts);
+    if (j.plan.needsSoundBike) throw new Error('Choose a compatible installed bike for every sound file before installing.');
+    if (j.plan.root === 'game' && !store.get('settings').gameInstallDir) throw new Error('Set your MX Bikes install folder in Settings first.');
+    if (j.plan.kind === 'plugin' && await profile.isGameRunning()) throw new Error('Close MX Bikes before installing a game plugin.');
     if (j.plan.kind === 'bikeSwap') {
       if (j.plan.counts.unresolved || !j.plan.installable) throw new Error('Choose the exact base bike for this model swap first.');
       const visualEntries = [...require('./src/lib/bike-swaps').groups(j.plan).values()].flat();
@@ -540,7 +558,7 @@ async function doInstall(j, opts) {
       await bikeSwaps.install(j.plan, { title: j.title, link: j.link, recordKey: key }, j.abort.signal);
       const paintPlan = { ...j.plan, entries: j.plan.entries.filter((e) => e.dest && /\.pnt$/i.test(e.dest)) };
       if (paintPlan.entries.length) written.push(...await installer.apply(paintPlan, modsDir(), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') }));
-      recordInstall(j, written);
+      await recordInstall(j, written);
       j.installed = written; j.status = 'done'; j.note = 'Model swap installed. Select it under Rider → Bike → Appearance, then Apply.';
       emitJob(j); cleanupStage(j); send('library:changed', {}); return;
     }
@@ -556,12 +574,12 @@ async function doInstall(j, opts) {
     const applyAndRecord = async () => {
       const written = (await installer.apply(j.plan, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir(), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') })).map((w) => (j.plan.root === 'game' ? 'game:' : '') + w);
       if (!written.length) throw new Error('Nothing was installed: no file had a destination.');
-      recordInstall(j, written);
+      await recordInstall(j, written);
       j.installed = written; j.equipCandidates = await equipInstalled.choicesFromFiles(written, modsDir());
       j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}`; emitJob(j);
       return written;
     };
-    const written = j.plan.root === 'game' ? await graphicsManager.install(j.plan, installKey(j, j.plan.entries.filter((e) => e.dest).map((e) => 'game:' + e.dest)), applyAndRecord) : await applyAndRecord();
+    const written = j.plan.kind === 'graphics' ? await graphicsManager.install(j.plan, installKey(j, j.plan.entries.filter((e) => e.dest).map((e) => 'game:' + e.dest)), applyAndRecord) : await applyAndRecord();
     j.installed = written;
     if (j.sourceArchive) {
       const entries = j.plan.entries.filter((e) => written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest));
@@ -577,18 +595,38 @@ async function doInstall(j, opts) {
 }
 
 function installKey(j, written) { return j.postId ? String(j.postId) : j.shopKey || 'local:' + crypto.createHash('sha1').update(j.title + written[0]).digest('hex').slice(0, 12); }
-function recordInstall(j, written) {
+async function recordInstall(j, written) {
   const key = installKey(j, written);
+  const hashes = {};
+  if (j.plan?.kind === 'plugin') for (const entry of j.plan.entries.filter((e) => e.dest && written.includes('game:' + e.dest))) {
+    hashes['game:' + entry.dest] = await pluginFiles.digest(entry.abs);
+  }
   store.update('installs', (all) => {
     const prev = all[key];
     all[key] = {
       postId: j.postId || null, shopKey: j.shopKey || null, title: j.title, link: j.link || null, image: j.image || null,
       categories: j.categories || [], siteModified: j.modified || null, installedAt: Date.now(),
       downloads: { ...(prev?.downloads || {}), ...((j.url || j.source) ? { [j.url || j.source]: written } : {}) },
-      source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.root === 'game' ? true : undefined, files: Array.from(new Set([...(prev && j.plan?.root !== 'game' ? prev.files : []), ...written])),
+      source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.kind === 'graphics' ? true : undefined,
+      hashes: { ...(prev?.hashes || {}), ...hashes }, files: Array.from(new Set([...(prev && j.plan?.root !== 'game' ? prev.files : []), ...written])),
     };
     return all;
   });
+}
+
+async function uninstallPluginRecord(key) {
+  const records = store.get('installs'), rec = records[key];
+  if (!rec || rec.kind !== 'plugin') return null;
+  if (await profile.isGameRunning()) throw new Error('Close MX Bikes before removing a game plugin.');
+  const result = await pluginFiles.removeOwned({ key, record: rec, records, gameDir: store.get('settings').gameInstallDir, trash: (file) => shell.trashItem(file) });
+  store.update('installs', (all) => {
+    const next = { ...all };
+    if (result.kept.length) next[key] = { ...next[key], postId: result.kept.some((file) => /\.dlo$/i.test(file)) ? next[key].postId : null, files: result.kept, hashes: Object.fromEntries(Object.entries(next[key].hashes || {}).filter(([file]) => result.kept.includes(file))) };
+    else delete next[key];
+    return next;
+  });
+  send('library:changed', {});
+  return { removed: result.removed.length, kept: result.kept.length };
 }
 
 function cleanupStage(j) {
@@ -845,6 +883,7 @@ function registerIpc() {
   handle('site:tabs', () => site.BROWSE_TABS.map(({ id, label }) => ({ id, label })));
   handle('site:search', async (q) => {
     if (!['free', 'addons'].includes(q?.scope)) return site.search(q);
+    if (q?.scope === 'free' && q.tab === 'liveries' && q.brand) return site.search(q);
     const [legacy, community] = await Promise.allSettled([site.search(q), coremx.search(q)]);
     if (q.orderby?.startsWith('popular') && legacy.status === 'rejected') throw legacy.reason;
     if (legacy.status === 'rejected' && (community.status === 'rejected' || !community.value.posts.length)) throw legacy.reason;
@@ -940,6 +979,10 @@ function registerIpc() {
     }
     return post;
   });
+  handle('coremx:login', (name, password) => coremx.websiteLogin(name, password));
+  handle('coremx:session', () => coremx.websiteSession());
+  handle('coremx:report', (id, details) => coremx.reportMod(id, details));
+  handle('coremx:notifications', () => coremx.websiteNotifications());
   handle('site:installedIds', () => Object.values(store.get('installs')).filter((r) => r.postId).map((r) => r.postId));
   handle('installs:keys', () => Object.values(store.get('installs')).map((r) => ({ postId: r.postId, shopKey: r.shopKey, title: r.title, siteModified: r.siteModified })));
 
@@ -970,6 +1013,12 @@ function registerIpc() {
   handle('jobs:reveal', (id) => {
     const j = jobs.get(id);
     if (!j) throw new Error('Download not found');
+    if (j.appId) {
+      const item = (store.get('apps') || []).find((entry) => entry.id === j.appId);
+      if (!item || !fs.existsSync(item.path)) throw new Error('Application file is missing from Downloads.');
+      shell.showItemInFolder(item.path);
+      return;
+    }
     const installed = (j.installed && j.installed[0]) || (j.status === 'done' && j.plan?.entries.find((e) => e.dest)?.dest);
     const root = j.plan?.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
     const candidates = j.status === 'done' ? [installed && path.resolve(root, installed.replace(/^game:/, ''))] : [j.file, j.sourceArchive];
@@ -981,10 +1030,31 @@ function registerIpc() {
   handle('jobs:deleteFiles', async (id) => {
     const j = jobs.get(id);
     if (!j) throw new Error('Download not found');
+    if (j.appId) {
+      const item = (store.get('apps') || []).find((entry) => entry.id === j.appId);
+      if (item) {
+        const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
+        if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
+        if (fs.existsSync(item.path)) await shell.trashItem(item.path);
+        store.update('apps', (all) => (all || []).filter((entry) => entry.id !== j.appId));
+      }
+      j.status = 'error'; j.filesDeleted = true; j.note = 'Application moved to the Recycle Bin'; emitJob(j); send('library:changed', {});
+      return { removed: item ? 1 : 0 };
+    }
     if (['downloading', 'queued', 'extracting', 'installing'].includes(j.status)) throw new Error('Cancel the download before deleting its files');
     if (j.status !== 'done') { if (j.file && fs.existsSync(j.file)) await shell.trashItem(j.file); cleanupStage(j); j.status = 'error'; j.error = 'Downloaded files deleted'; emitJob(j); return; }
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes before deleting installed files');
     const swapKey = installKey(j, j.installed || []);
+    if (j.plan?.kind === 'plugin') {
+      const result = await uninstallPluginRecord(swapKey);
+      if (!result) throw new Error('Plugin install record was not found.');
+      j.installed = store.get('installs')[swapKey]?.files || [];
+      j.filesDeleted = !j.installed.length;
+      j.note = result.kept ? `Removed ${result.removed} verified plugin file(s); kept ${result.kept} edited or shared file(s).` : `Removed ${result.removed} plugin file(s) to the Recycle Bin.`;
+      if (j.filesDeleted) j.status = 'error';
+      emitJob(j);
+      return result;
+    }
     if (bikeSwaps.hasRecord(swapKey)) {
       await bikeSwaps.removeRecord(swapKey);
       const record = store.get('installs')[swapKey];
@@ -992,7 +1062,7 @@ function registerIpc() {
       store.update('installs', (all) => { const n = { ...all }; delete n[swapKey]; return n; });
       j.status = 'error'; j.error = null; j.installed = []; j.filesDeleted = true; j.note = 'Model swap removed; original bike restored'; emitJob(j); send('library:changed', {}); return;
     }
-    if (j.plan?.root === 'game') {
+    if (j.plan?.kind === 'graphics') {
       await graphicsManager.uninstall(installKey(j, j.installed || []));
       j.status = 'error'; j.error = null; j.installed = []; j.filesDeleted = true; j.note = 'Graphics package removed; original game files restored'; emitJob(j); send('library:changed', {}); return;
     }
@@ -1255,6 +1325,9 @@ function registerIpc() {
       return matches.length === 1 ? { ...f, address: matches[0] } : f;
     });
   });
+  handle('online:notifications', () => online.notifications());
+  handle('online:shareMod', (to, postId, title) => online.shareMod(to, postId, title));
+  handle('online:readNotification', (id) => online.readNotification(id));
   handle('online:paintSync', (on) => online.setPaintSync(on));
   handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
   handle('online:serverRiders', (server) => online.serverRiders(String(server || '').slice(0, 64)));
@@ -1282,8 +1355,46 @@ function registerIpc() {
     return list.map((f) => ({ ...f, onService: known.includes(f.steamId) }));
   });
   handle('servers:list', () => store.get('servers') || []);
+  handle('servers:recent', async () => addKnownServerAddresses(store.get('recentServers') || []));
   handle('servers:save', (list) => { store.set('servers', list); return list; });
   handle('friends:list', () => store.get('friends') || []);
+  handle('plugins:scan', async () => {
+    const gameDir = store.get('settings').gameInstallDir;
+    const pluginsDir = gameDir && path.join(gameDir, 'plugins');
+    if (!pluginsDir || !fs.existsSync(pluginsDir)) return [];
+    const records = Object.entries(store.get('installs') || {});
+    return (await fsp.readdir(pluginsDir, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.dlo$/i.test(entry.name)).map((entry) => {
+      const record = records.find(([, rec]) => (rec.files || []).some((file) => file.toLowerCase() === `game:plugins/${entry.name.toLowerCase()}`));
+      return { name: entry.name, title: record?.[1].title || entry.name.replace(/\.dlo$/i, ''), path: path.join(pluginsDir, entry.name), managed: !!record, recordKey: record?.[0] || '' };
+    });
+  });
+  handle('plugins:reveal', (name) => {
+    if (!/^[^\\/:*?"<>|]+\.dlo$/i.test(name)) throw new Error('Invalid plugin name');
+    const file = path.join(store.get('settings').gameInstallDir || '', 'plugins', name);
+    if (!insideGame(file) || !fs.existsSync(file)) throw new Error('Game plugin is missing');
+    shell.showItemInFolder(file);
+  });
+  handle('apps:list', () => (store.get('apps') || []).filter((item) => /\.exe$/i.test(item.path) && fs.existsSync(item.path)));
+  handle('apps:run', async (id) => {
+    const item = (store.get('apps') || []).find((entry) => entry.id === id);
+    if (!item || !/\.exe$/i.test(item.path) || !fs.existsSync(item.path)) throw new Error('Application file is missing from Downloads.');
+    const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
+    if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
+    const error = await shell.openPath(item.path);
+    if (error) throw new Error(error);
+    return true;
+  });
+  handle('apps:remove', async (id) => {
+    const item = (store.get('apps') || []).find((entry) => entry.id === id);
+    if (!item) return false;
+    const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
+    if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
+    if (fs.existsSync(item.path)) await shell.trashItem(item.path);
+    store.update('apps', (all) => (all || []).filter((entry) => entry.id !== id));
+    for (const job of jobs.values()) if (job.appId === id) { job.status = 'error'; job.filesDeleted = true; job.note = 'Application moved to the Recycle Bin'; emitJob(job); }
+    send('library:changed', {});
+    return true;
+  });
   handle('friends:save', (list) => { store.set('friends', list); return list; });
 
   // ---- fix & clean ----
@@ -1386,7 +1497,7 @@ function registerIpc() {
     // Match MX Bikes: an absent per-bike protection inherits [info] protection.
     const protection = changes.protection ?? (prof.sections.protection?.values[bike] || prof.sections.info?.values.protection || '');
     for (const [slot, value] of Object.entries(changes || {})) {
-      if (slot === 'bikeAppearance') continue;
+      if (slot === 'bikeAppearance' || slot === 'riderName' || slot === 'riderNumber') continue;
       const desc = profile.SLOTS.find((s) => s.id === slot);
       if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
       next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
@@ -1410,6 +1521,8 @@ function registerIpc() {
     lo.appearances = appearances.options;
     lo.current.bikeAppearance = changes.bikeAppearance ?? appearances.active;
     lo.savedCurrent.bikeAppearance = appearances.active;
+    lo.identity = { ...profile.riderIdentity(prof), ...(Object.hasOwn(changes, 'riderName') ? { name: changes.riderName } : {}), ...(Object.hasOwn(changes, 'riderNumber') ? { number: changes.riderNumber } : {}) };
+    lo.savedIdentity = profile.riderIdentity(prof);
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
     lo.options.bikePaint = [...new Set(['', ...lo.options.bikePaint, ...packed])];
@@ -1421,6 +1534,7 @@ function registerIpc() {
   // Queue them instead and write them a few seconds after the game closes.
   handle('rider:apply', async (name, bike, changes = {}) => {
     if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
+    profile.validateRiderIdentity(changes);
     if (await profile.isGameRunning()) {
       store.update('pendingApply', (all) => ({ ...(all || {}), [`${name}|${bike}`]: { name, bike, changes, at: Date.now() } }));
       watchPendingApply();
@@ -1436,7 +1550,8 @@ function registerIpc() {
     const next = await profile.loadout(modsDir(), preview, bike, stockRiderPkz());
     if (changes.tyres && !next.options.tyres.includes(changes.tyres)) throw new Error('That tyre set is not available for this bike. Choose one from its tyre list.');
     if (next.current.suitPaint) await paintCompat.validateRiderPaint({ modsDir: modsDir(), stockPkz: stockRiderPkz(), current: next.current });
-    const values = Object.entries(changes).filter(([slot]) => slot !== 'bikeAppearance').map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
+    const values = Object.entries(changes).filter(([slot]) => profile.SLOTS.some((s) => s.id === slot)).map(([slot, value]) => { const desc = profile.SLOTS.find((s) => s.id === slot); return [desc.section, desc.key === 'protectionModel' ? next.current.protection || '' : bike, value]; });
+    values.push(...profile.validateRiderIdentity(changes));
     // The game uses [info] protection as a fallback for an empty per-bike
     // setting.  Without this, the UI says None while the stock chest remains.
     values.push(['info', 'protection', next.current.protection || '']);
@@ -1448,7 +1563,8 @@ function registerIpc() {
     try { await profile.writeValues(profUserDir(), name, values); await profile.activateProfile(profUserDir(), name); }
     catch (error) { if (Object.hasOwn(changes, 'bikeAppearance')) await bikeSwaps.select(bike, previousAppearance); throw error; }
     const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
-    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
+    const identity = profile.riderIdentity(saved);
+    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : slot === 'riderName' ? identity.name : slot === 'riderNumber' ? identity.number : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
     online?.syncPaints().catch(() => {}); return { saved: true };
   }
   let pendingWatch = null;
@@ -1603,6 +1719,11 @@ function registerIpc() {
     const rec = store.get('installs')[key];
     if (!rec) return;
     const resetJobs = () => { for (const j of jobs.values()) if (j.status === 'done' && (String(j.postId) === key || j.installed?.some((f) => rec.files.includes(f)))) { j.filesDeleted = true; j.installed = []; j.status = 'error'; j.error = null; j.note = 'Installed files removed'; emitJob(j); } };
+    if (rec.kind === 'plugin') {
+      const result = await uninstallPluginRecord(key);
+      if (!result.kept) resetJobs();
+      return result;
+    }
     if (bikeSwaps.hasRecord(key)) { await bikeSwaps.removeRecord(key); for (const rel of rec.files) if (/\.pnt$/i.test(rel) && insideRootsStrict(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel)); store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; }); resetJobs(); send('library:changed', {}); return; }
     if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); resetJobs(); send('library:changed', {}); return; }
     for (const f of rec.files) {
@@ -1715,7 +1836,7 @@ if (!process.env.MXB_DEBUG_SHOT) {
 ipcMain.handle('deeplink:ready', () => linkInbox.ready());
 
 app.whenReady().then(async () => {
-  store = new Store(path.join(app.getPath('userData'), 'data.json'), { settings: {}, installs: {}, images: {}, favorites: [], servers: [], friends: [] });
+  store = new Store(path.join(app.getPath('userData'), 'data.json'), { settings: {}, installs: {}, images: {}, favorites: [], servers: [], recentServers: [], friends: [], apps: [] });
   thumbs = new Thumbs(path.join(app.getPath('userData'), 'thumbs'), () => Object.values(store.get('images')));
   await thumbs.prune().catch(() => {});
   initSettings();

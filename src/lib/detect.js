@@ -31,6 +31,8 @@ function kindFromPackageName(names) {
 // files: [{rel, abs}] -> { kind, reason } or { kind: null }
 async function detectKind(files) {
   const names = files.map((f) => f.rel);
+  if (names.some((n) => /\.dlo$/i.test(n))) return { kind: 'plugin', reason: 'game-plugin' };
+  if (names.some((n) => /(?:^|\/)engine\.scl$/i.test(n)) && names.some((n) => /(?:^|\/)(?:sfx(?:\.cfg)?|samples)(?:\/|$)/i.test(n))) return { kind: 'sound', reason: 'sound-files' };
   let kind = kindFromNames(names);
   if (kind) return { kind, reason: 'files' };
   kind = kindFromPackageName(names);

@@ -1,7 +1,9 @@
-CoreMX 1.0.24 — Full mod categories and window navigation
+CoreMX 1.0.25
 
-Best match now fills every Get Mods category from the full catalog after any ranked items. Add-ons and narrow categories no longer appear empty when the site's global popularity list has few matches. The explicit Popular filters still show only ranked posts. Catalog failures show an error rather than "No mods found" when neither source returns results.
+- Get Mods now caches each viewed page and refreshes it in the background. Bike Liveries has brand filters based on the MXB Mods site categories.
+- Added mod sharing and notifications, CoreMX mod reporting through a website login, and a Recents list for previously joined servers.
+- Added Rider name and number editing. Live server rider details use the matching CoreMX/Steam identity when available.
+- Game plugins are detected separately from graphics mods. Downloaded application installers appear under My Mods → Apps, and sound mods require a target bike. CoreMX only removes plugin files it can verify it installed.
+- Fixed My Mods graphics counts and improved MediaFire folder handling.
 
-The app opens in a slightly wider window where the screen allows it. The top navigation scrolls horizontally in smaller windows, supports the mouse wheel, and preserves its position when the page updates.
-
-The update manifest points to the identical legacy-named setup copy for existing Google Drive updaters. Upload latest.yml and MX-Bikes-Manager-Setup-1.0.24-x64.exe together to the shared Drive folder to make this version available there.
+For Google Drive updates, upload latest.yml and MX-Bikes-Manager-Setup-1.0.25-x64.exe together to the shared update folder. The CoreMX-named installer is identical and is included for direct downloads.
