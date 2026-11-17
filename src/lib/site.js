@@ -463,7 +463,7 @@ async function post(id) {
   const details = await parseOff('requirements', [html, p.content && p.content.rendered || '', summary]);
   details.dependencies = require('./download-dependencies').enrich(details.dependencies, downloads, p.content && p.content.rendered || '');
   const needsModelNotice = !summary.categories.includes(365) && !standalone(summary.categories) && details.needsModelNotice;
-  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description: description + (details.instructions ? '<h3>Mod instructions</h3>' + sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : ''), downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
+  return { ...summary, author: pageAuthor || author, images: images.slice(0, 24), description, instructions: details.instructions ? sanitize($, $('#instructions, .mod-instructions, [data-mod-instructions]').first().contents()) : '', downloads, needsModelNotice, gearKind: needsModelNotice ? summary.gearKind || 'paint' : summary.gearKind, dependencies: details.dependencies, madeFor: betas, downloadCount: dlCount };
 }
 
 function dependenciesFromHtml(html) {
