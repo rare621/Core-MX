@@ -1216,8 +1216,10 @@ async function browseLoad() {
     const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
-    b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
+    const added = r.posts.filter((p) => !b.posts.some((x) => x.id === p.id));
+    b.posts.push(...added);
     browseCacheWrite(b.cacheKey || browseKey(), b);
+    loadPostStats(added).then((changed) => { if (changed && reqId === b.reqId && isFree()) renderBrowseGrid(); });
   } catch (e) {
     if (reqId === b.reqId) b.error = e.message;
   } finally {
@@ -1238,7 +1240,28 @@ function siteCard(p) {
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
-      <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
+      <div class="card-meta">${esc(cat)}<span class="dot"></span>${postStat(p)}</div></div></div>`;
+}
+// Views when mxb-mods.com publishes them, downloads once known, otherwise how new it is.
+function postStat(p) {
+  const bits = [];
+  if (Number.isFinite(p.views)) bits.push(`${p.views.toLocaleString()} views`);
+  if (Number.isFinite(p.downloadCount) && p.downloadCount > 0) bits.push(`${p.downloadCount.toLocaleString()} downloads`);
+  return bits.join(' · ') || timeAgo(p.date);
+}
+// Fill in download counts for cards from coremx.app (one request per page of results).
+async function loadPostStats(posts) {
+  const need = posts.filter((p) => p.source !== 'hub' && p.source !== 'mxbs' && Number.isInteger(p.id) && p.id > 0 && p.downloadCount === undefined);
+  if (!need.length) return false;
+  let stats = {};
+  try { stats = await api.invoke('coremx:stats', need.map((p) => p.id)); } catch { return false; }
+  let changed = false;
+  for (const p of need) {
+    const st = stats[p.id];
+    p.downloadCount = st && Number.isFinite(st.siteDownloads) ? st.siteDownloads : null;
+    if (p.downloadCount) changed = true;
+  }
+  return changed;
 }
 
 function heroCard(p) {
@@ -1432,7 +1455,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
     </div>
     <div>
       <h2>${esc(p.title)}</h2>
-      <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}${Number.isFinite(p.views) ? `<span>${icon('eye')}${p.views.toLocaleString()} views</span>` : ''}</div>
+      <div class="post-meta">${p.author ? `<span>${icon('user')}${esc(p.author)}</span>` : ''}<span>${icon('clock')}${fmtDate(p.date)}</span>${p.modified && p.modified.slice(0, 10) !== p.date.slice(0, 10) ? `<span>${icon('refresh')}Updated ${fmtDate(p.modified)}</span>` : ''}${Number.isFinite(p.views) ? `<span>${icon('eye')}${p.views.toLocaleString()} views</span>` : ''}${Number.isFinite(p.downloadCount) ? `<span>${icon('download')}${p.downloadCount.toLocaleString()} downloads</span>` : ''}</div>
       <div class="tags">${p.categoryNames.map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
       ${p.missingModelTextures?.length ? `<div class="notice warn">${icon('alert')}<div>Paint files installed, but the matching rider model is missing (${esc(p.missingModelTextures.join(', '))}). These files do not include that model.</div></div>` : hasUpdate ? `<div class="notice info">${icon('refresh')}<div>You have this mod, and there's a newer version.</div></div>` : installed ? `<div class="notice ok">${icon('check')}<div>You already have this mod.</div></div>` : ''}
       ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap').length > 1 ? '<p class="muted">Choose the model swap for your bike and downloaded paint variant. The linked versions are alternatives.</p>' : ''}

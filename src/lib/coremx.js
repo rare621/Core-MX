@@ -123,4 +123,18 @@ async function post(id, fetcher) {
   return mod;
 }
 
-module.exports = { normalize, search, post, websiteLogin, reportMod, websiteNotifications, websiteSession };
+// Download and view counts for mxb-mods.com posts, kept by coremx.app (it reads every mod page every other day).
+// One request for a whole page of cards instead of opening each mod page here.
+const statsCache = new Map();
+async function stats(ids) {
+  const want = [...new Set((ids || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 100);
+  const now = Date.now(), out = {}, missing = [];
+  for (const id of want) { const hit = statsCache.get(id); if (hit && now - hit.at < 10 * 60e3) out[id] = hit.value; else missing.push(id); }
+  if (missing.length) {
+    const { data } = await websiteRequest(`/api/stats?mxbmods=${missing.join(',')}`);
+    for (const id of missing) { const value = data.stats && data.stats[id] || null; statsCache.set(id, { at: now, value }); out[id] = value; }
+  }
+  return out;
+}
+
+module.exports = { normalize, search, post, stats, websiteLogin, reportMod, websiteNotifications, websiteSession };
