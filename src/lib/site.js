@@ -207,6 +207,22 @@ function summarizePost(p, cats) {
 // mxb-mods.com's "Popular" pages (ranked by views). Parsed, then resolved to full posts by slug.
 const POPULAR = { today: 'popular-today', week: 'popular-last-7-days', month: 'popular-last-30-days', all: 'popular-all-time' };
 const popularCache = new Map();
+// The popular pages use several layouts: big cards (7 / 30 days), a podium card + mini + compact lines
+// (today), and rows (all time). Read every one, then rank by views.
+const POPULAR_ITEMS = 'li.dmpop-card, li.dmpop-mini, li.dmpop-line, li.dmpop-row';
+function popularRows($) {
+  const seen = new Set(), ranked = [];
+  $(POPULAR_ITEMS).each((_, li) => {
+    const href = $(li).find('a.dmpop-title').attr('href') || $(li).find('a[href*="mxb-mods.com/"]').first().attr('href') || '';
+    const slug = (href.match(/mxb-mods\.com\/([^/?#]+)\/?/) || [])[1];
+    // Views sit in .dmpop-views (text or title) on most layouts, and in the subtitle ("1,344 views") on mini cards.
+    const el = $(li).find('.dmpop-views').first();
+    const text = el.length ? el.attr('title') || el.text() : ($(li).text().match(/[\d,]+\s*views?/i) || [''])[0];
+    const views = Number((text.match(/[\d,]+/) || ['0'])[0].replace(/,/g, ''));
+    if (slug && !seen.has(slug)) { seen.add(slug); ranked.push({ slug, views }); }
+  });
+  return ranked.sort((a, b) => b.views - a.views);
+}
 async function fetchPopular(range) {
   const hit = popularCache.get(range);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.posts;
@@ -220,19 +236,13 @@ async function fetchPopular(range) {
     if (page.ok) html = await page.text();
   } catch { /* the WordPress endpoint below may still work */ }
   let $ = cheerio.load(html);
-  if (!$('li.dmpop-card').length) {
+  if (!$(POPULAR_ITEMS).length) {
     const { json } = await getJson(`${BASE}/wp-json/wp/v2/pages?slug=${slug}&_fields=content`);
     html = (json[0] && json[0].content.rendered) || '';
     $ = cheerio.load(html);
   }
-  if (!$('li.dmpop-card').length) throw new Error('MXB Mods did not provide its popularity ranking. Try refreshing later.');
-  const ranked = [];
-  $('li.dmpop-card').each((_, li) => {
-    const href = $(li).find('a.dmpop-title').attr('href') || '';
-    const slug = (href.match(/mxb-mods\.com\/([^/?#]+)\/?/) || [])[1];
-    const views = Number(($(li).find('.dmpop-views').text().match(/[\d,]+/) || ['0'])[0].replace(/,/g, ''));
-    if (slug) ranked.push({ slug, views });
-  });
+  if (!$(POPULAR_ITEMS).length) throw new Error('MXB Mods did not provide its popularity ranking. Try refreshing later.');
+  const ranked = popularRows($);
   const bySlug = new Map();
   for (let i = 0; i < ranked.length; i += 50) {
     const slugs = ranked.slice(i, i + 50).map((r) => r.slug).join(',');
@@ -524,4 +534,4 @@ function shopProduct(address) {
   } catch { return null; }
 }
 
-module.exports = { BROWSE_TABS, LIVERY_BRANDS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };
+module.exports = { popularRows, BROWSE_TABS, LIVERY_BRANDS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };
