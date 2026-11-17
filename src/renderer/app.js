@@ -2612,6 +2612,7 @@ async function openProduct(p, files) {
     <div><h2>${esc(p.title)}</h2>
       <div class="post-meta">${p.creator ? `<span>${icon('user')}${esc(p.creator)}</span>` : ''}<span>${icon('cart')}${esc(sh.name)}</span></div>
       <div class="tags">${(p.categories || []).map((n) => `<span class="tag">${esc(n)}</span>`).join('')}</div>
+      ${p.creatorFiles ? `<div class="notice info">${icon('info')}<div><b>Other / Tools: files for livery makers</b><div>A Blender model and PSD template for painting this part into your own livery. It does not install into MX Bikes by itself.</div></div></div>` : ''}
       ${box}
     </div></div>`;
   refreshInlineDownloads(m);

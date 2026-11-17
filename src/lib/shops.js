@@ -41,14 +41,20 @@ async function getJson(ses, url) {
   return { json: await res.json(), headers: res.headers };
 }
 
+// Hub "Blends" are livery-maker files, shown under Other / Tools (see creator-files.js).
+const { BLEND_CATEGORY, isCreatorFiles } = require('./creator-files');
+
 let hubCats = null;
 async function categories(ses, shopId) {
   const shop = SHOPS[shopId];
   if (shop.cats) return shop.cats;
   if (!hubCats) {
     const { json } = await getJson(ses, `${shop.url}/wp-json/wc/store/v1/products/categories?per_page=100`);
-    hubCats = [{ id: 0, label: 'All' }, ...json.filter((c) => c.parent === 0 && c.count > 0)
-      .sort((a, b) => b.count - a.count).map((c) => ({ id: c.id, label: text(c.name) }))];
+    const top = json.filter((c) => c.parent === 0 && c.count > 0).sort((a, b) => b.count - a.count);
+    // "Blend Brands" only repeats the blends by bike brand; one Other / Tools chip (the Blends category) covers them.
+    const blends = top.find((c) => /^blends?$/i.test(text(c.name)));
+    hubCats = [{ id: 0, label: 'All' }, ...top.filter((c) => !BLEND_CATEGORY.test(text(c.name))).map((c) => ({ id: c.id, label: text(c.name) })),
+      ...(blends ? [{ id: blends.id, label: 'Other / Tools', creatorFiles: true }] : [])];
   }
   return hubCats;
 }
@@ -65,6 +71,7 @@ function hubProduct(p) {
     free: price === 0,
     creator: creatorCat ? text(creatorCat.name) : null,
     categories: (p.categories || []).map((c) => text(c.name)),
+    creatorFiles: isCreatorFiles((p.categories || []).map((c) => text(c.name))),
     summary: text(p.short_description || p.description).slice(0, 220),
     description: p.description || '',
   };
@@ -294,4 +301,4 @@ async function productLink(ses, shopId, id) {
   } catch { return null; }
 }
 
-module.exports = { SHOPS, categories, search, details, account, signOut, owned, lookup, productLink };
+module.exports = { SHOPS, isCreatorFiles, categories, search, details, account, signOut, owned, lookup, productLink };
