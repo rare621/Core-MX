@@ -19,18 +19,29 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 8;
+const VERSION = 9;
+const ADMIN_STEAM_ID = '76561198098586128';
+const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
+const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
+  try { return fs.readFileSync(ADMIN_KEY_FILE, 'utf8').trim(); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const key = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(ADMIN_KEY_FILE, key + '\n', { flag: 'wx', mode: 0o600 });
+    return key;
+  }
+})();
 
 const SERVER_TTL = 2 * 60 * 1000;    // live rows only: the manager reports every 30 seconds
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {} }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [] }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha) });
@@ -89,6 +100,15 @@ function auth(req) {
   const h = hash(m[1]);
   for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h) return { id, user: u };
   return null;
+}
+function adminAllowed(me, key) {
+  if (!me || me.id !== ADMIN_STEAM_ID || !ADMIN_KEY || typeof key !== 'string') return false;
+  return crypto.timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(ADMIN_KEY)));
+}
+function announcementInbox(user) {
+  const cutoff = Date.now() - 30 * 86400000;
+  const deleted = new Set(user.deletedAnnouncements || []), read = new Set(user.readAnnouncements || []), seen = new Set(user.seenAnnouncements || []);
+  return (db.announcements || []).filter((a) => a.at >= cutoff && !deleted.has(a.id)).map((a) => ({ ...a, kind: 'announcement', read: read.has(a.id), seenPopup: seen.has(a.id) }));
 }
 
 // Signed-in riders get separate allowances even behind the same router.
@@ -230,7 +250,7 @@ const routes = {
     const validId = /^coremx:[A-Za-z0-9_-]{1,80}$/.test(postId) || /^\d{1,12}$/.test(postId);
     if (!validId || !title) return [400, { error: 'Invalid mod link.' }];
     const inbox = recipient.notifications || (recipient.notifications = []);
-    inbox.unshift({ id: crypto.randomUUID(), from: me.id, fromName: me.user.name, postId, title, at: Date.now(), read: false });
+    inbox.unshift({ id: crypto.randomUUID(), kind: 'share', from: me.id, fromName: me.user.name, postId, title, at: Date.now(), read: false });
     recipient.notifications = inbox.slice(0, 100);
     save();
     return [200, { ok: true }];
@@ -238,15 +258,47 @@ const routes = {
   'GET /v1/notifications': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
     const now = Date.now();
-    const list = (me.user.notifications || []).filter((n) => now - n.at < 30 * 86400000);
-    if (list.length !== (me.user.notifications || []).length) { me.user.notifications = list; save(); }
+    const shares = (me.user.notifications || []).filter((n) => now - n.at < 30 * 86400000);
+    if (shares.length !== (me.user.notifications || []).length) { me.user.notifications = shares; save(); }
+    const list = [...shares.map((n) => ({ ...n, kind: 'share' })), ...announcementInbox(me.user)].sort((a, b) => b.at - a.at);
     return [200, { notifications: list, unread: list.filter((n) => !n.read).length }];
   },
   'POST /v1/notifications/read': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
     const notification = (me.user.notifications || []).find((n) => n.id === body.id);
-    if (!notification) return [404, { error: 'Notification not found.' }];
-    notification.read = true; save(); return [200, { ok: true }];
+    if (notification) notification.read = true;
+    else if (announcementInbox(me.user).some((n) => n.id === body.id)) me.user.readAnnouncements = [...new Set([...(me.user.readAnnouncements || []), body.id])].slice(-100);
+    else return [404, { error: 'Notification not found.' }];
+    save(); return [200, { ok: true }];
+  },
+  'POST /v1/notifications/seen': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const available = new Set(announcementInbox(me.user).map((n) => n.id));
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((id) => available.has(id)).slice(0, 100);
+    me.user.seenAnnouncements = [...new Set([...(me.user.seenAnnouncements || []), ...ids])].slice(-100);
+    save(); return [200, { ok: true }];
+  },
+  'POST /v1/notifications/delete': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const id = String(body.id || '');
+    const old = me.user.notifications || [];
+    if (old.some((n) => n.id === id)) me.user.notifications = old.filter((n) => n.id !== id);
+    else if (announcementInbox(me.user).some((n) => n.id === id)) me.user.deletedAnnouncements = [...new Set([...(me.user.deletedAnnouncements || []), id])].slice(-100);
+    else return [404, { error: 'Notification not found.' }];
+    save(); return [200, { ok: true }];
+  },
+  'POST /v1/admin/status': async (req, body, me) => {
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    return [200, { accounts: Object.keys(db.users).length, announcements: (db.announcements || []).length }];
+  },
+  'POST /v1/admin/announcements': async (req, body, me) => {
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    const title = str(body.title, 100);
+    const message = String(body.message || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '').trim().slice(0, 2000);
+    if (title.length < 3 || message.length < 5) return [400, { error: 'Enter a title and a description.' }];
+    const item = { id: crypto.randomUUID(), title, message, at: Date.now() };
+    db.announcements = [item, ...(db.announcements || [])].slice(0, 100);
+    save(); return [200, { ok: true, announcement: item }];
   },
 
   // Which of these Steam IDs use this service (for "add from Steam friends").

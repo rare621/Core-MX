@@ -3,11 +3,13 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { create } = require('../src/lib/app-updates');
 test('checks share one request; an update requires consent before download and restarts after explicit install', async () => {
-  const updater = new EventEmitter(), events = []; let checks = 0, release, installs = 0;
+  const updater = new EventEmitter(), events = []; let checks = 0, release, installs = 0, feed;
+  updater.setFeedURL = (value) => { feed = value; };
   updater.checkForUpdates = () => { checks++; updater.emit('checking-for-update'); return new Promise((r) => { release = r; }); };
   updater.quitAndInstall = (silent, runAfter) => { assert.equal(silent, true); assert.equal(runAfter, true); installs++; };
   updater.downloadUpdate = async () => { updater.emit('download-progress', { percent: 50 }); updater.emit('update-downloaded', { version: '1.0.8' }); };
   const manager = create({ updater, packaged: true, version: '1.0.7', notify: (s) => events.push(s) });
+  assert.deepEqual(feed, { provider: 'github', owner: 'rare621', repo: 'Core-MX' });
   const start = manager.start(), again = manager.start(), manual = manager.check();
   await Promise.resolve();
   assert.equal(checks, 1); assert.equal(updater.autoDownload, false); assert.equal(updater.autoInstallOnAppQuit, false);
@@ -27,11 +29,11 @@ test('development does not hit GitHub and failed startup checks can be retried',
   await manager.start(); assert.equal(manager.status().phase, 'error'); await manager.check(); assert.equal(count, 2);
 });
 
-test('Drive configuration errors reach Settings without exposing raw response bodies', async () => {
+test('GitHub update errors reach Settings without exposing raw response bodies', async () => {
   const updater = new EventEmitter();
-  updater.checkForUpdates = async () => { throw Object.assign(new Error('Duplicate latest.yml in the update folder. Keep one current copy.'), { code: 'DRIVE_UPDATE' }); };
-  const manager = create({ updater, packaged: true, version: '1.0.11' });
-  assert.match((await manager.check()).error, /Duplicate latest.yml/);
   updater.checkForUpdates = async () => { throw new Error('private raw response'); };
-  assert.doesNotMatch((await manager.check()).error, /private raw response/);
+  const manager = create({ updater, packaged: true, version: '1.0.11' });
+  const result = await manager.check();
+  assert.match(result.error, /GitHub/);
+  assert.doesNotMatch(result.error, /private raw response/);
 });

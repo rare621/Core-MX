@@ -1306,9 +1306,22 @@ document.addEventListener('click', (e) => {
 });
 
 const openPostRefreshers = new Set();
+let notificationRefresh = null;
 async function refreshNotifications() {
-  try { S.notifications = await api.invoke('online:notifications'); renderRail(); }
+  if (notificationRefresh) return notificationRefresh;
+  notificationRefresh = (async () => { try {
+    S.notifications = await api.invoke('online:notifications'); renderRail();
+    const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup);
+    if (unseen.length) {
+      await api.invoke('online:seenAnnouncements', unseen.map((n) => n.id));
+      unseen.forEach((n) => { n.seenPopup = true; });
+      const latest = unseen[0];
+      modal({ title: esc(latest.title), size: 'sm', body: `<div class="announcement-message">${esc(latest.message).replace(/\n/g, '<br>')}</div><p class="muted">You can find this later in Notifications.</p>` });
+    }
+  }
   catch { /* Offline users keep the last inbox until the service is reachable. */ }
+  })().finally(() => { notificationRefresh = null; });
+  return notificationRefresh;
 }
 async function reportCoremxMod(post) {
   const m = modal({ title: `Report ${esc(post.title)}`, size: 'sm', body: '<div class="loadmore"><div class="spinner"></div></div>' });
@@ -1338,17 +1351,45 @@ async function openNotifications() {
     const [shares, site] = await Promise.allSettled([api.invoke('online:notifications'), api.invoke('coremx:notifications')]);
     if (!m.isConnected) return;
     if (shares.status === 'fulfilled') { S.notifications = shares.value; renderRail(); }
-    const items = S.notifications.notifications || [];
+    let items = S.notifications.notifications || [];
     const website = site.status === 'fulfilled' ? site.value : { notifications: [] };
-    $('.modal-body', m).innerHTML = `<div class="section-title">Friend shares</div>${items.length ? `<div class="notification-list">${items.map((n) => `<button class="notification-row ${n.read ? '' : 'unread'}" data-notification="${esc(n.id)}"><b>${esc(n.fromName || 'A friend')} shared a mod</b><span>${esc(n.title)}</span><small>${timeAgo(n.at)}</small></button>`).join('')}</div>` : '<p class="muted">No mod shares yet.</p>'}${website.signedIn ? `<div class="section-title">CoreMX website</div>${website.notifications.length ? `<div class="notification-list">${website.notifications.slice(0, 20).map((n) => `<div class="notification-row"><b>${esc(n.title || n.type || 'Website notification')}</b><span>${esc(n.message || n.text || '')}</span></div>`).join('')}</div>` : '<p class="muted">No website notifications.</p>'}` : ''}`;
+    const expanded = { announcement: false, share: false, website: false };
+    const section = (kind, title, list, empty, content) => `<div class="notification-heading"><h3>${title}</h3><span>${list.length}</span></div>${list.length ? `<div class="notification-list">${(expanded[kind] ? list : list.slice(0, 5)).map(content).join('')}</div>${list.length > 5 ? `<button class="btn btn-sm notification-more" data-notification-more="${kind}">${expanded[kind] ? 'Show less' : `View all ${list.length}`}</button>` : ''}` : `<p class="muted">${empty}</p>`}`;
+    const renderInbox = () => {
+      const announcements = items.filter((n) => n.kind === 'announcement');
+      const friendShares = items.filter((n) => n.kind !== 'announcement');
+      const row = (n, label, detail) => `<div class="notification-row ${n.read ? '' : 'unread'}"><button class="notification-open" data-notification-open="${esc(n.id)}"><b>${esc(label)}</b><span>${esc(detail)}</span><small>${timeAgo(n.at)}</small></button><button class="notification-delete" data-notification-delete="${esc(n.id)}" title="Delete notification" aria-label="Delete notification">${icon('trash')}</button></div>`;
+      $('.modal-body', m).innerHTML = section('announcement', 'Announcements', announcements, 'No announcements yet.', (n) => row(n, n.title, n.message.length > 110 ? n.message.slice(0, 110) + '…' : n.message))
+        + section('share', 'Friend shares', friendShares, 'No mod shares yet.', (n) => row(n, `${n.fromName || 'A friend'} shared a mod`, n.title))
+        + (website.signedIn ? section('website', 'CoreMX website', website.notifications || [], 'No website notifications.', (n) => `<div class="notification-row"><div class="notification-open"><b>${esc(n.title || n.type || 'Website notification')}</b><span>${esc(n.message || n.text || '')}</span></div></div>`) : '');
+    };
+    renderInbox();
     m.addEventListener('click', async (e) => {
-      const row = e.target.closest('[data-notification]'); if (!row) return;
-      const n = items.find((item) => item.id === row.dataset.notification); if (!n) return;
-      try { await api.invoke('online:readNotification', n.id); refreshNotifications(); }
-      catch (error) { toast(esc(cleanErr(error)), 'err'); }
+      const more = e.target.closest('[data-notification-more]');
+      if (more) { expanded[more.dataset.notificationMore] = !expanded[more.dataset.notificationMore]; renderInbox(); return; }
+      const del = e.target.closest('[data-notification-delete]');
+      if (del) {
+        del.disabled = true;
+        try { await api.invoke('online:deleteNotification', del.dataset.notificationDelete); items = items.filter((n) => n.id !== del.dataset.notificationDelete); renderInbox(); refreshNotifications(); }
+        catch (error) { del.disabled = false; toast(esc(cleanErr(error)), 'err'); }
+        return;
+      }
+      const open = e.target.closest('[data-notification-open]'); if (!open) return;
+      const n = items.find((item) => item.id === open.dataset.notificationOpen); if (!n) return;
+      try {
+        if (n.kind === 'announcement') {
+          await api.invoke('online:seenAnnouncements', [n.id]);
+          await api.invoke('online:readNotification', n.id);
+        }
+        else await api.invoke('online:deleteNotification', n.id);
+        refreshNotifications();
+      } catch (error) { toast(esc(cleanErr(error)), 'err'); return; }
       m.close();
-      const id = /^coremx:/.test(n.postId) ? n.postId : Number(n.postId);
-      openPost({ id, title: n.title, image: null, link: /^coremx:/.test(n.postId) ? `https://coremx.app/#/mod/${encodeURIComponent(n.postId.slice(7))}` : `https://mxb-mods.com/` , coremxId: /^coremx:/.test(n.postId) ? n.postId.slice(7) : null });
+      if (n.kind === 'announcement') modal({ title: esc(n.title), size: 'sm', body: `<div class="announcement-message">${esc(n.message).replace(/\n/g, '<br>')}</div>` });
+      else {
+        const id = /^coremx:/.test(n.postId) ? n.postId : Number(n.postId);
+        openPost({ id, title: n.title, image: null, link: /^coremx:/.test(n.postId) ? `https://coremx.app/#/mod/${encodeURIComponent(n.postId.slice(7))}` : `https://mxb-mods.com/`, coremxId: /^coremx:/.test(n.postId) ? n.postId.slice(7) : null });
+      }
     });
   } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
 }
@@ -1357,13 +1398,20 @@ async function shareModDialog(post) {
   try {
     const friends = (await api.invoke('online:friends')).filter((f) => f.status === 'ok');
     if (!m.isConnected) return;
-    $('.modal-body', m).innerHTML = friends.length ? `<p class="muted">Send this mod page to a mutual CoreMX friend.</p><label class="share-friend-field"><span>Friend</span><select id="shareFriend" class="input"><option value="">Choose a friend…</option>${friends.map((f) => `<option value="${esc(f.id)}">${esc(f.name || f.id)} · ${f.online ? 'Online' : 'Offline'}</option>`).join('')}</select></label>` : '<p class="muted">No mutual CoreMX friends are available. Add each other in Friends first.</p>';
-    const select = $('#shareFriend', m), send = $('#shareSend', m);
-    select?.addEventListener('change', () => { send.disabled = !select.value; });
+    $('.modal-body', m).innerHTML = friends.length ? `<p class="muted">Send this mod page to a mutual CoreMX friend.</p><div class="share-friend-field"><span>Friend</span><button class="share-friend-trigger" id="shareFriendTrigger" aria-expanded="false">Choose a friend… <span>▾</span></button><div class="share-friend-menu" id="shareFriendMenu" hidden>${friends.map((f) => `<button data-share-friend="${esc(f.id)}"><span>${esc(f.name || f.id)}</span><small>${f.online ? 'Online' : 'Offline'}</small></button>`).join('')}</div></div>` : '<p class="muted">No mutual CoreMX friends are available. Add each other in Friends first.</p>';
+    let selected = '';
+    const trigger = $('#shareFriendTrigger', m), menu = $('#shareFriendMenu', m), send = $('#shareSend', m);
+    trigger?.addEventListener('click', () => { menu.hidden = !menu.hidden; trigger.setAttribute('aria-expanded', String(!menu.hidden)); });
+    menu?.addEventListener('click', (e) => {
+      const choice = e.target.closest('[data-share-friend]'); if (!choice) return;
+      selected = choice.dataset.shareFriend;
+      trigger.innerHTML = `${esc(friends.find((f) => String(f.id) === selected)?.name || selected)} <span>▾</span>`;
+      menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); send.disabled = false;
+    });
     send.addEventListener('click', async () => {
-      if (!select?.value || !friends.some((f) => String(f.id) === select.value)) return;
+      if (!selected || !friends.some((f) => String(f.id) === selected)) return;
       send.disabled = true;
-      try { await api.invoke('online:shareMod', select.value, String(post.id), post.title); m.close(); toast('Mod shared with your friend', 'ok'); }
+      try { await api.invoke('online:shareMod', selected, String(post.id), post.title); m.close(); toast('Mod shared with your friend', 'ok'); }
       catch (error) { send.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
     });
   } catch (error) { $('.modal-body', m).innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
@@ -1430,7 +1478,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
       ${p.images.length > 1 ? `<div class="gallery-strip">${p.images.map((u, i) => `<img src="${esc(u)}" data-gal="${i}" class="${i === 0 ? 'active' : ''}" data-keep="1" loading="lazy">`).join('')}</div>` : ''}
       ${p.instructions ? `<div class="seg-tabs post-tabs"><button class="${postTab === 'desc' ? 'active' : ''}" data-post-tab="desc">${icon('info')}Description</button><button class="${postTab === 'install' ? 'active' : ''}" data-post-tab="install">${icon('download')}Installation</button></div>` : ''}
       <div class="desc" ${p.instructions && postTab === 'install' ? 'hidden' : ''}>${p.description || '<p class="muted">No description.</p>'}</div>
-      ${p.instructions ? `<div class="desc post-install" ${postTab === 'install' ? '' : 'hidden'}>${p.instructions}<p class="muted" style="margin-top:14px">MX Bikes Manager installs this for you when you press Install. These are the creator's steps for installing it by hand.</p></div>` : ''}
+      ${p.instructions ? `<div class="desc post-install" ${postTab === 'install' ? '' : 'hidden'}>${p.instructions}<p class="muted" style="margin-top:14px">CoreMX installs this for you when you press Install. These are the creator's steps for installing it by hand.</p></div>` : ''}
     </div>
     <div>
       <h2>${esc(p.title)}</h2>
@@ -2854,7 +2902,7 @@ document.addEventListener('click', async (e) => {
 S.appUpdate = { phase: 'idle' };
 function appUpdateHtml() {
   const update = S.appUpdate;
-  const text = { idle: 'Checks Google Drive every time you open the app.', checking: 'Checking Google Drive…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, available: 'An update is available. Choose Install update in the dialog.', ready: 'The update is downloaded and ready to install.', error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
+  const text = { idle: 'Checks GitHub releases every time you open the app.', checking: 'Checking GitHub…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, available: 'An update is available. Choose Install update in the dialog.', ready: 'The update is downloaded and ready to install.', error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
   return `<p>${text || ''}</p>${update.phase === 'downloading' ? `<progress max="100" value="${Number(update.percent) || 0}" style="width:100%"></progress>` : ''}<button class="btn" data-act="app-update-check" ${['checking', 'downloading'].includes(update.phase) ? 'disabled' : ''}>${icon('refresh')}Check now</button>${update.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Restart to update</button>' : ''}`;
 }
 let updateDialog = null, skippedUpdate = '', updateAccepted = false, updateRestarting = false;
@@ -2892,11 +2940,14 @@ document.addEventListener('click', async (e) => {
   if (action === 'app-update-install') { updateAccepted = true; await restartForUpdate(); }
 });
 S.settingsTab = 'general';
+S.admin = { unlocked: false, stats: null };
+const ADMIN_STEAM_ID = '76561198098586128';
 function settingsTabs() {
-  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button></div>`;
+  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button>${S.accounts.steam?.steamId === ADMIN_STEAM_ID ? `<button class="${S.settingsTab === 'admin' ? 'active' : ''}" data-settings-tab="admin">${icon('shield')}Admin</button>` : ''}</div>`;
 }
 document.addEventListener('click', (e) => { const tab = e.target.closest('[data-settings-tab]'); if (tab) { S.settingsTab = tab.dataset.settingsTab; renderSettings($('#content')); } });
 async function renderSettings(c) {
+  if (S.settingsTab === 'admin') return renderAdminSettings(c);
   if (S.settingsTab === 'health') return renderHealth(c);
   if (S.settingsTab === 'plugins') return renderPluginSettings(c);
   if (!S.accounts.shops.length) await refreshAccounts();
@@ -2931,6 +2982,36 @@ async function renderSettings(c) {
   </div></div></div></div>`;
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
   $('#autoImages').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoImages: e.target.checked }); if (e.target.checked) backgroundImages(); });
+}
+async function renderAdminSettings(c) {
+  if (!S.accounts.steam) await refreshAccounts();
+  if (S.accounts.steam?.steamId !== ADMIN_STEAM_ID) { S.settingsTab = 'general'; return renderSettings(c); }
+  if (S.admin.unlocked) {
+    try { S.admin.stats = await api.invoke('online:adminStatus'); }
+    catch (error) { S.admin.unlocked = false; S.admin.stats = null; toast(esc(cleanErr(error)), 'err', 6000); }
+  }
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings admin-settings">
+    ${S.admin.unlocked ? `<div class="set-card"><h3>CoreMX accounts</h3><div class="admin-account-count">${Number(S.admin.stats?.accounts) || 0}</div><p>Registered accounts using the online service.</p></div>
+    <div class="set-card"><h3>New announcement</h3><p>People see this once when the app next checks online. It also stays in their Notifications until they delete it.</p>
+      <div class="field"><label for="adminTitle">Title</label><input class="input" id="adminTitle" maxlength="100" placeholder="Server maintenance"></div>
+      <div class="field"><label for="adminMessage">Description</label><textarea class="input" id="adminMessage" maxlength="2000" rows="5" placeholder="Tell everyone what is happening and when."></textarea></div>
+      <button class="btn btn-primary" id="adminPublish">${icon('bell')}Publish announcement</button></div>` : `<div class="set-card"><h3>Unlock Admin</h3><p>Only your registered Steam account can use this tab. Enter the admin key configured on the CoreMX online server to publish announcements.</p>
+      <div class="field"><label for="adminKey">Server admin key</label><input class="input" id="adminKey" type="password" autocomplete="off"></div>
+      <button class="btn btn-primary" id="adminUnlock">Unlock</button></div>`}
+  </div></div></div></div>`;
+  $('#adminUnlock')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try { S.admin.stats = await api.invoke('online:adminUnlock', $('#adminKey').value); S.admin.unlocked = true; renderAdminSettings(c); }
+    catch (error) { e.currentTarget.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+  });
+  $('#adminPublish')?.addEventListener('click', async (e) => {
+    const title = $('#adminTitle').value.trim(), message = $('#adminMessage').value.trim();
+    if (title.length < 3 || message.length < 5) { toast('Enter a title and description first.', 'err'); return; }
+    e.currentTarget.disabled = true;
+    try { await api.invoke('online:createAnnouncement', title, message); $('#adminTitle').value = ''; $('#adminMessage').value = ''; toast('Announcement published', 'ok'); }
+    catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+    finally { if (e.currentTarget.isConnected) e.currentTarget.disabled = false; }
+  });
 }
 
 // ---------- global actions ----------

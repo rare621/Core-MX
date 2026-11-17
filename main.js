@@ -1355,6 +1355,11 @@ function registerIpc() {
   handle('online:notifications', () => online.notifications());
   handle('online:shareMod', (to, postId, title) => online.shareMod(to, postId, title));
   handle('online:readNotification', (id) => online.readNotification(id));
+  handle('online:seenAnnouncements', (ids) => online.seenAnnouncements(ids));
+  handle('online:deleteNotification', (id) => online.deleteNotification(id));
+  handle('online:adminUnlock', (key) => online.unlockAdmin(key));
+  handle('online:adminStatus', () => online.adminStatus());
+  handle('online:createAnnouncement', (title, message) => online.createAnnouncement(title, message));
   handle('online:paintSync', (on) => online.setPaintSync(on));
   handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
   handle('online:serverRiders', (server) => online.serverRiders(String(server || '').slice(0, 64)));

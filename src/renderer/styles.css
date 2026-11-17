@@ -774,14 +774,32 @@ select option { background: var(--panel); }
 @media (max-width: 760px) { .rider-identity-row { grid-template-columns: minmax(0, 1fr); gap: 9px; } .rider-identity-unavailable { justify-self: start; } }
 .share-friend-field { display: grid; gap: 8px; margin-top: 16px; }
 .share-friend-field > span { color: var(--text-2); font-size: 12px; font-weight: 600; }
-.share-friend-field select { width: 100%; min-height: 42px; background: var(--raised); color: var(--text); color-scheme: dark; }
-.share-friend-field option { background: var(--raised); color: var(--text); }
+.share-friend-trigger { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 42px; padding: 0 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); color: var(--text); font: inherit; cursor: pointer; }
+.share-friend-trigger span { color: var(--muted); }
+.share-friend-menu { max-height: 220px; overflow-y: auto; padding: 5px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); }
+.share-friend-menu[hidden] { display: none; }
+.share-friend-menu button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.share-friend-menu button:hover, .share-friend-menu button:focus-visible { background: var(--raised); }
+.share-friend-menu small { color: var(--muted); }
+.notification-heading { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; }
+.notification-heading:first-child { margin-top: 0; }
+.notification-heading h3 { margin: 0; font-size: 14px; }
+.notification-heading > span { color: var(--muted); font-size: 12px; }
 .notification-list { display: grid; gap: 8px; margin-top: 10px; }
-.notification-row { display: grid; gap: 3px; width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); color: var(--text); text-align: left; cursor: pointer; }
+.notification-row { display: flex; align-items: stretch; width: 100%; border: 1px solid var(--border); border-radius: 12px; background: var(--raised); color: var(--text); text-align: left; }
 .notification-row:hover { background: var(--raised-2); }
 .notification-row.unread { border-color: rgba(255, 138, 31, .35); }
-.notification-row span { color: var(--text-2); }
-.notification-row small { color: var(--muted); }
+.notification-open { display: grid; gap: 3px; flex: 1; min-width: 0; padding: 12px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.notification-open span { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.notification-open small { color: var(--muted); }
+.notification-delete { align-self: center; margin-right: 8px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.notification-delete:hover { background: var(--danger-soft); color: var(--danger); }
+.notification-more { margin-top: 9px; }
+.announcement-message { color: var(--text); line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
+.admin-settings .admin-account-count { margin: 8px 0; color: var(--accent); font: 700 36px/1 var(--display); }
+.admin-settings .field { margin: 14px 0; }
+.admin-settings .field .input { width: 100%; background: var(--raised); color: var(--text); }
+.admin-settings textarea.input { height: auto; min-height: 110px; padding: 12px; resize: vertical; }
 .mod-content-kind { font-size: 11.5px; color: var(--accent); margin: 4px 0; }
 .fr-row[data-friend-open] { cursor: pointer; }
 .fr-row[data-friend-open]:hover { background: rgba(255,255,255,.025); }

@@ -10,24 +10,24 @@ npm run build:win
 
 The shareable setup, `latest.yml` update manifest, server ZIP and SHA-256 checksums are in `dist/`. Publish all four files together in a GitHub release; the updater verifies the EXE against the SHA-512 digest in `latest.yml`. Do not upload `node_modules`, `win-unpacked`, local settings, or temporary build folders. Users install the EXE; they do not need Node.js or this source folder.
 
-The updater checks on each installed-app start, downloads in the background, and installs on a normal quit or explicit restart. Version 1.0.10 and later override the build's GitHub provider with the shared Google Drive folder below. GitHub releases remain a separate archive for repository members; friends do not need repository access.
+The updater checks the public Core-MX GitHub releases at startup. It downloads only after the user chooses Install update, then restarts to apply the update. Publish the CoreMX setup EXE and matching `latest.yml` in the same release.
 
-## Google Drive updates
+## One-time Google Drive bridge for older installs
 
-Upload these two files from the same build to [the update folder](https://drive.google.com/drive/folders/1giNr8lC7cCLE_L62fSCIfRR-vfiwbMVk):
+Versions through 1.0.27 still look in [the old update folder](https://drive.google.com/drive/folders/1giNr8lC7cCLE_L62fSCIfRR-vfiwbMVk). To move them to GitHub automatically, upload these two files from the first GitHub-updater release once:
 
-- `MX-Bikes-Manager-Setup-1.0.10-x64.exe` (use the version you just built).
-- `latest.yml` (keep its original filename and contents).
+- `CoreMX-Setup-<version>-x64.exe`.
+- `latest.yml` from that same release.
 
-Upload the EXE first, then replace `latest.yml` last. Keep exactly one file named `latest.yml`; Drive permits duplicate names and the app rejects ambiguous updates. Folder and file sharing must allow **Anyone with the link → Viewer**. The manifest must refer to an EXE present in this same folder. Its SHA-512 checksum is checked before installation. Google Drive download quotas can temporarily prevent updates.
+Upload the EXE first, then replace `latest.yml` last. Keep exactly one file named `latest.yml`; Drive permits duplicate names and the old updater rejects ambiguous updates. Folder and files must allow **Anyone with the link → Viewer**. The 1.0.27 updater accepts the CoreMX filename and checks its SHA-512 digest. No legacy-named EXE is built from this release onward.
 
-`SHA256SUMS.txt` is optional for manual verification. The server ZIP is separate and is not installed by the app updater. Do not upload source code, `win-unpacked`, user data, or mod assets. Users on 1.0.9 or earlier must run the 1.0.10 installer once; their previous private GitHub update feed cannot deliver this switch automatically.
+`SHA256SUMS.txt` is optional for manual verification. The server ZIP is separate and is not installed by the app updater. Do not upload source code, `win-unpacked`, user data, or mod assets. Older clients that do not recognize the CoreMX filename must run the installer manually.
 
 The setup uses an assisted per-user install, offers a destination folder, adds shortcuts, registers `mxbm://` join links, and supports uninstall/reinstall. The app stores settings in the user's AppData folder and locates that user's game folders on first launch.
 
 ## GitHub Actions
 
-Push these source changes, then create a version tag matching `package.json`, for example `v1.0.21`. The **Windows installer** workflow tests the app, builds the installer, uploads a downloadable Actions artifact, and publishes a GitHub release with both setup filenames, the update manifest, server ZIP, and checksums. A manual workflow run builds an artifact without creating a release.
+Push these source changes, then create a version tag matching `package.json`, for example `v1.0.28`. The **Windows installer** workflow tests the app, builds the installer, uploads a downloadable Actions artifact, and publishes a GitHub release with the CoreMX setup, update manifest, server ZIP, and checksums. A manual workflow run builds an artifact without creating a release.
 
 For another release, update the package version and lockfile with `npm version patch --no-git-tag-version`, update `docs/RELEASE_NOTES.md`, commit, and push the matching tag.
 
