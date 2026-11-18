@@ -9,7 +9,10 @@ function cleanHeaders(input) {
 function proxySync(req, res, port = 60000) {
   const headers = cleanHeaders(req.headers);
   // The sync service uses bearer tokens, not website session cookies or forwarded IPs.
-  for (const name of Object.keys(headers)) if (/^(?:forwarded|x-forwarded-|cf-)/i.test(name)) delete headers[name];
+  for (const name of Object.keys(headers)) if (/^(?:forwarded|x-forwarded-|cf-|x-coremx-client-ip)/i.test(name)) delete headers[name];
+  // The player's public IP, set only here (from Cloudflare), so a Host World session can be joined.
+  const ip = String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) headers['x-coremx-client-ip'] = ip;
   headers.host = '127.0.0.1:' + port;
   const upstream = http.request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers }, incoming => {
     res.writeHead(incoming.statusCode, { ...cleanHeaders(incoming.headers), 'cache-control': 'no-store' });
