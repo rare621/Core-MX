@@ -202,7 +202,17 @@ function plan(files, ctx, opts = {}) {
     const only = [...tops][0];
     if (tops.size === 1 && files.every((f) => f.rel.includes('/')) && !/^(reshade-shaders|reshade-presets|plugins|ui|shaders|textures)$/.test(only)) strip = 1;
   }
+  // Tracks often ship a rider copy and a dedicated-server copy with the same file name, the server
+  // one inside a "server" folder (e.g. havoc/Havoc Raceway.pkz + havoc/server/Havoc Raceway.pkz).
+  // Both would land on the same path, so skip the server copy whenever the rider copy is present.
+  const SERVER_DIR = /^(?:servers?|dedicated|dedi|server[ _-]?(?:files?|version|only|side))$/i;
+  const isServerCopy = (rel) => rel.split('/').slice(0, -1).some((s) => SERVER_DIR.test(s));
+  const riderNames = new Set(files.filter((f) => !isServerCopy(f.rel)).map((f) => f.rel.split('/').pop().toLowerCase()));
   for (const f of files) {
+    if (!gameRoot && isServerCopy(f.rel) && riderNames.has(f.rel.split('/').pop().toLowerCase())) {
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'server-copy' });
+      continue;
+    }
     if (gameRoot) {
       const segs = f.rel.split('/').slice(strip);
       const fname = segs[segs.length - 1];
