@@ -13,6 +13,8 @@
  *   cl /LD /O2 mxbm_presence.c /Fe:mxbm_presence.dlo
  */
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h> /* types only; socket functions are looked up at runtime */
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -50,6 +52,9 @@ typedef struct { int used, num; char name[100], bike[100], category[100]; } Ride
 static void hookStart(const char *dir);
 static void hookStop(void);
 static int connectedServer(char *name, size_t ncap, char *addr, size_t acap);
+static void stunStart(unsigned char *base);
+static void stunStop(void);
+static void stunUnhook(void);
 
 static char g_path[MAX_PATH * 2];
 static char g_tmp[MAX_PATH * 2];
@@ -273,7 +278,7 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
  *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
  *    MX Bikes Manager ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
  * Research notes: plugin/MISMATCH_NOTES.md. */
-#define HOOK_BUILD 2
+#define HOOK_BUILD 3
 #define RVA_UI_SLOT  0x566C48u
 #define RVA_SIG      0xAFDF3u
 #define RVA_RETURN   0xAFE1Eu
@@ -375,6 +380,7 @@ static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
   if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_PRIV_INSTRUCTION) return EXCEPTION_CONTINUE_SEARCH;
   if (!g_selfBase || ip < g_selfBase || ip >= g_selfBase + g_selfSize) return EXCEPTION_CONTINUE_SEARCH;
   if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
+  stunUnhook();
   { char o[200]; sprintf(o, "{\"v\":1,\"build\":%d,\"at\":%llu}", HOOK_BUILD, nowMs()); writeSmall("mxbm_hook_disabled.json", o); }
   hookState("disabled", "MX Bikes crashed inside the MX Bikes Manager plugin");
   return EXCEPTION_CONTINUE_SEARCH;
@@ -426,6 +432,7 @@ static DWORD WINAPI hookThread(LPVOID unused) {
   if (memcmp(base + RVA_SIG, SIG, sizeof SIG) == 0) mxbm_expect_ret = base + RVA_RETURN;
   if (memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) == 0) mxbm_expect_ret2 = base + RVA_RETURN2;
   g_buildOk = mxbm_expect_ret || mxbm_expect_ret2;
+  if (g_buildOk) stunStart(base);
   if (!mxbm_expect_ret && !mxbm_expect_ret2) {
     hookState("paused", "This MX Bikes version is newer than the plugin; missing-track detection waits for an MX Bikes Manager update");
     return 0;
@@ -444,6 +451,131 @@ static DWORD WINAPI hookThread(LPVOID unused) {
   return 0;
 }
 
+/* ===================== Public address for Host World (STUN) =====================
+ * Someone hosting with Host World is reachable at their router's outside IP:port for the game's
+ * UDP socket (local port 54210), which the router may map to a different outside port. The master
+ * server sees that mapping; CoreMX can't ask it. Instead the plugin sends one STUN binding request
+ * (stun.cloudflare.com:3478) from the game's own socket while in a session, every 2 minutes. The
+ * reply carries the outside IP:port; the plugin takes it out of the game's receive call (the game
+ * never sees it) and writes mxbm_public.json for CoreMX.
+ * The game imports recvfrom by ordinal; its import slot (RVA 0x321988, this build) is wrapped only
+ * after checking it points at ws2_32's recvfrom, and is restored on shutdown or a crash. */
+#define RVA_IAT_RECVFROM 0x321988u
+typedef int (WINAPI *recvfrom_t)(SOCKET, char *, int, int, struct sockaddr *, int *);
+typedef int (WINAPI *sendto_t)(SOCKET, const char *, int, int, const struct sockaddr *, int);
+typedef int (WINAPI *getsockname_t)(SOCKET, struct sockaddr *, int *);
+typedef int (WINAPI *getaddrinfo_t)(const char *, const char *, const struct addrinfo *, struct addrinfo **);
+typedef void (WINAPI *freeaddrinfo_t)(struct addrinfo *);
+static recvfrom_t real_recvfrom; static sendto_t real_sendto; static getsockname_t real_getsockname;
+static getaddrinfo_t real_getaddrinfo; static freeaddrinfo_t real_freeaddrinfo;
+static void **g_iatRecv = 0;
+static volatile SOCKET g_gameSock = 0;
+static volatile int g_gameSockV6 = 0;
+static unsigned char g_txid[12];
+static volatile LONG g_stunPending = 0;
+static HANDLE g_stunThread = 0;
+
+/* A STUN binding success for our request: write the outside address. Returns 1 to drop the packet. */
+static int stunReply(const unsigned char *b, int n) {
+  int at, len;
+  if (n < 20 || b[0] != 0x01 || b[1] != 0x01 || b[4] != 0x21 || b[5] != 0x12 || b[6] != 0xA4 || b[7] != 0x42) return 0;
+  if (memcmp(b + 8, g_txid, 12) != 0) return 0;
+  len = (b[2] << 8) | b[3];
+  for (at = 20; at + 4 <= n && at + 4 <= 20 + len; ) {
+    int type = (b[at] << 8) | b[at + 1], alen = (b[at + 2] << 8) | b[at + 3];
+    const unsigned char *v = b + at + 4;
+    if (at + 4 + alen > n) break;
+    if ((type == 0x0020 || type == 0x8020 || type == 0x0001) && alen >= 8 && v[1] == 0x01) {
+      int x = type != 0x0001;
+      unsigned port = ((unsigned)v[2] << 8 | v[3]) ^ (x ? 0x2112 : 0);
+      unsigned a0 = v[4] ^ (x ? 0x21 : 0), a1 = v[5] ^ (x ? 0x12 : 0), a2 = v[6] ^ (x ? 0xA4 : 0), a3 = v[7] ^ (x ? 0x42 : 0);
+      char o[160];
+      sprintf(o, "{\"v\":1,\"at\":%llu,\"address\":\"%u.%u.%u.%u:%u\"}", nowMs(), a0, a1, a2, a3, port);
+      writeSmall("mxbm_public.json", o);
+      InterlockedExchange(&g_stunPending, 0);
+      return 1;
+    }
+    at += 4 + ((alen + 3) & ~3);
+  }
+  InterlockedExchange(&g_stunPending, 0);
+  return 1;
+}
+
+static int WINAPI hk_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen) {
+  for (;;) {
+    int r = real_recvfrom(s, buf, len, flags, from, fromlen);
+    if (!g_gameSock && real_getsockname) {
+      unsigned char a[64]; int al = sizeof a;
+      /* port is at bytes 2..3 for both sockaddr_in and sockaddr_in6 */
+      if (real_getsockname(s, (struct sockaddr *)a, &al) == 0 && ((a[2] << 8) | a[3]) == 54210) {
+        g_gameSockV6 = ((struct sockaddr *)a)->sa_family == AF_INET6;
+        g_gameSock = s;
+      }
+    }
+    if (r >= 20 && g_stunPending && s == g_gameSock && stunReply((const unsigned char *)buf, r)) continue;
+    return r;
+  }
+}
+
+static DWORD WINAPI stunThread(LPVOID unused) {
+  unsigned long long last = 0;
+  (void)unused;
+  while (!g_hookStop) {
+    Sleep(1000);
+    if (!g_gameSock || !S.inEvent || nowMs() - last < 120000) continue;
+    last = nowMs();
+    {
+      struct addrinfo hints, *res = NULL; unsigned char req[20]; int i;
+      memset(&hints, 0, sizeof hints); hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+      if (!real_getaddrinfo || real_getaddrinfo("stun.cloudflare.com", "3478", &hints, &res) != 0 || !res) continue;
+      req[0] = 0x00; req[1] = 0x01; req[2] = 0; req[3] = 0; req[4] = 0x21; req[5] = 0x12; req[6] = 0xA4; req[7] = 0x42;
+      for (i = 0; i < 12; i++) g_txid[i] = (unsigned char)(rand() ^ (GetTickCount() >> (i % 8)));
+      memcpy(req + 8, g_txid, 12);
+      InterlockedExchange(&g_stunPending, 1);
+      if (g_gameSockV6) {
+        /* The game's socket is dual-stack IPv6: send to the IPv4-mapped address. */
+        struct sockaddr_in6 to; const struct sockaddr_in *v4 = (const struct sockaddr_in *)res->ai_addr;
+        memset(&to, 0, sizeof to); to.sin6_family = AF_INET6; to.sin6_port = v4->sin_port;
+        to.sin6_addr.s6_addr[10] = 0xff; to.sin6_addr.s6_addr[11] = 0xff; memcpy(&to.sin6_addr.s6_addr[12], &v4->sin_addr, 4);
+        real_sendto(g_gameSock, (const char *)req, 20, 0, (const struct sockaddr *)&to, sizeof to);
+      } else {
+        real_sendto(g_gameSock, (const char *)req, 20, 0, res->ai_addr, (int)res->ai_addrlen);
+      }
+      real_freeaddrinfo(res);
+    }
+  }
+  return 0;
+}
+
+static void stunStart(unsigned char *base) {
+  HMODULE ws = GetModuleHandleA("ws2_32.dll");
+  DWORD old;
+  if (!ws) return;
+  real_recvfrom = (recvfrom_t)(void *)GetProcAddress(ws, "recvfrom");
+  real_sendto = (sendto_t)(void *)GetProcAddress(ws, "sendto");
+  real_getsockname = (getsockname_t)(void *)GetProcAddress(ws, "getsockname");
+  real_getaddrinfo = (getaddrinfo_t)(void *)GetProcAddress(ws, "getaddrinfo");
+  real_freeaddrinfo = (freeaddrinfo_t)(void *)GetProcAddress(ws, "freeaddrinfo");
+  if (!real_recvfrom || !real_sendto || !real_getsockname || !real_getaddrinfo || !real_freeaddrinfo) return;
+  g_iatRecv = (void **)(base + RVA_IAT_RECVFROM);
+  if (*g_iatRecv != (void *)real_recvfrom) { g_iatRecv = 0; return; } /* not this build's import slot */
+  if (!VirtualProtect(g_iatRecv, sizeof(void *), PAGE_READWRITE, &old)) { g_iatRecv = 0; return; }
+  InterlockedExchangePointer(g_iatRecv, (void *)hk_recvfrom);
+  VirtualProtect(g_iatRecv, sizeof(void *), old, &old);
+  g_stunThread = CreateThread(NULL, 0, stunThread, NULL, 0, NULL);
+}
+static void stunUnhook(void) {
+  DWORD old;
+  if (g_iatRecv && VirtualProtect(g_iatRecv, sizeof(void *), PAGE_READWRITE, &old)) {
+    InterlockedCompareExchangePointer(g_iatRecv, (void *)real_recvfrom, (void *)hk_recvfrom);
+    VirtualProtect(g_iatRecv, sizeof(void *), old, &old);
+  }
+}
+static void stunStop(void) {
+  if (g_stunThread) { WaitForSingleObject(g_stunThread, 3000); CloseHandle(g_stunThread); g_stunThread = 0; }
+  stunUnhook();
+}
+
 static void hookStart(const char *dir) {
   HMODULE self = 0;
   copy(g_dir, dir, sizeof g_dir);
@@ -459,6 +591,7 @@ static void hookStart(const char *dir) {
 
 static void hookStop(void) {
   InterlockedExchange(&g_hookStop, 1);
+  stunStop();
   if (g_hookThread) { WaitForSingleObject(g_hookThread, 2000); CloseHandle(g_hookThread); g_hookThread = 0; }
   if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
   if (g_veh) { RemoveVectoredExceptionHandler(g_veh); g_veh = 0; }

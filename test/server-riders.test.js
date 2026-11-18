@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 12);
+  assert.equal(health.version, 13);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -97,4 +97,11 @@ test('a Host World session gets the host public IP and the game port as its addr
   await call(v6.token, { 'x-forwarded-for': '198.51.100.7' })('POST', '/v1/hostip', {});
   await call(v6.token, { 'x-forwarded-for': '2001:db8::7' })('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'What!', trackId: 'Havoc Raceway', hosting: true, hostPort: 54210 } });
   assert.equal((await call(v6.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'What!').address, '198.51.100.7:54210');
+  // The STUN address from the game socket (router maps 54210 to 61890) is used when its IP matches
+  // the IP the service sees for this player; any other IP is ignored.
+  const hostingState = { inGame: true, inEvent: true, server: 'What!', trackId: 'Havoc Raceway', hosting: true, hostPort: 54210 };
+  await call(v6.token, { 'x-forwarded-for': '2001:db8::7' })('POST', '/v1/presence', { state: { ...hostingState, hostAddress: '203.0.113.50:61890' } });
+  assert.equal((await call(v6.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'What!').address, '198.51.100.7:54210');
+  await call(v6.token, { 'x-forwarded-for': '2001:db8::7' })('POST', '/v1/presence', { state: { ...hostingState, hostAddress: '198.51.100.7:61890' } });
+  assert.equal((await call(v6.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'What!').address, '198.51.100.7:61890');
 });
