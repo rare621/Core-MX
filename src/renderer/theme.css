@@ -557,3 +557,9 @@ select option { background: var(--solid-2); color: var(--text); }
 
 /* CoreMX application identity */
 .brand-icon { width: 34px; height: 34px; object-fit: contain; flex: 0 0 34px; }
+
+/* Bike tab: rows in each section get breathing room */
+.bike-livery-card { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 22px; }
+.bike-livery-card > .section-title { margin: 14px 4px 2px; }
+.bike-livery-card .slot { border-radius: 18px; padding: 14px 18px; box-shadow: var(--hairline); }
+.bike-livery-card > p { margin: 2px 4px 0; }

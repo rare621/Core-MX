@@ -154,3 +154,18 @@ test('protection inherits the game default until None clears it', async (t) => {
   const none = await profile.loadout(root, { sections: { info: { values: { protection: '' } }, protection: { values: { bike: '' } } } }, 'bike');
   assert.equal(none.current.protection, '');
 });
+
+test('a track that ships a server copy installs the rider copy, not the server one', async (t) => {
+  const root = await folder(t), modsDir = path.join(root, 'mods');
+  await fs.mkdir(modsDir, { recursive: true });
+  // Layout of mxb-mods.com/havoc-raceway (havoc.zip).
+  const files = [
+    { rel: 'havoc/Havoc Raceway.pkz', abs: 'rider.pkz', size: 653448490 },
+    { rel: 'havoc/server/Havoc Raceway.pkz', abs: 'server.pkz', size: 7568170 },
+  ];
+  const plan = installer.plan(files, { modsDir, categories: [22], title: 'Havoc Raceway' }, { kind: 'track', trackType: 'motocross' });
+  const rider = plan.entries.find((e) => e.abs === 'rider.pkz'), server = plan.entries.find((e) => e.abs === 'server.pkz');
+  assert.equal(rider.dest, 'tracks/motocross/Havoc Raceway.pkz');
+  assert.equal(server.status, 'skip'); assert.equal(server.how, 'server-copy'); assert.equal(server.dest, null);
+  assert.equal(plan.entries.filter((e) => e.dest === 'tracks/motocross/Havoc Raceway.pkz').length, 1);
+});
