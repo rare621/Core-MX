@@ -576,9 +576,118 @@ static void stunStop(void) {
   stunUnhook();
 }
 
+/* ===================== Server addresses from the game's server list =====================
+ * When Multiplayer is open, the game keeps its server list as an array: pointer at RVA 0x5985D8,
+ * int32 count at RVA 0x5985E0, records of 0x1D8 bytes (01, IPv4-mapped IPv6 address from +0x0B,
+ * port big-endian at +0x11, name at +0x26). The list arrives from the master server in batches and
+ * is rebuilt as you browse, so addresses are collected into an address book (each kept 6 hours
+ * after it was last seen, at most 1000) and written to mxbm_servers.txt for CoreMX:
+ *   coremx-serverlist 1 <unix ms>
+ *   <ipv4>:<port>\t<name>
+ * The array belongs to the game's UI thread and can be freed or moved at any moment, so it is
+ * copied with ReadProcessMemory, which fails instead of faulting. Only on this game build (the
+ * Missing Track signatures match). Reads only; nothing is written to the game. */
+#define RVA_SRV_LIST  0x5985D8u
+#define RVA_SRV_COUNT 0x5985E0u
+#define SRV_STRIDE    0x1D8
+#define SRV_MAX_ROWS  4096
+#define BOOK_MAX      1000
+#define BOOK_TTL_MS   (6ULL * 3600 * 1000)
+typedef struct { char addr[24]; char name[64]; unsigned long long seen; } SrvEntry;
+static SrvEntry g_book[BOOK_MAX];
+static int g_bookN = 0;
+static HANDLE g_srvThread = 0;
+static volatile LONG g_srvStop = 0;
+
+static int srvCopy(const void *from, void *to, size_t n) {
+  SIZE_T got = 0;
+  return ReadProcessMemory(GetCurrentProcess(), from, to, n, &got) && got == n;
+}
+
+/* Adds or refreshes one row. Returns 1 if the book changed in a way worth writing. */
+static int bookPut(const char *addr, const char *name, unsigned long long now) {
+  int i, oldest = 0;
+  for (i = 0; i < g_bookN; i++) {
+    if (strcmp(g_book[i].addr, addr) == 0) {
+      int renamed = strcmp(g_book[i].name, name) != 0;
+      if (renamed) copy(g_book[i].name, name, sizeof g_book[i].name);
+      g_book[i].seen = now;
+      return renamed;
+    }
+  }
+  if (g_bookN < BOOK_MAX) i = g_bookN++;
+  else { for (i = 1; i < g_bookN; i++) if (g_book[i].seen < g_book[oldest].seen) oldest = i; i = oldest; }
+  copy(g_book[i].addr, addr, sizeof g_book[i].addr);
+  copy(g_book[i].name, name, sizeof g_book[i].name);
+  g_book[i].seen = now;
+  return 1;
+}
+
+static void bookWrite(unsigned long long now) {
+  static char o[BOOK_MAX * 96 + 64];
+  size_t at = (size_t)sprintf(o, "coremx-serverlist 1 %llu\n", now);
+  int i;
+  for (i = 0; i < g_bookN; i++) at += (size_t)sprintf(o + at, "%s\t%s\n", g_book[i].addr, g_book[i].name);
+  writeSmall("mxbm_servers.txt", o);
+}
+
+static DWORD WINAPI serverListThread(LPVOID unused) {
+  const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
+  unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
+  unsigned long long lastWrite = 0;
+  int dirty = 0;
+  (void)unused;
+  if (!rows) return 0;
+  while (!g_srvStop) {
+    unsigned long long now = nowMs();
+    const unsigned char *list = 0; int count = 0, i;
+    Sleep(500);
+    if (srvCopy(base + RVA_SRV_LIST, (void *)&list, sizeof list) && srvCopy(base + RVA_SRV_COUNT, &count, sizeof count) &&
+        list && count > 0 && count <= SRV_MAX_ROWS && srvCopy(list, rows, (size_t)count * SRV_STRIDE)) {
+      for (i = 0; i < count; i++) {
+        const unsigned char *r = rows + (size_t)i * SRV_STRIDE;
+        char addr[24], name[64]; size_t k; unsigned port;
+        if (r[0] != 1 || r[0x0B] != 0xff || r[0x0C] != 0xff || !r[0x0D]) continue;
+        port = ((unsigned)r[0x11] << 8) | r[0x12];
+        if (!port) continue;
+        /* Names are UTF-8; stop at the end or at a control character (no tabs or newlines in the file). */
+        for (k = 0; k < sizeof name - 1 && r[0x26 + k] >= 0x20 && r[0x26 + k] != 0x7f; k++) name[k] = (char)r[0x26 + k];
+        name[k] = 0;
+        if (!name[0]) continue;
+        sprintf(addr, "%u.%u.%u.%u:%u", r[0x0D], r[0x0E], r[0x0F], r[0x10], port);
+        dirty |= bookPut(addr, name, now);
+      }
+    }
+    for (i = 0; i < g_bookN; ) {
+      if (now - g_book[i].seen > BOOK_TTL_MS) { g_book[i] = g_book[--g_bookN]; dirty = 1; } else i++;
+    }
+    /* Changes at most twice a second; an unchanged list renews its timestamp once a minute. */
+    if (g_bookN && ((dirty && now - lastWrite >= 500) || now - lastWrite >= 60000)) { bookWrite(now); lastWrite = now; dirty = 0; }
+  }
+  free(rows);
+  return 0;
+}
+
+static void serverListStart(void) {
+  const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
+  IMAGE_NT_HEADERS *nt;
+  if (!base || ((IMAGE_DOS_HEADER *)base)->e_magic != IMAGE_DOS_SIGNATURE) return;
+  nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+  if (nt->OptionalHeader.SizeOfImage < RVA_SRV_COUNT + 8) return;
+  /* .text is decrypted once the game runs its own code, which happens before plugins load. */
+  if (memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0 && memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) != 0) return;
+  g_srvStop = 0;
+  g_srvThread = CreateThread(NULL, 0, serverListThread, NULL, 0, NULL);
+}
+static void serverListStop(void) {
+  InterlockedExchange(&g_srvStop, 1);
+  if (g_srvThread) { WaitForSingleObject(g_srvThread, 2000); CloseHandle(g_srvThread); g_srvThread = 0; }
+}
+
 static void hookStart(const char *dir) {
   HMODULE self = 0;
   copy(g_dir, dir, sizeof g_dir);
+  serverListStart(); /* reads only, so it runs even when the hook is switched off */
   if (disabledForThisBuild()) { hookState("disabled", "Switched off after MX Bikes crashed inside the plugin"); return; }
   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(void *)hookStart, &self)) {
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)((unsigned char *)self + ((IMAGE_DOS_HEADER *)self)->e_lfanew);
@@ -591,6 +700,7 @@ static void hookStart(const char *dir) {
 
 static void hookStop(void) {
   InterlockedExchange(&g_hookStop, 1);
+  serverListStop();
   stunStop();
   if (g_hookThread) { WaitForSingleObject(g_hookThread, 2000); CloseHandle(g_hookThread); g_hookThread = 0; }
   if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);

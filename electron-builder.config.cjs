@@ -16,7 +16,7 @@ module.exports = {
   ],
   extraResources: [
     { from: 'build/generated/online.config.json', to: 'online.config.json' },
-    { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md', 'frostmod/**/*'] },
+    { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md'] },
   ],
   protocols: [{ name: 'CoreMX website and join links', schemes: ['mxbm'] }],
   win: {

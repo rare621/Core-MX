@@ -27,11 +27,8 @@ async function prepareResources(context) {
 }
 
 async function verifyPackage({ appOutDir, packager }) {
-  const helper = path.join(appOutDir, 'resources', 'plugin', 'frostmod');
-  const release = JSON.parse(fs.readFileSync(path.join(helper, 'release.json'), 'utf8'));
-  const bytes = fs.readFileSync(path.join(helper, 'frostmod.dlo'));
-  if (bytes.length !== release.size || require('crypto').createHash('sha256').update(bytes).digest('hex') !== release.sha256) throw new Error('Bundled FrostMod does not match its pinned release');
-  for (const name of require('../src/lib/frostmod').LICENSES) if (!fs.existsSync(path.join(helper, name))) throw new Error(`Missing FrostMod license: ${name}`);
+  if (!fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'mxbm_presence.dlo'))) throw new Error('Release is missing the CoreMX game plugin');
+  if (fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'frostmod'))) throw new Error('Release must not bundle FrostMod');
   const archive = path.join(appOutDir, 'resources', 'app.asar');
   const files = asar.listPackage(archive).map((name) => name.replace(/\\/g, '/').replace(/^\//, ''));
   const forbidden = files.filter((name) => /^(?:\.git|\.tmp|test|scripts|server|dist|docs|build|CODEX_NOTES\.md|MODDING_PLAN\.md|online\.config\.json)(?:\/|$)/i.test(name)
