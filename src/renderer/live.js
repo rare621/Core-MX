@@ -277,6 +277,9 @@ async function renderFriends(c) {
   if (!S.friends) S.friends = await api.invoke('friends:list');
   if (!S.accounts.steam) await refreshAccounts();
   const st = await liveStatus();
+  // The page may have changed while waiting; don't draw Friends over another page.
+  if (c.id === 'content' && S.view !== 'friends') return;
+  if (!c.isConnected) return;
   const connected = !!(st && st.service.connected);
   if (connected && Date.now() >= (S.live.friendsNext || 0) && !S.live.friendsRequest) {
     S.live.friendsLoading = true;
@@ -351,14 +354,15 @@ async function renderFriends(c) {
     st?.paintSync?.enabled, st?.paintSync?.busy, st?.paintSync?.at, st?.paintSync?.error,
     st?.paintSync?.received, st?.paintSync?.friends, steam.name, steam.avatarData,
   ]);
-  if (c._friendsDisplayKey === displayKey) {
+  // Skip a redraw only while this exact Friends page is still on screen: #content is shared by
+  // every page, so the key is kept on the page's own root element, which other pages replace.
+  if (c.firstElementChild?._friendsDisplayKey === displayKey) {
     c.querySelectorAll('[data-friend-status]').forEach((label) => {
       const friend = S.friends[Number(label.dataset.friendStatus)];
       if (friend) label.textContent = statusOf(friend)[1];
     });
     return;
   }
-  c._friendsDisplayKey = displayKey;
   const scrollTop = $('.scroller', c)?.scrollTop || 0;
   const searchFocused = document.activeElement?.id === 'friendSearch';
   const selection = searchFocused ? document.activeElement.selectionStart : 0;
@@ -376,6 +380,7 @@ async function renderFriends(c) {
             <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
     </section></div></div></div></div>`;
+  c.firstElementChild._friendsDisplayKey = displayKey;
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
   if (search) {
@@ -394,6 +399,7 @@ async function renderFriends(c) {
 
 async function renderSync(c) {
   const st = await liveStatus(), ps = st?.paintSync || {}, connected = !!st?.service.connected;
+  if (c.id === 'content' && !(S.view === 'online' && S.onlineTab === 'friends')) return;
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Online</h2>${onlineTabs()}</div><div class="scroller"><div class="fr-page"><div class="section-title">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Only currently equipped gear and the selected bike paint are shared.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div><p class="muted">Open friends and their gear from your Steam account at the bottom left.</p><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>`;
   $('#paintSync', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:paintSync', e.target.checked); renderSync(c); });
   $('#liveShare', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:share', e.target.checked); renderSync(c); });
