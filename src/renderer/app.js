@@ -1393,6 +1393,7 @@ async function refreshNotifications() {
   if (notificationRefresh) return notificationRefresh;
   notificationRefresh = (async () => { try {
     S.notifications = await api.invoke('online:notifications'); renderRail();
+    showSharePopups(S.notifications.notifications || []);
     const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup);
     if (unseen.length) {
       await api.invoke('online:seenAnnouncements', unseen.map((n) => n.id));
@@ -1404,6 +1405,31 @@ async function refreshNotifications() {
   catch { /* Offline users keep the last inbox until the service is reachable. */ }
   })().finally(() => { notificationRefresh = null; });
   return notificationRefresh;
+}
+// A friend shared a mod: a banner at the top for 5 seconds, then it fades. Click to open the mod.
+// Each share pops up once (remembered across restarts); shares already older than 10 minutes on
+// first sight just stay in the inbox.
+function openSharedMod(n) {
+  api.invoke('online:deleteNotification', n.id).then(() => refreshNotifications()).catch(() => {});
+  const id = /^coremx:/.test(n.postId) ? n.postId : Number(n.postId);
+  openPost({ id, title: n.title, image: null, link: /^coremx:/.test(n.postId) ? `https://coremx.app/#/mod/${encodeURIComponent(n.postId.slice(7))}` : 'https://mxb-mods.com/', coremxId: /^coremx:/.test(n.postId) ? n.postId.slice(7) : null });
+}
+function showSharePopups(list) {
+  let seen; try { seen = new Set(JSON.parse(localStorage.getItem('coremx.sharePopups') || '[]')); } catch { seen = new Set(); }
+  const fresh = list.filter((n) => n.kind !== 'announcement' && !n.read && !seen.has(n.id));
+  if (!fresh.length) return;
+  for (const n of fresh) seen.add(n.id);
+  try { localStorage.setItem('coremx.sharePopups', JSON.stringify([...seen].slice(-300))); } catch {}
+  let stack = document.getElementById('sharePopups');
+  if (!stack) { stack = document.createElement('div'); stack.id = 'sharePopups'; stack.className = 'share-popups'; document.body.appendChild(stack); }
+  fresh.filter((n) => Date.now() - (n.at || 0) < 10 * 60 * 1000).slice(0, 3).forEach((n, i) => {
+    const el = document.createElement('button');
+    el.className = 'share-popup';
+    el.innerHTML = `<span class="share-popup-ico">${icon('download')}</span><span class="share-popup-txt"><b>${esc(n.fromName || 'A friend')} shared a mod</b><span>${esc(n.title || 'Untitled mod')}</span></span><span class="share-popup-go">View ${icon('chevron')}</span>`;
+    el.addEventListener('click', () => { el.remove(); openSharedMod(n); });
+    stack.appendChild(el);
+    setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 600); }, 5000 + i * 400);
+  });
 }
 async function reportCoremxMod(post) {
   const m = modal({ title: `Report ${esc(post.title)}`, size: 'sm', body: '<div class="loadmore"><div class="spinner"></div></div>' });
