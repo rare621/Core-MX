@@ -2032,6 +2032,7 @@ function gearItem(slotId, value, context = S.rider) {
 function bikeItem(id) { return S.items.find((i) => i.group === 'bikes' && i.name === id); }
 function bikeTitle(id) { const it = bikeItem(id); return it ? it.title : id.replace(/_/g, ' '); }
 function prettyValue(slot, v) {
+  if (slot === 'bikeFont') return !v ? 'None' : v === 'default_black' ? 'Black' : v === 'default_white' ? 'White' : v.replace(/_/g, ' ');
   if (slot === 'protection' && !v) return 'None';
   if (slot === 'tyres' && !v) return 'Bike default';
   if (!v) return PAINT_SLOTS.has(slot) ? 'Default' : '—';
@@ -2083,17 +2084,17 @@ function drawBike(c) {
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
       <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame && !riderDirty() ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
-      <div class="bike-livery-card"><div class="section-title">Livery</div><button class="slot" data-slot="bikeAppearance"><span class="slot-ico">${icon("bike")}</span><span class="slot-txt"><span class="slot-l">Model</span><span class="slot-v">${esc(lo.appearances?.find((o) => o.id === lo.current.bikeAppearance)?.title || "Default bike")}</span></span><span class="slot-n">${lo.options.bikeAppearance?.length || 1} choices ${icon("chevron")}</span></button><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button></div>
+      <div class="bike-livery-card"><div class="section-title">Livery</div><button class="slot" data-slot="bikeAppearance"><span class="slot-ico">${icon("bike")}</span><span class="slot-txt"><span class="slot-l">Model</span><span class="slot-v">${esc(lo.appearances?.find((o) => o.id === lo.current.bikeAppearance)?.title || "Default bike")}</span></span><span class="slot-n">${lo.options.bikeAppearance?.length || 1} choices ${icon("chevron")}</span></button><button class="slot" data-slot="bikePaint"><span class="slot-ico">${icon('paint')}</span><span class="slot-txt"><span class="slot-l">Livery</span><span class="slot-v">${esc(prettyValue('bikePaint', lo.current.bikePaint))}</span></span><span class="slot-n">${lo.options.bikePaint.length} choices ${icon('chevron')}</span></button><button class="slot" data-slot="bikeFont"><span class="slot-ico">${icon('shirt')}</span><span class="slot-txt"><span class="slot-l">Number font</span><span class="slot-v">${esc(prettyValue('bikeFont', lo.current.bikeFont))}${lo.identity?.riderNumber ? ` · #${esc(lo.identity.riderNumber)}` : ''}</span></span><span class="slot-n">${(lo.options.bikeFont || []).length} choices ${icon('chevron')}</span></button></div>
       <div class="bike-livery-card"><div class="section-title">Tyres & wheels</div><button class="slot" data-slot="tyres"><span class="slot-ico">${icon('wheel')}</span><span class="slot-txt"><span class="slot-l">Tyre model</span><span class="slot-v">${esc(prettyValue('tyres', lo.current.tyres))}</span></span><span class="slot-n">${lo.options.tyres.length} choices ${icon('chevron')}</span></button><p class="muted" style="font-size:12px">Only tyre sets declared by this bike are listed.${lo.invalidTyres ? ' Your previous choice is incompatible. Apply to reset it to the bike default.' : ''}</p></div><p class="bike-save-note">${icon('info')}Close MX Bikes before saving changes.</p></div>
     </div></div></div></div>`;
   mountProfileControls();
-  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikeAppearance || '') + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || ''); R.bikeModelKey = key;
+  const key = R.profile + '|' + R.bike + '|' + (lo.current.bikeAppearance || '') + '|' + (lo.current.bikePaint || '') + '|' + (lo.current.tyres || '') + '|' + (lo.current.bikeFont || '') + '|' + (lo.identity?.riderNumber || ''); R.bikeModelKey = key;
   const attach = async () => {
     if (R.bikeModelKey !== key || !$('#bikeStage')) return;
     if (!R.bikeViewer) { const host = document.createElement('div'); host.className = 'stage-canvas'; R.bikeViewer = window.RiderViewer.create(host); }
     $('#bikeStage').prepend(R.bikeViewer.el);
     try {
-      const model = await api.invoke('bike:model', R.profile, R.bike, lo.current.bikePaint || '', 1024, lo.current);
+      const model = await api.invoke('bike:model', R.profile, R.bike, lo.current.bikePaint || '', 1024, { ...lo.current, riderNumber: lo.identity?.riderNumber ?? '' });
       if (R.bikeModelKey !== key || !$('#bikeStage') || !R.bikeViewer) return;
       R.bikeViewer.load(model); $('#bikeStatus').hidden = true;
       $('#bikeNote').textContent = model.warnings.join(' ');
@@ -2491,7 +2492,7 @@ async function openGearPreview({ slot, value, label, lo, context }) {
   let viewer = null;
   try {
     const model = slot.id === 'bikePaint'
-      ? await api.invoke('bike:model', R.profile, R.bike, value, 1024, lo.current)
+      ? await api.invoke('bike:model', R.profile, R.bike, value, 1024, { ...lo.current, riderNumber: lo.identity?.riderNumber ?? '' })
       : await api.invoke('rider:previewSlot', R.profile, R.bike, slot.id, value, lo.current);
     const host = $('[data-gear-preview]', m);
     if (!host || !m.isConnected) return;

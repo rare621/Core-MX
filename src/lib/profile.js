@@ -10,6 +10,8 @@ const gearAssets = require('./gear-assets');
 const SLOTS = [
   { id: 'bikePaint', label: 'Bike livery', section: 'paint', key: 'bike', group: 'Bike' },
   { id: 'tyres', label: 'Tyres / wheels', section: 'tyres', key: 'bike', group: 'Bike' },
+  // Number font on the plates: '' = none, default_black / default_white (misc.pkz) or a custom font in mods/misc/fonts.
+  { id: 'bikeFont', label: 'Number font', section: 'bike_font', key: 'bike', group: 'Bike' },
   { id: 'rider', label: 'Rider model', section: 'rider', key: 'bike', group: 'Rider', default: 'default_mx' },
   { id: 'helmet', label: 'Helmet', section: 'helmet', key: 'bike', group: 'Head', default: 'default' },
   { id: 'helmetPaint', label: 'Helmet paint', section: 'helmet_paint', key: 'bike', group: 'Head' },
@@ -161,6 +163,7 @@ async function loadout(modsDir, prof, bike, stockPkz) {
   const opts = {
     bikePaint: bikeDir ? await names(path.join(bikeDir, 'paints'), 'pnt') : [],
     tyres: ['', ...await require('./tyres').options(modsDir, stockPkz, bikeDir, bike)],
+    bikeFont: [...new Set(['', 'default_black', 'default_white', ...(await names(path.join(modsDir, 'misc', 'fonts')))])],
     rider: await names(path.join(modsDir, 'rider', 'riders')),
     helmet: ['default', ...(await names(path.join(gd, 'helmets')))],
     helmetPaint: helmet ? await names(path.join(gd, 'helmets', helmet, 'paints'), 'pnt') : [],

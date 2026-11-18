@@ -186,7 +186,72 @@ async function build(options) {
     const fitted = mounts(geom, radii);
     for (const part of parts) part.bind = fitted[part.slot];
   }
+  if (options.plate && options.plate.font && /^\d{1,3}$/.test(String(options.plate.number ?? ''))) {
+    try { await drawPlates({ cfg, textures, modsDir, installDir, font: options.plate.font, number: String(Number(options.plate.number)) }); }
+    catch { warnings.push('The number font could not be read, so the plates are shown without numbers.'); }
+  }
   return { parts, textures, warnings, unreadable, bike, paint, focus: {}, kind: 'bike' };
+}
+
+// ---- race number on the plates ----
+// A number font (misc/fonts/<name>, in the game's misc.pkz or in mods/misc/fonts) is a strip of
+// digits (plate.tga) plus gfx.cfg with chassis_number / steer_number { fontstring, spacing, posx,
+// posy }. The bike's gfx.cfg names its plate texture (chassis/steer { plate { texture } }), and the
+// game draws the number into a 256x128 area at the top-left of that texture (512 px reference),
+// digits `spacing` apart, centred, starting `posy` from the top.
+const fontCache = new Map();
+async function loadFont(modsDir, installDir, name) {
+  if (!/^[\w .-]{1,64}$/.test(name)) throw new Error('Invalid font');
+  const key = `${modsDir}|${installDir}|${name}`;
+  if (fontCache.has(key)) return fontCache.get(key);
+  const chain = await chainOf([{ dir: path.join(modsDir, 'misc', 'fonts', name) }, installDir ? { pkz: path.join(installDir, 'misc.pkz'), prefix: `misc/fonts/${name}` } : null]);
+  const cfgData = await readChain(chain, 'gfx.cfg');
+  if (!cfgData) throw new Error('Font has no gfx.cfg');
+  const cfg = parseCfg(cfgData.buf.toString('latin1'));
+  const images = {};
+  for (const part of ['chassis_number', 'steer_number']) {
+    const file = cfg[part] && cfg[part].font;
+    if (file && !images[file]) {
+      const data = await readChain(chain, file);
+      if (data) images[file] = require('./tga').decodeTGA(data.buf);
+    }
+  }
+  const font = { cfg, images };
+  fontCache.set(key, font); if (fontCache.size > 8) fontCache.delete(fontCache.keys().next().value);
+  return font;
+}
+async function drawPlates({ cfg, textures, modsDir, installDir, font: fontName, number }) {
+  const font = await loadFont(modsDir, installDir, fontName);
+  for (const [slot, fontPart] of [['chassis', 'chassis_number'], ['steer', 'steer_number']]) {
+    const texName = cfg[slot] && cfg[slot].plate && cfg[slot].plate.texture;
+    const tex = texName && textures[`${slot}:${texName}`];
+    const fp = font.cfg[fontPart], img = fp && font.images[fp.font];
+    if (!tex || !img) continue;
+    const chars = String(fp.fontstring || '0123456789'), gw = Number(fp.spacing) || Math.floor(img.width / chars.length);
+    const scale = tex.width / 512, area = { w: 256, h: 128 };
+    const total = number.length * gw, x0 = Math.round((area.w - total) / 2), y0 = Number(fp.posy) || 0;
+    // Draw into a copy so cached textures are never changed.
+    const data = Uint8Array.from(tex.data);
+    for (let k = 0; k < number.length; k++) {
+      const col = chars.indexOf(number[k]); if (col < 0) continue;
+      const dx0 = Math.round((x0 + k * gw) * scale), dy0 = Math.round(y0 * scale);
+      const dw = Math.round(gw * scale), dh = Math.round(img.height * scale);
+      for (let dy = 0; dy < dh; dy++) {
+        // Texture rows run bottom-up here (row 0 = v 0), so the plate area is counted from the last row.
+        const ty = tex.height - 1 - (dy0 + dy); if (ty < 0 || ty >= tex.height) continue;
+        const sy = Math.min(img.height - 1, Math.floor(dy / scale));
+        for (let dx = 0; dx < dw; dx++) {
+          const tx = dx0 + dx; if (tx < 0 || tx >= tex.width) continue;
+          const sx = col * gw + Math.min(gw - 1, Math.floor(dx / scale));
+          const s = (sy * img.width + sx) * 4, d = (ty * tex.width + tx) * 4, a = img.data[s + 3] / 255;
+          if (!a) continue;
+          for (let c = 0; c < 3; c++) data[d + c] = Math.round(img.data[s + c] * a + data[d + c] * (1 - a));
+          data[d + 3] = 255;
+        }
+      }
+    }
+    textures[`${slot}:${texName}`] = { ...tex, data, painted: true };
+  }
 }
 
 module.exports = { build, paints, geometry, mounts, selectNode };
