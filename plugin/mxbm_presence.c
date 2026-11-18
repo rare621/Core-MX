@@ -49,6 +49,7 @@ typedef struct { int used, num; char name[100], bike[100], category[100]; } Ride
 
 static void hookStart(const char *dir);
 static void hookStop(void);
+static int connectedServer(char *name, size_t ncap, char *addr, size_t acap);
 
 static char g_path[MAX_PATH * 2];
 static char g_tmp[MAX_PATH * 2];
@@ -103,7 +104,15 @@ static void writeState(void) {
     PUTS("trackId", S.trackId);
     PUTS("trackName", S.trackName);
     PUTS("eventName", S.eventName);
-    if (S.haveServer) { PUTS("server", S.server); PUTI("serverType", S.serverType); PUTS("guid", S.guid); }
+    if (S.haveServer) { PUTI("serverType", S.serverType); PUTS("guid", S.guid); }
+    {
+      /* The game only puts the server name in the on-track event; in the pits or while a race runs
+       * the plugin reads the connected server's name and exact address from the game instead. */
+      char ms[64], ma[32]; int mem = connectedServer(ms, sizeof ms, ma, sizeof ma);
+      if (S.server[0]) PUTS("server", S.server); else if (mem) PUTS("server", ms);
+      else if (S.haveServer) PUTS("server", S.server);
+      if (mem && (!S.server[0] || _stricmp(S.server, ms) == 0)) PUTS("serverAddress", ma);
+    }
     PUT(",\"riders\":[");
     {
       int first = 1, i;
@@ -371,6 +380,25 @@ static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* Connected server, from the game (this build only): name at RVA 0x9CC334 (64 bytes, followed by
+ * the MOTD) and the connection address at RVA 0xE53DE0, laid out like a server-list record
+ * (01, IPv4-mapped IPv6 address from +0x0B, port big-endian at +0x11). Online race events only. */
+static int g_buildOk = 0;
+static int connectedServer(char *name, size_t ncap, char *addr, size_t acap) {
+  const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL), *nm, *cb;
+  size_t i; unsigned port;
+  if (!g_buildOk || !base || S.type != 2 || ncap < 2 || acap < 24) return 0;
+  nm = base + 0x9CC334; cb = base + 0xE53DE0;
+  for (i = 0; i < ncap - 1 && nm[i]; i++) { if (nm[i] < 0x20 || nm[i] == 0x7f) return 0; name[i] = (char)nm[i]; }
+  name[i] = 0;
+  if (!name[0]) return 0;
+  if (cb[0] != 1 || cb[0x0B] != 0xff || cb[0x0C] != 0xff || !cb[0x0D]) return 0;
+  port = ((unsigned)cb[0x11] << 8) | cb[0x12];
+  if (!port) return 0;
+  sprintf(addr, "%u.%u.%u.%u:%u", cb[0x0D], cb[0x0E], cb[0x0F], cb[0x10], port);
+  return 1;
+}
+
 static int disabledForThisBuild(void) {
   char path[MAX_PATH * 2 + 40], buf[256] = {0}; FILE *f; int build = -1; char *p;
   sprintf(path, "%smxbm_hook_disabled.json", g_dir);
@@ -390,6 +418,7 @@ static DWORD WINAPI hookThread(LPVOID unused) {
   /* Each handler is watched only if its bytes match this game build exactly. */
   if (memcmp(base + RVA_SIG, SIG, sizeof SIG) == 0) mxbm_expect_ret = base + RVA_RETURN;
   if (memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) == 0) mxbm_expect_ret2 = base + RVA_RETURN2;
+  g_buildOk = mxbm_expect_ret || mxbm_expect_ret2;
   if (!mxbm_expect_ret && !mxbm_expect_ret2) {
     hookState("paused", "This MX Bikes version is newer than the plugin; missing-track detection waits for an MX Bikes Manager update");
     return 0;
