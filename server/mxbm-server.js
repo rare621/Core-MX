@@ -67,6 +67,17 @@ function save() {
 // ---------- helpers ----------
 const str = (v, n = 100) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
 const isSteamId = (v) => /^7656119\d{10}$/.test(String(v || ''));
+// The caller's public IPv4. Forwarded headers are only trusted from a proxy on this machine or the
+// local network (e.g. the reverse proxy in front of coremx.app), so a client cannot fake its address.
+function clientIp(req) {
+  const peer = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const local = peer === '::1' || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(peer);
+  if (local) {
+    const fwd = String(req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0]).trim().replace(/^::ffff:/, '');
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(fwd)) return fwd;
+  }
+  return peer;
+}
 const isAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || '')) && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(String(v));
 const hash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const serverKey = (name) => str(name, 64).toLowerCase();
@@ -170,6 +181,13 @@ const routes = {
       riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
     };
+    // Someone hosting from Host World: their game has no address to report, but this request comes
+    // from the host's own connection, so its public IP plus the game port is where friends join.
+    if (s.hosting === true && state.inEvent && state.server && !state.serverAddress) {
+      const port = Number(s.hostPort) >= 1024 && Number(s.hostPort) <= 65535 ? Number(s.hostPort) : 54210;
+      const addr = `${clientIp(req)}:${port}`;
+      if (isAddress(addr)) state.serverAddress = addr;
+    }
     // The game plugin reports a fresh non-event state as soon as MX Bikes
     // closes or the rider leaves a server.  Remove that reporter from the
     // old server immediately instead of leaving a "just now" ghost entry

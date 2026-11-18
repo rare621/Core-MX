@@ -47,3 +47,29 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/notifications/delete', { id: inbox.notifications[0].id });
   assert.equal((await plugin.c('GET', '/v1/notifications')).notifications.length, 0);
 });
+
+test('a Host World session gets the host public IP and the game port as its address', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-host-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const url = `http://127.0.0.1:${port}`;
+  const call = (token, extra = {}) => async (method, route, body) => {
+    const res = await fetch(url + route, { method, headers: { 'content-type': 'application/json', ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    const data = await res.json(); assert.ok(res.ok, data.error); return data;
+  };
+  const host = await call()('POST', '/v1/register', { steamId: '76561198000000011', name: 'Host' });
+  // The test connects through loopback, like the reverse proxy in front of the service.
+  const viaProxy = call(host.token, { 'x-forwarded-for': '203.0.113.9' });
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210 } });
+  const hosted = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
+  assert.equal(hosted.address, '203.0.113.9:54210');
+  // Not hosting: no address is invented.
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Someone else', trackId: 't' } });
+  const joined = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'Someone else');
+  assert.equal(joined.address, null);
+});

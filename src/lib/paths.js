@@ -2,17 +2,27 @@
 const fs = require('fs');
 const path = require('path');
 
+// Every place Windows may keep Documents (moved to another drive, or OneDrive in its variants).
+function userDirCandidates(documentsDir) {
+  const home = process.env.USERPROFILE || '';
+  const docs = [documentsDir, path.join(home, 'Documents'), process.env.OneDrive && path.join(process.env.OneDrive, 'Documents'),
+    process.env.OneDriveConsumer && path.join(process.env.OneDriveConsumer, 'Documents'), process.env.OneDriveCommercial && path.join(process.env.OneDriveCommercial, 'Documents'),
+    path.join(home, 'OneDrive', 'Documents')];
+  try { for (const e of fs.readdirSync(home, { withFileTypes: true })) if (e.isDirectory() && /^OneDrive/i.test(e.name)) docs.push(path.join(home, e.name, 'Documents')); } catch {}
+  return [...new Set(docs.filter(Boolean).map((d) => path.join(d, 'PiBoSo', 'MX Bikes')))];
+}
+// The folder MX Bikes really uses is the one with profiles; then global.ini; then mods.
+function userDirScore(dir) {
+  if (!dir || !fs.existsSync(dir)) return 0;
+  let profiles = 0;
+  try { profiles = fs.readdirSync(path.join(dir, 'profiles'), { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, 'profiles', e.name, 'profile.ini'))).length; } catch {}
+  return (profiles ? 8 : 0) + (fs.existsSync(path.join(dir, 'global.ini')) ? 4 : 0) + (fs.existsSync(path.join(dir, 'mods')) ? 2 : 0) + 1;
+}
 function detectGameUserDir(documentsDir) {
-  const candidates = [
-    path.join(documentsDir, 'PiBoSo', 'MX Bikes'),
-    path.join(process.env.USERPROFILE || '', 'Documents', 'PiBoSo', 'MX Bikes'),
-    path.join(process.env.USERPROFILE || '', 'OneDrive', 'Documents', 'PiBoSo', 'MX Bikes'),
-  ];
-  for (const c of candidates) {
-    if (c && fs.existsSync(path.join(c, 'mods'))) return c;
-  }
-  for (const c of candidates) if (c && fs.existsSync(c)) return c;
-  return candidates[0];
+  const candidates = userDirCandidates(documentsDir);
+  let best = candidates[0], score = 0;
+  for (const c of candidates) { const s = userDirScore(c); if (s > score) { best = c; score = s; } }
+  return best;
 }
 
 function findExe(list) {
@@ -92,4 +102,4 @@ function findGameExe(installDir) {
   } catch { return null; }
 }
 
-module.exports = { steamRoot, detectGameUserDir, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };
+module.exports = { steamRoot, detectGameUserDir, userDirScore, userDirCandidates, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };
