@@ -123,13 +123,19 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // Remember which address this server name had when we joined it from the app.
       const known = cfg().addresses || {};
       const lj = cfg().lastJoin;
-      if (lj && Date.now() - lj.at < JOIN_WINDOW && !known[next.server]) {
+      const resolved = await resolveServerAddress(next.server).catch(() => null);
+      // Only remember the join address when the game landed on the server that was clicked (a join
+      // that timed out, followed by joining another server in game, must not label that server).
+      const sameServer = lj && (!lj.name || lj.name.toLowerCase() === next.server.toLowerCase());
+      if (lj && Date.now() - lj.at < JOIN_WINDOW && sameServer && !resolved && !known[next.server]) {
         known[next.server] = lj.address;
         setCfg({ addresses: known, lastJoin: null });
       }
+      // An address seen in the game's own server list wins and corrects an older remembered one.
+      if (resolved && known[next.server] && known[next.server] !== resolved) { delete known[next.server]; setCfg({ addresses: known }); }
       // Resolve locally observed browser addresses on every poll, and report
       // them to friends too. Do not persist discovered entries beyond their TTL.
-      next.serverAddress = await resolveServerAddress(next.server).catch(() => null) || known[next.server] || null;
+      next.serverAddress = resolved || known[next.server] || null;
       const recent = store.get('recentServers') || [];
       const previous = recent.find((s) => s.name.toLowerCase() === next.server.toLowerCase());
       if (!previous || current?.server !== next.server || previous.address !== next.serverAddress || Date.now() - previous.at > 10 * 60 * 1000) {
@@ -384,7 +390,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return status();
   }
 
-  function noteJoin(address) { setCfg({ lastJoin: { address, at: Date.now() } }); }
+  // name: the server the user clicked Join on, so a failed join can't label the next server.
+  function noteJoin(address, name) { setCfg({ lastJoin: { address, name: typeof name === 'string' ? name.slice(0, 64) : '', at: Date.now() } }); }
 
   function requireAdmin() {
     if (steamId() !== ADMIN_STEAM_ID || cfg().id !== ADMIN_STEAM_ID || !adminKey) throw new Error('Unlock Admin with your Steam account and server admin key first.');

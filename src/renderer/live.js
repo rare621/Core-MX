@@ -128,7 +128,7 @@ async function drawLiveServers(refresh) {
       const tl = trackLabel(s);
       const cap = Number(s.capacity || s.maxPlayers) || 0, pingTone = s.ping == null ? '' : s.ping < 80 ? 'good' : s.ping < 150 ? 'ok' : 'bad';
       return `<div class="srv live-srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-pop ${s.riders.length ? 'busy' : ''}"><b>${s.riders.length}</b><small>${cap ? '/' + cap : 'riders'}</small></div>${pingTone ? `<span class="ping-dot ${pingTone}" title="${s.ping} ms"></span>` : ''}
-        <div class="srv-txt"><div class="t">${esc(s.name)}</div>
+        <div class="srv-txt"><div class="t">${esc(s.name)}${s.hosted ? '<span class="home-host" title="Hosted from a player\'s PC with Host World. Joining directly needs UDP 54210 open on their router; otherwise join it from MX Bikes, Multiplayer, World.">Home host</span>' : ''}</div>
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
           ${sessionLabel(s) ? ` · <b>${esc(sessionLabel(s))}</b>` : ''} · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
         <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
@@ -144,7 +144,11 @@ async function drawLiveServers(refresh) {
 // their Steam name is on the server's rider list), offer to download their free gear first
 // so their bikes and outfits show up in game. Then the usual track check and join.
 async function joinLiveServer(s) {
-  const join = () => joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) });
+  const join = () => {
+    // Home-hosted (Host World) servers are often only reachable through the in-game browser.
+    if (s.hosted) toast(`<b>${esc(s.name)}</b> is hosted from home. If MX Bikes says <b>connection timed out</b>, join it from <b>Multiplayer → World</b> in the game instead.`, 'info', 9000);
+    return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) });
+  };
   const st = S.live.status;
   if (!st || !st.service.connected || !s.name) return join();
   toast('Checking riders on this server…', 'info', 2500);
