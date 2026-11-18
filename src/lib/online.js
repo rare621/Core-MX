@@ -160,10 +160,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
-      // Hosting from Host World: the plugin reports server type 1 and the session name from Host
-      // setup. The game gives no address, so the service adds the host's public IP and the game's
-      // default port (54210; Host World has no port setting).
-      ...(s.inEvent && s.server && Number(s.serverType) === 1 && (!hostName || hostName.toLowerCase() === String(s.server).toLowerCase()) ? { hosting: true, hostPort: 54210 } : {}),
+      // Hosting from Host World: the server name is the session name from Host setup ([ui]
+      // hostsetup_name in the profile). The plugin's server type is not a host flag (seen as 1 and 2
+      // while hosting). The game gives no address, so the service adds the host's public IP and the
+      // game's default port (54210; Host World has no port setting).
+      ...(s.inEvent && s.server && hostName && hostName.toLowerCase() === String(s.server).trim().toLowerCase() ? { hosting: true, hostPort: 54210 } : {}),
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
