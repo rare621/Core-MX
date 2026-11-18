@@ -2080,7 +2080,7 @@ async function renderRider(c) {
   try {
     if (!R.profile || !R.profiles.length) { const p = await api.invoke('rider:profiles'); if (request !== R.renderRequest) return; R.profiles = p.profiles; R.profile ||= p.last; R.activeProfile = p.last; }
     if (!R.profile) {
-      c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('rider')}<h3>No game profile yet</h3><div>Start MX Bikes once to create your rider profile, then come back here.</div></div></div></div>`;
+      c.innerHTML = `<div class="view"><div class="empty" style="margin:auto"><div>${icon('rider')}<h3>No rider profile found</h3><div>CoreMX looked for profiles in <code>${esc(S.env?.profilesDir || 'your MX Bikes folder')}</code> and in your Documents folder, and found none. If you've never started MX Bikes, start it once. If your MX Bikes folder is somewhere unusual, choose it below.</div><div style="display:flex;gap:8px;justify-content:center;margin-top:16px"><button class="btn btn-primary" data-act="pick-user">${icon('folder')}Choose folder</button><button class="btn" data-act="redetect">${icon('refresh')}Find it again</button></div></div></div></div>`;
       return;
     }
     if (!R.bikes) { const bikes = await api.invoke('rider:bikes', R.profile); if (request !== R.renderRequest) return; R.bikes = bikes; }
@@ -3093,7 +3093,7 @@ async function renderSettings(c) {
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings">
     <div class="set-card"><h3>MX Bikes user folder</h3><p>Where your mods, profiles and replays live. Detected automatically from your Documents folder.</p>
       ${pathRow(s.gameUserDir, env.modsFound, 'user')}
-      <div class="muted mono" style="margin-top:8px">mods: ${esc(env.modsDir)}</div></div>
+      <div class="muted mono" style="margin-top:8px">mods: ${esc(env.modsDir)}</div>${env.profilesDir && !env.profilesDir.toLowerCase().startsWith((env.settings.gameUserDir || "").toLowerCase()) ? `<div class="muted mono" style="margin-top:4px">profiles: ${esc(env.profilesDir)} <span style="font-family:var(--ui)">(MX Bikes keeps these in Documents)</span></div>` : ""}</div>
     <div class="set-card"><h3>Game install folder</h3><p>Detected from your Steam libraries. Used for the Launch button.</p>
       ${pathRow(s.gameInstallDir, !!env.gameExe, 'install')}
       ${env.gameExe ? `<div class="muted mono" style="margin-top:8px">${esc(env.gameExe)}</div>` : `<div class="muted" style="margin-top:8px">No game exe found — Launch will start the game through Steam.</div>`}

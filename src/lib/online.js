@@ -117,10 +117,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // An app update brings a new plugin, but Windows locks it while the game runs: replace the
     // installed copy as soon as the game is closed (only if one is installed; a removed plugin
     // stays removed).
-    if (!gameRunning && !pluginUpdating && pluginStatus().needsUpdate) {
-      pluginUpdating = true;
-      installPlugin().catch(() => {}).finally(() => { pluginUpdating = false; onChange(status()); });
-    }
+    if (!gameRunning) updatePluginIfNeeded();
     if (!gameRunning) next = null; // stale file from a game that has closed
     if (next && next.inEvent && next.server) {
       // Remember which address this server name had when we joined it from the app.
@@ -147,13 +144,14 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   function stateForReport() {
     const s = current || {};
-    let riderName = '', riderProfile = '';
+    let riderName = '', riderProfile = '', hostName = '';
     try {
       const global = fs.readFileSync(path.join(userDir(), 'global.ini'), 'latin1');
       riderProfile = global.match(/^lastprofile=(.*)$/m)?.[1]?.trim() || '';
       if (riderProfile && riderProfile !== '.' && riderProfile !== '..' && !/[\\/\x00-\x1f]/.test(riderProfile)) {
         const profileText = fs.readFileSync(path.join(userDir(), 'profiles', riderProfile, 'profile.ini'), 'latin1');
         riderName = profileText.match(/^name=(.*)$/m)?.[1]?.trim() || '';
+        hostName = profileText.match(/^hostsetup_name=(.*)$/m)?.[1]?.trim() || '';
       }
     } catch {}
     return {
@@ -162,6 +160,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
+      // Hosting from Host World: the plugin reports server type 1 and the session name from Host
+      // setup. The game gives no address, so the service adds the host's public IP and the game's
+      // default port (54210; Host World has no port setting).
+      ...(s.inEvent && s.server && Number(s.serverType) === 1 && (!hostName || hostName.toLowerCase() === String(s.server).toLowerCase()) ? { hosting: true, hostPort: 54210 } : {}),
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
@@ -196,7 +198,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     else if (c.token) syncPaints().catch(() => {});
     // Existing installs otherwise keep the old DLO forever after an app upgrade.
     // Windows locks loaded plugins: never replace one while the game is open.
-    if (pluginStatus().needsUpdate) installPlugin().then(() => onChange(status())).catch(() => onChange(status()));
+    updatePluginIfNeeded();
   }
   function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); }
 
@@ -213,6 +215,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     };
   }
 
+  // One plugin update at a time, whether started at app start or when the game closes.
+  function updatePluginIfNeeded() {
+    if (pluginUpdating || !pluginStatus().needsUpdate) return pluginUpdating || Promise.resolve();
+    pluginUpdating = installPlugin().catch(() => {}).finally(() => { pluginUpdating = false; onChange(status()); });
+    return pluginUpdating;
+  }
   async function installPlugin() {
     const src = bundledPlugin(), dst = pluginPath();
     if (!fs.existsSync(src)) throw new Error('The plugin hasn\'t been built yet (plugin/mxbm_presence.dlo is missing).');

@@ -151,7 +151,7 @@ async function onHookStateFile(file) {
 }
 let pluginWatch = null;
 function watchPluginFiles() {
-  const dir = userDir(); if (!dir || pluginWatch === dir) return;
+  const dir = gameDataDir(); if (!dir || pluginWatch === dir) return;
   pluginWatch = dir;
   const missing = path.join(dir, 'mxbm_missing.json'), hook = path.join(dir, 'mxbm_hook.json');
   fs.watchFile(missing, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onMissingTrackFile(missing); });
@@ -190,7 +190,23 @@ const shopDownloads = new Map(); // product page behind a shop popup's downloads
 // ---------- paths ----------
 function userDir() { return store.get('settings').gameUserDir; }
 // Test-only: read/write profiles from a copy instead of the real game folder.
-function profUserDir() { return process.env.MXB_PROFILES_ROOT || userDir(); }
+// The folder MX Bikes itself uses for profiles, global.ini and plugin files. This is usually the
+// same as the folder chosen in Settings, but people who move their mods to another drive point
+// CoreMX at that drive, while the game keeps its profiles in DocumentsPiBoSoMX Bikes.
+let gameDataCache = { key: '', dir: '' };
+function gameDataDir() {
+  const chosen = userDir();
+  const key = chosen + '|' + Math.floor(Date.now() / 15000);
+  if (gameDataCache.key === key) return gameDataCache.dir;
+  let dir = chosen;
+  if (paths.userDirScore(chosen) < 8) {
+    const found = paths.detectGameUserDir(app.getPath('documents'));
+    if (paths.userDirScore(found) >= 8) dir = found;
+  }
+  gameDataCache = { key, dir };
+  return dir;
+}
+function profUserDir() { return process.env.MXB_PROFILES_ROOT || gameDataDir(); }
 function modsDir() { return path.join(userDir(), 'mods'); }
 function disabledDir() { return path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
 let discoveryInstall = null;
@@ -199,7 +215,7 @@ async function ensureDiscoveryPlugin() {
   discoveryInstall = (async () => {
     const settings = store.get('settings');
     const gameRunning = await profile.isGameRunning();
-    await frostmod.cleanup(settings.gameInstallDir, userDir(), { all: !gameRunning });
+    await frostmod.cleanup(settings.gameInstallDir, gameDataDir(), { all: !gameRunning });
     if (settings.frostmodAutoInstall === false || !settings.gameInstallDir || gameRunning) return;
     const result = await frostmod.installBundled(app.isPackaged ? process.resourcesPath : __dirname, settings.gameInstallDir);
     if (result.version && result.version !== settings.frostmodVersion) store.update('settings', (s) => ({ ...s, frostmodVersion: result.version }));
@@ -213,7 +229,7 @@ const serverNameKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().t
 async function knownServerAddresses() {
   const known = [...(store.get('servers') || [])];
   let latest = null;
-  for (const file of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
+  for (const file of frostmod.listCandidates(store.get('settings').gameInstallDir, gameDataDir())) {
     try {
       if ((await fsp.stat(file)).size > 512 * 1024) continue;
       const parsed = frostmod.parse(await fsp.readFile(file, 'utf8'));
@@ -265,6 +281,7 @@ function environment() {
   return {
     settings: s,
     modsDir: modsDir(),
+    profilesDir: path.join(profUserDir(), 'profiles'),
     disabledDir: disabledDir(),
     modsFound: fs.existsSync(modsDir()),
     gameExe: paths.findGameExe(s.gameInstallDir),
@@ -689,7 +706,7 @@ function openBrowserFor(j, url, reason) {
 // Tell the window when FrostMod writes a new server list (each time the in-game browser refreshes).
 const frostWatched = new Set();
 function watchFrostList() {
-  for (const p of frostmod.listCandidates(store.get('settings').gameInstallDir, userDir())) {
+  for (const p of frostmod.listCandidates(store.get('settings').gameInstallDir, gameDataDir())) {
     if (frostWatched.has(p)) continue;
     frostWatched.add(p);
     fs.watchFile(p, { interval: 3000 }, (cur, prev) => {
@@ -834,11 +851,11 @@ function registerIpc() {
     if (r.canceled || !r.filePaths[0]) return environment();
     let dir = r.filePaths[0];
     if (which === 'user' && path.basename(dir).toLowerCase() === 'mods') dir = path.dirname(dir);
-    store.update('settings', (s) => ({ ...s, [which === 'install' ? 'gameInstallDir' : 'gameUserDir']: dir }));
+    store.update('settings', (s) => ({ ...s, [which === 'install' ? 'gameInstallDir' : 'gameUserDir']: dir, ...(which === 'install' ? {} : { gameUserDirManual: true }) }));
     return environment();
   });
   handle('settings:redetect', () => {
-    store.update('settings', (s) => ({ ...s, gameUserDir: paths.detectGameUserDir(app.getPath('documents')), gameInstallDir: paths.detectGameInstallDir() }));
+    store.update('settings', (s) => ({ ...s, gameUserDir: paths.detectGameUserDir(app.getPath('documents')), gameUserDirManual: false, gameInstallDir: paths.detectGameInstallDir() }));
     return environment();
   });
 
@@ -1318,7 +1335,7 @@ function registerIpc() {
 
   // ---- full server list via FrostMod's file ----
   handle('frostmod:status', async () => {
-    const s = await frostmod.status(store.get('settings').gameInstallDir, userDir());
+    const s = await frostmod.status(store.get('settings').gameInstallDir, gameDataDir());
     return { ...s, version: store.get('settings').frostmodVersion || null, autoInstall: store.get('settings').frostmodAutoInstall !== false };
   });
   handle('frostmod:install', async () => {
@@ -1336,7 +1353,7 @@ function registerIpc() {
     if (p && fs.existsSync(p)) await shell.trashItem(p);
     const fl = frostmod.flagPath(store.get('settings').gameInstallDir);
     if (fl && fs.existsSync(fl)) await fsp.rm(fl, { force: true });
-    await frostmod.cleanup(store.get('settings').gameInstallDir, userDir(), { all: true });
+    await frostmod.cleanup(store.get('settings').gameInstallDir, gameDataDir(), { all: true });
     if (p) {
       const licenses = path.join(path.dirname(p), 'frostmod-licenses');
       for (const name of frostmod.LICENSES) await fsp.rm(path.join(licenses, name), { force: true });
@@ -1953,7 +1970,7 @@ app.whenReady().then(async () => {
   watchFrostList();
   online = onlineSvc.create({
     store, appDir: app.isPackaged ? process.resourcesPath : __dirname,
-    userDir: () => userDir(), installDir: () => store.get('settings').gameInstallDir,
+    userDir: () => gameDataDir(), installDir: () => store.get('settings').gameInstallDir,
     isGameRunning: () => profile.isGameRunning(),
     steamId: () => { const s = steam.detect(paths.steamRoot()); return s.found ? s.steamId : null; },
     steamName: () => { const s = steam.detect(paths.steamRoot()); return s.found ? s.name || '' : ''; },
