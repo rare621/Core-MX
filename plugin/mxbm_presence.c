@@ -278,7 +278,7 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
  *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
  *    MX Bikes Manager ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
  * Research notes: plugin/MISMATCH_NOTES.md. */
-#define HOOK_BUILD 3
+#define HOOK_BUILD 4
 #define RVA_UI_SLOT  0x566C48u
 #define RVA_SIG      0xAFDF3u
 #define RVA_RETURN   0xAFE1Eu
@@ -301,11 +301,24 @@ void *mxbm_expect_ret2 = 0;
 void mxbm_capture(const char *text, const unsigned char *frame);
 extern void mxbm_ui_stub(void);
 
+/* Work queued for the game's own thread (see the livery test below). The game calls the UI
+ * pointer from its main thread; the stub runs queued work there, before passing the call on. */
+volatile int mxbm_pending = 0;
+void mxbm_run_pending(void);
+
 __asm__(
   ".intel_syntax noprefix\n"
   ".text\n"
   ".globl mxbm_ui_stub\n"
   "mxbm_ui_stub:\n"
+  "  cmp dword ptr [rip + mxbm_pending], 0\n"
+  "  je 3f\n"
+  "  push rcx\n  push rdx\n  push r8\n  push r9\n"
+  "  sub rsp, 0x28\n"
+  "  call mxbm_run_pending\n"
+  "  add rsp, 0x28\n"
+  "  pop r9\n  pop r8\n  pop rdx\n  pop rcx\n"
+  "3:\n"
   "  cmp ecx, 0x112\n"
   "  jne 1f\n"
   "  mov rax, [rsp]\n"
@@ -374,11 +387,15 @@ void mxbm_capture(const char *text, const unsigned char *frame) {
 
 /* A crash with the instruction pointer inside this DLL: switch the hook off for good (until a new
  * plugin build), put the game's pointer back, then let the crash continue as it would have. */
+/* Set while this plugin is running a game function itself (the livery test): a crash on that
+ * thread then counts as ours even though it happens inside the game's code. */
+static volatile DWORD g_gameCallThread = 0;
 static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
   DWORD code = e->ExceptionRecord->ExceptionCode;
   unsigned char *ip = (unsigned char *)e->ExceptionRecord->ExceptionAddress;
+  int inCall = g_gameCallThread && g_gameCallThread == GetCurrentThreadId();
   if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_PRIV_INSTRUCTION) return EXCEPTION_CONTINUE_SEARCH;
-  if (!g_selfBase || ip < g_selfBase || ip >= g_selfBase + g_selfSize) return EXCEPTION_CONTINUE_SEARCH;
+  if (!inCall && (!g_selfBase || ip < g_selfBase || ip >= g_selfBase + g_selfSize)) return EXCEPTION_CONTINUE_SEARCH;
   if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
   stunUnhook();
   { char o[200]; sprintf(o, "{\"v\":1,\"build\":%d,\"at\":%llu}", HOOK_BUILD, nowMs()); writeSmall("mxbm_hook_disabled.json", o); }
@@ -631,6 +648,7 @@ static void bookWrite(unsigned long long now) {
   writeSmall("mxbm_servers.txt", o);
 }
 
+static void liveryTestPoll(void);
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -642,6 +660,7 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
     unsigned long long now = nowMs();
     const unsigned char *list = 0; int count = 0, i;
     Sleep(500);
+    liveryTestPoll();
     if (srvCopy(base + RVA_SRV_LIST, (void *)&list, sizeof list) && srvCopy(base + RVA_SRV_COUNT, &count, sizeof count) &&
         list && count > 0 && count <= SRV_MAX_ROWS && srvCopy(list, rows, (size_t)count * SRV_STRIDE)) {
       for (i = 0; i < count; i++) {
@@ -666,6 +685,104 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
   }
   free(rows);
   return 0;
+}
+
+/* ===================== Live livery test (your own bike, on your screen only) =====================
+ * Research step for live liveries: show another installed livery on your own bike without
+ * rebuilding it, using the game's own function. Started by a file mxbm_test_livery.txt (a livery
+ * name, or empty to only list them); the result goes to mxbm_test_result.json.
+ *
+ * The game paints a bike in RVA 0x4CE00 (its "apply all paints" step after building a vehicle): it
+ * formats "%sbikes\%s\paints\%s.pnt" (folder root from the livery entry +0x88, bike folder,
+ * livery name) and sends engine command 0x9E (paint a model from a .pnt) through the UI pointer for
+ * each bike part: the model ids at record + 0x274 + {0x00, 0x10, 0x14, 0x50, 0x60, 0x70}. The test
+ * does the same, through the game's own pointer. (Record + 0x5B0C is the pit stand, built by
+ * RVA 0x455C0; RVA 0x4DC50 repaints that, which the first test did by mistake.) Vehicle records:
+ * RVA 0xF4EE20, stride 0x5B24, own index + 1 at RVA 0xE62710, bike id at +0x30. Bike list: pointer
+ * at RVA 0xF4EDE8 (stride 0x4334, folder id at +0x00), count at RVA 0xF48218. Bike liveries:
+ * pointer at RVA 0xF4EDF8 (stride 0x18C, +0x00 bike index, +0x04 name), count at RVA 0x109DE88.
+ * The record is not changed: nothing is saved or sent, and the next rebuild shows your livery. */
+#define RVA_APPLY_LIVERY 0x4DC50u
+static const unsigned char SIG_APPLY_LIVERY[14] = { 0x4c, 0x8b, 0xdc, 0x55, 0x56, 0x41, 0x54, 0x48, 0x81, 0xec, 0x60, 0x01, 0x00, 0x00 };
+typedef void *(*dispatch_t)(int cmd, int id, const char *a, const char *b);
+static const int BIKE_PARTS[6] = { 0x00, 0x10, 0x14, 0x50, 0x60, 0x70 };
+static char g_testLivery[132];
+
+static void liveryTestResult(const char *requested, int applied, const char *reason, const char *bike, const char *current, int object, const char *list) {
+  static char o[16384]; size_t at;
+  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"applied\":%s,\"object\":%d,\"reason\":", nowMs(), applied ? "true" : "false", object);
+  at = jstr(o, at, reason, sizeof o - 64);
+  memcpy(o + at, ",\"requested\":", 13); at += 13; at = jstr(o, at, requested, sizeof o - 64);
+  memcpy(o + at, ",\"bike\":", 8); at += 8; at = jstr(o, at, bike, sizeof o - 64);
+  memcpy(o + at, ",\"current\":", 11); at += 11; at = jstr(o, at, current, sizeof o - 64);
+  memcpy(o + at, ",\"liveries\":[", 13); at += 13;
+  if (at + strlen(list) + 4 < sizeof o) { memcpy(o + at, list, strlen(list)); at += strlen(list); }
+  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_test_result.json", o);
+}
+
+/* Runs on the game's main thread, from the UI stub. */
+void mxbm_run_pending(void) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  static unsigned char entry[0x18C];
+  static char list[12000];
+  char requested[132], bike[33], current[33], root[0x105], path[MAX_PATH * 2];
+  int own = 0, bikeCount = 0, paintCount = 0, bikeIndex = -1, found = 0, object = 0, i;
+  size_t lat = 0;
+  const unsigned char *bikes = 0, *paints = 0, *rec;
+  mxbm_pending = 0;
+  copy(requested, g_testLivery, sizeof requested);
+  list[0] = 0; bike[0] = 0; current[0] = 0;
+  if (!S.inEvent) { liveryTestResult(requested, 0, "not in a session", "", "", 0, ""); return; }
+  if (memcmp(base + RVA_APPLY_LIVERY, SIG_APPLY_LIVERY, sizeof SIG_APPLY_LIVERY) != 0) { liveryTestResult(requested, 0, "game build differs", "", "", 0, ""); return; }
+  if (!srvCopy(base + 0xE62710, &own, 4) || own < 1 || own > 64) { liveryTestResult(requested, 0, "own vehicle not found", "", "", 0, ""); return; }
+  rec = base + 0xF4EE20 + (size_t)(own - 1) * 0x5B24;
+  memcpy(bike, rec + 0x30, 32); bike[32] = 0;
+  memcpy(current, rec + 0x90, 32); current[32] = 0;
+  object = *(const int *)(rec + 0x274);
+  if (!srvCopy(base + 0xF48218, &bikeCount, 4) || !srvCopy(base + 0xF4EDE8, (void *)&bikes, sizeof bikes) || bikeCount <= 0 || bikeCount > 5000 || !bikes) { liveryTestResult(requested, 0, "bike list not readable", bike, current, object, ""); return; }
+  for (i = 0; i < bikeCount; i++) {
+    char id[65];
+    if (!srvCopy(bikes + (size_t)i * 0x4334, id, 64)) break;
+    id[64] = 0;
+    if (_stricmp(id, bike) == 0) { bikeIndex = i; break; }
+  }
+  if (bikeIndex < 0) { liveryTestResult(requested, 0, "bike not in the bike list", bike, current, object, ""); return; }
+  if (!srvCopy(base + 0x109DE88, &paintCount, 4) || !srvCopy(base + 0xF4EDF8, (void *)&paints, sizeof paints) || paintCount <= 0 || paintCount > 100000 || !paints) { liveryTestResult(requested, 0, "livery list not readable", bike, current, object, ""); return; }
+  for (i = 0; i < paintCount; i++) {
+    char name[0x85];
+    if (!srvCopy(paints + (size_t)i * 0x18C, entry, sizeof entry)) break;
+    if (*(int *)entry != bikeIndex) continue;
+    memcpy(name, entry + 4, 0x84); name[0x84] = 0;
+    if (!found && _stricmp(name, requested) == 0) { found = 1; memcpy(root, entry + 0x88, 0x104); root[0x104] = 0; }
+    if (lat + 140 < sizeof list) { if (lat) list[lat++] = ','; lat = jstr(list, lat, name, sizeof list - 4); list[lat] = 0; }
+  }
+  if (!requested[0]) { liveryTestResult(requested, 0, "listed only", bike, current, object, list); return; }
+  if (!found) { liveryTestResult(requested, 0, "that livery is not installed for this bike", bike, current, object, list); return; }
+  if (!object) { liveryTestResult(requested, 0, "your bike has no model right now", bike, current, object, list); return; }
+  if (strlen(root) + strlen(bike) + strlen(requested) + 24 >= sizeof path) { liveryTestResult(requested, 0, "path too long", bike, current, object, list); return; }
+  sprintf(path, "%sbikes\\%s\\paints\\%s.pnt", root, bike, requested);
+  g_gameCallThread = GetCurrentThreadId();
+  for (i = 0; i < 6; i++) {
+    int id = *(const int *)(rec + 0x274 + BIKE_PARTS[i]);
+    if (id > 0) ((dispatch_t)mxbm_orig_ui)(0x9E, id, path, path);
+  }
+  g_gameCallThread = 0;
+  liveryTestResult(requested, 1, "applied", bike, current, object, list);
+}
+
+/* Polled from the server-list thread: a request file queues the test for the game's thread. */
+static void liveryTestPoll(void) {
+  char path[MAX_PATH * 2 + 40], buf[132] = {0}; FILE *f; size_t n;
+  if (!mxbm_orig_ui || mxbm_pending) return; /* needs the UI hook to reach the game's thread */
+  sprintf(path, "%smxbm_test_livery.txt", g_dir);
+  f = fopen(path, "rb"); if (!f) return;
+  n = fread(buf, 1, sizeof buf - 1, f); fclose(f);
+  DeleteFileA(path);
+  while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == ' ')) buf[--n] = 0;
+  buf[n] = 0;
+  copy(g_testLivery, buf, sizeof g_testLivery);
+  mxbm_pending = 1;
 }
 
 static void serverListStart(void) {
