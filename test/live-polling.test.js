@@ -8,7 +8,12 @@ test('progress and failed friends refreshes stay bounded instead of immediately 
   let now = 100000;
   const calls = [], listeners = {}, intervals = [];
   const state = { view: 'online', onlineTab: 'servers', allSrv: {}, friends: [], accounts: { steam: {} } };
-  const box = { innerHTML: '' };
+  let serverRenders = 0;
+  const box = {
+    _html: '',
+    get innerHTML() { return this._html; },
+    set innerHTML(value) { this._html = value; serverRenders++; },
+  };
   const context = vm.createContext({
     S: state, Date: { now: () => now },
     api: { on: (event, cb) => { listeners[event] = cb; }, invoke: async (name) => {
@@ -28,12 +33,14 @@ test('progress and failed friends refreshes stay bounded instead of immediately 
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.filter((n) => n === 'online:servers').length, 1);
+  assert.equal(serverRenders, 1, 'identical status events keep the server cards mounted');
   for (let i = 0; i < 100; i++) listeners['online:status'](status);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.length, 1);
   now += 300000;
   await intervals[0]();
   assert.equal(calls.length, 2);
+  assert.equal(serverRenders, 1, 'a background refresh with unchanged servers does not flash the list');
   state.onlineTab = 'host'; // Exercise list fetching without drawing the friends screen.
   await context.refreshLiveList('friends');
   for (let i = 0; i < 100; i++) await context.refreshLiveList('friends', true);

@@ -1063,10 +1063,17 @@ async function browseRefresh(key, reqId) {
     if (reqId !== b.reqId || key !== browseKey() || b.page !== 1 || b.loading || b.autoScanning) return;
     // A source failure must not replace a complete cached section with a partial one.
     if (!r.posts.length && b.posts.length) return;
+    const samePosts = JSON.stringify(b.posts) === JSON.stringify(r.posts);
     b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, posts: r.posts.slice(0, 60) };
     b.posts = r.posts; b.page = 1; b.totalPages = r.totalPages;
-    b.total = r.total; b.cursor = r.nextCursor || null; b.reqId++;
+    b.total = r.total; b.cursor = r.nextCursor || null;
     browseCacheWrite(key, b);
+    if (samePosts) {
+      const count = $('#brCount');
+      if (count) count.textContent = b.total ? `${b.total.toLocaleString()} mods` : '';
+      return;
+    }
+    b.reqId++;
     renderBrowseGrid();
   } catch { /* Keep the last complete snapshot and retry on the next visit. */ }
   finally { if (b.refreshing?.key === key && b.refreshing.reqId === reqId) b.refreshing = null; }

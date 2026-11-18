@@ -79,12 +79,13 @@ function drawYouAreOn() {
   const box = $('#youAreOn');
   if (!box) return;
   const st = S.live.status, pr = st && st.presence;
-  if (!pr || !pr.inEvent) { box.innerHTML = ''; return; }
+  if (!pr || !pr.inEvent) { if (box._lastHtml !== '') { box.innerHTML = ''; box._lastHtml = ''; } return; }
   const online = !!pr.server;
-  box.innerHTML = `<div class="set-card live-now"><div class="live-dot"></div><div style="flex:1">
+  const html = `<div class="set-card live-now"><div class="live-dot"></div><div style="flex:1">
       <b>${online ? `You're on ${esc(pr.server)}` : 'In a session (the server name appears once you ride out)'}</b>
       <div class="muted">${esc(pr.trackName || pr.trackId)} · ${esc(pr.bikeName || '')}${pr.riders && pr.riders.length > 1 ? ` · ${pr.riders.length} riders` : ''}${pr.session != null && SESSION_NAMES[pr.session] && pr.type === 2 ? ` · ${SESSION_NAMES[pr.session]}` : ''}</div></div>
     ${online && pr.serverAddress ? `<button class="btn btn-sm" data-act="live-copy-link" data-addr="${esc(pr.serverAddress)}">${icon('copy')}Copy join link</button>` : ''}</div>`;
+  if (box._lastHtml !== html) { box.innerHTML = html; box._lastHtml = html; }
 }
 
 // Friends who are on a server right now, with a one-click Join.
@@ -92,10 +93,11 @@ function drawFriendsRiding() {
   const box = $('#friendsRiding'); if (!box) return;
   const live = new Map((S.live.friends || []).map((l) => [l.id, l]));
   const riding = (S.friends || []).map((f, i) => ({ f, i, l: live.get(f.code) })).filter(({ l }) => l && l.status === 'ok' && l.online && (l.server || l.inEvent));
-  box.innerHTML = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ride"></span></span>
+  const html = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ride"></span></span>
     <div class="rf-txt"><b>${esc(f.name)}</b><small>${esc(l.server || 'In a session · server shows once on track')}${l.trackName ? ` · ${esc(l.trackName)}` : ''}</small></div>
     ${l.server && l.address ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}</div>`).join('')}</div>`
     : `<div class="side-empty">${icon('users')}<span>${(S.friends || []).length ? 'None of your friends are riding right now.' : 'Add friends to see where they ride.'}</span><button class="btn btn-sm" data-view="friends">Friends</button></div>`}`;
+  if (box._lastHtml !== html) { box.innerHTML = html; box._lastHtml = html; }
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('#friendsRiding [data-view]'); if (b) go(b.dataset.view); });
 async function drawLiveServers(refresh) {
@@ -104,10 +106,10 @@ async function drawLiveServers(refresh) {
   const st = await liveStatus();
   const meta = $('#allSrvMeta');
   const setup = setupCardHtml(st, 'servers');
-  if (!st || !st.service.connected) { box.innerHTML = setup; if (meta) meta.textContent = ''; return; }
+  if (!st || !st.service.connected) { if (box._lastHtml !== setup) { box.innerHTML = setup; box._lastHtml = setup; } if (meta) meta.textContent = ''; return; }
   await refreshLiveList('servers', refresh);
-  if (!$('#allServers')) return;
-  if (S.live.serversErr) { box.innerHTML = setup + `<div class="notice danger">${icon('alert')}<div>${esc(S.live.serversErr)}</div></div>`; return; }
+  if ($('#allServers') !== box) return;
+  if (S.live.serversErr) { const html = setup + `<div class="notice danger">${icon('alert')}<div>${esc(S.live.serversErr)}</div></div>`; if (box._lastHtml !== html) { box.innerHTML = html; box._lastHtml = html; } return; }
   const all = S.live.servers?.servers || [];
   S.allSrv.filters ||= { population: 'all', maxPing: '', sort: 'activity' };
   const filters = S.allSrv.filters;
@@ -120,6 +122,21 @@ async function drawLiveServers(refresh) {
   });
   if (filters.sort === 'ping') xs.sort((a, b) => (a.ping ?? Infinity) - (b.ping ?? Infinity));
   if (meta) meta.innerHTML = `${all.length} live · updated ${esc(timeAgo(S.live.servers?.at))}`;
+  // Polling updates lastSeen even when the displayed server list is identical.
+  // Keep the existing cards, inputs and images mounted until visible data changes.
+  const displayKey = JSON.stringify([setup, S.allSrv.q || '', filters, all.length, xs.map((s) => [
+    s.name, s.address, s.hosted, s.addressObserved, trackLabel(s), trackHave(s),
+    s.session, s.capacity, s.maxPlayers, s.ping, s.categories, s.riders.length,
+  ])]);
+  if (box._lastHtml === displayKey) {
+    box.querySelectorAll?.('[data-live-seen]').forEach((label) => {
+      const server = xs[Number(label.dataset.liveSeen)];
+      if (server) label.textContent = timeAgo(server.lastSeen);
+    });
+    drawFriendsRiding();
+    return;
+  }
+  box._lastHtml = displayKey;
   box.innerHTML = `${setup}<div class="filters" style="padding:0 0 12px"><div class="search wide">${icon('search')}<input id="allSrvQ" placeholder="Search by server, track or class…" value="${esc(S.allSrv.q || '')}" spellcheck="false"></div>
       <select class="input" data-server-filter="population" aria-label="Server population">${[['all', 'All servers'], ['populated', 'Not empty'], ['empty', 'Empty'], ['available', 'Hide full'], ['full', 'Full only']].map(([v, label]) => `<option value="${v}" ${filters.population === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="maxPing" aria-label="Maximum network ping">${[['', 'Any ping'], ['50', 'Under 50 ms'], ['100', 'Under 100 ms'], ['150', 'Under 150 ms'], ['250', 'Under 250 ms']].map(([v, label]) => `<option value="${v}" ${filters.maxPing === v ? 'selected' : ''}>${label}</option>`).join('')}</select><select class="input" data-server-filter="sort" aria-label="Server order"><option value="activity" ${filters.sort === 'activity' ? 'selected' : ''}>Activity</option><option value="ping" ${filters.sort === 'ping' ? 'selected' : ''}>Lowest ping</option></select><span class="count">${xs.length} shown</span>
       <button class="btn btn-icon" data-act="live-refresh" title="Reload">${icon('refresh')}</button></div>
@@ -130,7 +147,7 @@ async function drawLiveServers(refresh) {
       return `<div class="srv live-srv" data-live-open="${all.indexOf(s)}" style="cursor:pointer"><div class="srv-pop ${s.riders.length ? 'busy' : ''}"><b>${s.riders.length}</b><small>${cap ? '/' + cap : 'riders'}</small></div>${pingTone ? `<span class="ping-dot ${pingTone}" title="${s.ping} ms"></span>` : ''}
         <div class="srv-txt"><div class="t">${esc(s.name)}${s.hosted ? `<span class="home-host" title="${s.addressObserved ? 'A rider who joined this World reported the game endpoint. Direct Join still depends on the host being reachable.' : 'This address is estimated from the host connection and game port. Direct Join may time out.'}">Home host · ${s.addressObserved ? 'address observed' : 'address estimated'}</span>` : ''}</div>
           <div class="m">${tl ? (have ? `<span style="color:var(--ok)">${icon('check')} ${esc(tl)}</span>` : `<span style="color:var(--warn)">${icon('alert')} ${esc(tl)} — not installed</span>`) : '<span class="muted">Track unknown</span>'}
-          ${sessionLabel(s) ? ` · <b>${esc(sessionLabel(s))}</b>` : ''} · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted">${esc(timeAgo(s.lastSeen))}</span></div></div>
+          ${sessionLabel(s) ? ` · <b>${esc(sessionLabel(s))}</b>` : ''} · ${icon('user')} ${s.riders.length}${s.capacity || s.maxPlayers ? '/' + Number(s.capacity || s.maxPlayers) : ''} · ${s.ping == null ? 'Ping unknown' : `${s.ping} ms`}${s.categories.length ? ` · ${esc(s.categories.slice(0, 3).join(', '))}` : ''} · <span class="muted" data-live-seen="${i}">${esc(timeAgo(s.lastSeen))}</span></div></div>
         <div class="jactions">${tl && !have ? `<button class="btn btn-sm" data-live-find="${all.indexOf(s)}">${icon('search')}Get track</button>` : ''}
           ${s.address ? `<button class="btn btn-sm btn-primary" data-live-join="${all.indexOf(s)}">${icon('play')}Join</button>` : `<button class="btn btn-sm" data-live-address="${all.indexOf(s)}" title="MX Bikes does not expose server IP addresses to plugins">${icon('settings')}Set address</button>`}</div></div>`;
     }).join('') || `<div class="set-card muted" style="text-align:center;padding:28px">No live servers yet. Servers appear here as soon as anyone using the app (with the plugin) rides on one.</div>`}</div>`;
@@ -305,7 +322,7 @@ async function renderFriends(c) {
   const friendCard = ({ f, i, s }) => {
     const j = joinable(f);
     return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
-      <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}">${esc(s[1])}</div>${paintLine(f)}</div>
+    <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}" data-friend-status="${i}">${esc(s[1])}</div>${paintLine(f)}</div>
       <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
         <button class="btn btn-sm btn-ghost btn-icon fr-remove" data-friend-remove="${i}" title="Remove ${esc(f.name)} from friends" aria-label="Remove friend ${esc(f.name)}">${icon('trash')}</button></div></div>`;
   };
@@ -325,6 +342,23 @@ async function renderFriends(c) {
     <div class="me-name">${esc(steam.name || st?.service?.name || 'You')}</div><div class="me-sub">${connected ? 'Online' : 'Offline'}</div>
     <div class="me-stats"><div><b>${S.friends.length}</b><small>Friends</small></div><div><b>${counts.ride}</b><small>Riding</small></div><div><b>${counts.on}</b><small>Online</small></div></div>
     <button class="btn btn-primary" data-act="friends-add">${icon('users')}Add friends</button></div>` : '';
+  const displayKey = JSON.stringify([
+    c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
+    S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
+    (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address]),
+    st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.defaultUrl, st?.service?.share,
+    st?.serverShare, st?.plugin?.available, st?.plugin?.installed, st?.plugin?.needsUpdate,
+    st?.paintSync?.enabled, st?.paintSync?.busy, st?.paintSync?.at, st?.paintSync?.error,
+    st?.paintSync?.received, st?.paintSync?.friends, steam.name, steam.avatarData,
+  ]);
+  if (c._friendsDisplayKey === displayKey) {
+    c.querySelectorAll('[data-friend-status]').forEach((label) => {
+      const friend = S.friends[Number(label.dataset.friendStatus)];
+      if (friend) label.textContent = statusOf(friend)[1];
+    });
+    return;
+  }
+  c._friendsDisplayKey = displayKey;
   const scrollTop = $('.scroller', c)?.scrollTop || 0;
   const searchFocused = document.activeElement?.id === 'friendSearch';
   const selection = searchFocused ? document.activeElement.selectionStart : 0;

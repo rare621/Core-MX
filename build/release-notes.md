@@ -1,9 +1,9 @@
-CoreMX 1.0.35
+CoreMX 1.0.36
 
-- A rider's game-reported endpoint now takes priority over an estimated home-host address while the same host session is active.
-- Live servers label home-host addresses as observed or estimated, so a direct Join timeout is easier to understand.
-- Joining from CoreMX passes the selected server name to the game launch handler, helping recent-server tracking match the intended server.
+- The game plugin now reports the connected server address after a direct CoreMX join as well as an in-game browser join. A rider in the World can confirm its address, replacing the estimated label with "address observed".
+- Get Mods keeps its existing cards in place when a background refresh returns the same posts.
+- Online servers and Friends keep their visible content mounted during unchanged status checks, preventing the brief flash while they refresh. Relative "last seen" times still update.
 
-This update does not add a PiBoSo master-server relay. Direct Join still depends on the host being reachable.
+An observed address confirms the endpoint reported by MX Bikes. It does not guarantee that every home-hosted World accepts a direct connection on the first attempt.
 
-Server operators: replace mxbm-server.js from the included mxbm-online-service.zip in your existing online-service folder, then restart it. Keep mxbm-data.json, admin.key, and mxbm-files. The service reports version 12 after the update.
+The online service is unchanged from version 12; server operators do not need to replace it for this app update.
