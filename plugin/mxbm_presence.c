@@ -687,93 +687,162 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
   return 0;
 }
 
-/* ===================== Live livery test (your own bike, on your screen only) =====================
- * Research step for live liveries: show another installed livery on your own bike without
- * rebuilding it, using the game's own function. Started by a file mxbm_test_livery.txt (a livery
- * name, or empty to only list them); the result goes to mxbm_test_result.json.
+/* ===================== Live paint test (your own rider and bike, on your screen only) =====================
+ * Research step for live liveries and gear paints: repaint your own bike and rider with other
+ * installed paints, without rebuilding, the way the game paints a freshly built vehicle (RVA
+ * 0x4CE00, its "apply all paints" step). Started by a file mxbm_test_livery.txt with lines
+ * key=value (bike, suit, gloves, boots, helmet, goggles; a line without '=' is a bike livery; an
+ * empty file only lists what is installed). Result: mxbm_test_result.json.
  *
- * The game paints a bike in RVA 0x4CE00 (its "apply all paints" step after building a vehicle): it
- * formats "%sbikes\%s\paints\%s.pnt" (folder root from the livery entry +0x88, bike folder,
- * livery name) and sends engine command 0x9E (paint a model from a .pnt) through the UI pointer for
- * each bike part: the model ids at record + 0x274 + {0x00, 0x10, 0x14, 0x50, 0x60, 0x70}. The test
- * does the same, through the game's own pointer. (Record + 0x5B0C is the pit stand, built by
- * RVA 0x455C0; RVA 0x4DC50 repaints that, which the first test did by mistake.) Vehicle records:
- * RVA 0xF4EE20, stride 0x5B24, own index + 1 at RVA 0xE62710, bike id at +0x30. Bike list: pointer
- * at RVA 0xF4EDE8 (stride 0x4334, folder id at +0x00), count at RVA 0xF48218. Bike liveries:
- * pointer at RVA 0xF4EDF8 (stride 0x18C, +0x00 bike index, +0x04 name), count at RVA 0x109DE88.
- * The record is not changed: nothing is saved or sent, and the next rebuild shows your livery. */
+ * Engine command 0x9E paints a model from a .pnt path ("a.pnt|b.pnt" for two layers); it is sent
+ * through the game's UI pointer. Model ids are in the vehicle record's block at +0x274:
+ *   bike parts +0x00 +0x10 +0x14 +0x50 +0x60 +0x70   "<root>bikes\<bike>\paints\<name>.pnt"
+ *   rider body +0x1D4   suit "<root>rider\riders\<rider>\paints\<name>.pnt" | gloves "...\gloves\<name>.pnt"
+ *   boots      +0x1D8 +0x1DC                         "<root>rider\boots\<boots>\paints\<name>.pnt"
+ *   helmet     +0x1E0   helmet "<root>rider\helmets\<helmet>\paints\<name>.pnt" | goggles "...\goggles\<name>.pnt"
+ * Paint lists: entries of 0x18C bytes, +0x00 owner index (bike/rider/boots/helmet), +0x04 name,
+ * +0x88 folder root. Record names: bike +0x30, bike paint +0x90, rider +0xD0, helmet +0xF0, helmet
+ * paint +0x110, goggles +0x130, suit +0x170, boots +0x1B0, boots paint +0x1D0, gloves +0x1F0.
+ * Vehicle records: RVA 0xF4EE20, stride 0x5B24, own index + 1 at RVA 0xE62710. (Record + 0x5B0C
+ * is the pit stand.) The record is not changed: nothing is saved or sent, and the next rebuild
+ * shows your own paints again. Checked against this game build by the bytes of RVA 0x4DC50. */
 #define RVA_APPLY_LIVERY 0x4DC50u
 static const unsigned char SIG_APPLY_LIVERY[14] = { 0x4c, 0x8b, 0xdc, 0x55, 0x56, 0x41, 0x54, 0x48, 0x81, 0xec, 0x60, 0x01, 0x00, 0x00 };
 typedef void *(*dispatch_t)(int cmd, int id, const char *a, const char *b);
+typedef struct { unsigned count, ptr, stride; } GameList;
+static const GameList L_BIKES = { 0xF48218, 0xF4EDE8, 0x4334 }, L_RIDERS = { 0xF3DC60, 0xF3DC68, 0x1224 },
+  L_BOOTS = { 0xF3DB58, 0xF4EDB0, 0x208 }, L_HELMETS = { 0xF3DC64, 0xF3DC70, 0x268 };
+static const GameList P_BIKE = { 0x109DE88, 0xF4EDF8, 0x18C }, P_SUIT = { 0xF3DB50, 0xF3DC90, 0x18C },
+  P_GLOVES = { 0xF3DC58, 0xF48208, 0x18C }, P_BOOTS = { 0xF48660, 0xF432A0, 0x18C },
+  P_HELMET = { 0xF48620, 0x109E090, 0x18C }, P_GOGGLES = { 0x10A30F4, 0xF3DC28, 0x18C };
 static const int BIKE_PARTS[6] = { 0x00, 0x10, 0x14, 0x50, 0x60, 0x70 };
-static char g_testLivery[132];
+static const int BOOT_PARTS[2] = { 0x1D8, 0x1DC };
+static const int BODY_PART[1] = { 0x1D4 }, HELMET_PART[1] = { 0x1E0 };
 
-static void liveryTestResult(const char *requested, int applied, const char *reason, const char *bike, const char *current, int object, const char *list) {
-  static char o[16384]; size_t at;
-  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"applied\":%s,\"object\":%d,\"reason\":", nowMs(), applied ? "true" : "false", object);
-  at = jstr(o, at, reason, sizeof o - 64);
-  memcpy(o + at, ",\"requested\":", 13); at += 13; at = jstr(o, at, requested, sizeof o - 64);
-  memcpy(o + at, ",\"bike\":", 8); at += 8; at = jstr(o, at, bike, sizeof o - 64);
-  memcpy(o + at, ",\"current\":", 11); at += 11; at = jstr(o, at, current, sizeof o - 64);
-  memcpy(o + at, ",\"liveries\":[", 13); at += 13;
-  if (at + strlen(list) + 4 < sizeof o) { memcpy(o + at, list, strlen(list)); at += strlen(list); }
-  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
-  writeSmall("mxbm_test_result.json", o);
+/* Paints the given parts in both model sets of a vehicle: the outside one (block at record +0x274)
+ * and, for your own vehicle, the first-person one the game builds with the prefix "cockpit/"
+ * (block 0x3C4 further on; empty for other riders). */
+static void paintParts(dispatch_t dispatch, const unsigned char *rec, const int *parts, int n, const char *path) {
+  int set, i;
+  for (set = 0; set < 2; set++)
+    for (i = 0; i < n; i++) {
+      int id = *(const int *)(rec + 0x274 + set * 0x3C4 + parts[i]);
+      if (id > 0) dispatch(0x9E, id, path, path);
+    }
+}
+static char g_testRequest[1024];
+
+/* Index of a model by folder name in one of the game's lists, or -1. */
+static int modelIndex(const unsigned char *base, GameList l, const char *name) {
+  int n = 0, i; const unsigned char *p = 0; char id[65];
+  if (!name[0] || !srvCopy(base + l.count, &n, 4) || !srvCopy(base + l.ptr, (void *)&p, sizeof p) || n <= 0 || n > 20000 || !p) return -1;
+  for (i = 0; i < n; i++) {
+    if (!srvCopy(p + (size_t)i * l.stride, id, 64)) return -1;
+    id[64] = 0;
+    if (_stricmp(id, name) == 0) return i;
+  }
+  return -1;
+}
+
+/* Finds paint `name` of model `owner` and formats its .pnt path into out (empty if not found).
+ * Adds every paint of that model to the JSON list `opts`. Returns 1 if found. */
+static int paintPath(const unsigned char *base, GameList l, int owner, const char *ownerName, const char *name,
+                     const char *fmt, char *out, size_t cap, char *opts, size_t *oat, size_t ocap) {
+  static unsigned char e[0x18C];
+  int n = 0, i, found = 0, listed = 0; const unsigned char *p = 0;
+  out[0] = 0;
+  if (owner < 0 || !srvCopy(base + l.count, &n, 4) || !srvCopy(base + l.ptr, (void *)&p, sizeof p) || n <= 0 || n > 100000 || !p) return 0;
+  for (i = 0; i < n; i++) {
+    char nm[0x85], root[0x105];
+    if (!srvCopy(p + (size_t)i * l.stride, e, sizeof e)) break;
+    if (*(int *)e != owner) continue;
+    memcpy(nm, e + 4, 0x84); nm[0x84] = 0;
+    if (listed++ < 60 && *oat + 140 < ocap) { if (opts[*oat - 1] != '[') opts[(*oat)++] = ','; *oat = jstr(opts, *oat, nm, ocap - 4); opts[*oat] = 0; }
+    if (!found && name[0] && _stricmp(nm, name) == 0) {
+      memcpy(root, e + 0x88, 0x104); root[0x104] = 0;
+      if (strlen(root) + strlen(ownerName) + strlen(nm) + strlen(fmt) < cap) { sprintf(out, fmt, root, ownerName, nm); found = 1; }
+    }
+  }
+  return found;
+}
+
+static void testValue(const char *req, const char *key, char *out, size_t cap) {
+  size_t kl = strlen(key); const char *p = req;
+  out[0] = 0;
+  while (*p) {
+    const char *eol = strchr(p, '\n'); size_t len = eol ? (size_t)(eol - p) : strlen(p);
+    if (len > kl && strncmp(p, key, kl) == 0 && p[kl] == '=') {
+      size_t vl = len - kl - 1; if (vl >= cap) vl = cap - 1;
+      memcpy(out, p + kl + 1, vl); out[vl] = 0;
+      while (vl && (out[vl - 1] == '\r' || out[vl - 1] == ' ')) out[--vl] = 0;
+      return;
+    }
+    p += len; if (*p) p++;
+  }
 }
 
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
-  static unsigned char entry[0x18C];
-  static char list[12000];
-  char requested[132], bike[33], current[33], root[0x105], path[MAX_PATH * 2];
-  int own = 0, bikeCount = 0, paintCount = 0, bikeIndex = -1, found = 0, object = 0, i;
-  size_t lat = 0;
-  const unsigned char *bikes = 0, *paints = 0, *rec;
+  static char o[32768], a[MAX_PATH * 2], b[MAX_PATH * 2], two[MAX_PATH * 4 + 2];
+  char req[1024], want[132], name[33], owner[33];
+  const unsigned char *rec; int own = 0, idx, i, found, applied = 0;
+  size_t at;
+  dispatch_t dispatch = (dispatch_t)mxbm_orig_ui;
   mxbm_pending = 0;
-  copy(requested, g_testLivery, sizeof requested);
-  list[0] = 0; bike[0] = 0; current[0] = 0;
-  if (!S.inEvent) { liveryTestResult(requested, 0, "not in a session", "", "", 0, ""); return; }
-  if (memcmp(base + RVA_APPLY_LIVERY, SIG_APPLY_LIVERY, sizeof SIG_APPLY_LIVERY) != 0) { liveryTestResult(requested, 0, "game build differs", "", "", 0, ""); return; }
-  if (!srvCopy(base + 0xE62710, &own, 4) || own < 1 || own > 64) { liveryTestResult(requested, 0, "own vehicle not found", "", "", 0, ""); return; }
+  copy(req, g_testRequest, sizeof req);
+  if (req[0] && !strchr(req, '=')) { char tmp[1024]; sprintf(tmp, "bike=%.1000s", req); copy(req, tmp, sizeof req); }
+  at = (size_t)sprintf(o, "{\"v\":2,\"at\":%llu,\"request\":", nowMs());
+  at = jstr(o, at, req, sizeof o - 64);
+#define FAIL(msg) do { at += (size_t)sprintf(o + at, ",\"reason\":\"%s\"}", msg); writeSmall("mxbm_test_result.json", o); return; } while (0)
+  if (!S.inEvent) FAIL("not in a session");
+  if (memcmp(base + RVA_APPLY_LIVERY, SIG_APPLY_LIVERY, sizeof SIG_APPLY_LIVERY) != 0) FAIL("game build differs");
+  if (!srvCopy(base + 0xE62710, &own, 4) || own < 1 || own > 64) FAIL("own vehicle not found");
   rec = base + 0xF4EE20 + (size_t)(own - 1) * 0x5B24;
-  memcpy(bike, rec + 0x30, 32); bike[32] = 0;
-  memcpy(current, rec + 0x90, 32); current[32] = 0;
-  object = *(const int *)(rec + 0x274);
-  if (!srvCopy(base + 0xF48218, &bikeCount, 4) || !srvCopy(base + 0xF4EDE8, (void *)&bikes, sizeof bikes) || bikeCount <= 0 || bikeCount > 5000 || !bikes) { liveryTestResult(requested, 0, "bike list not readable", bike, current, object, ""); return; }
-  for (i = 0; i < bikeCount; i++) {
-    char id[65];
-    if (!srvCopy(bikes + (size_t)i * 0x4334, id, 64)) break;
-    id[64] = 0;
-    if (_stricmp(id, bike) == 0) { bikeIndex = i; break; }
-  }
-  if (bikeIndex < 0) { liveryTestResult(requested, 0, "bike not in the bike list", bike, current, object, ""); return; }
-  if (!srvCopy(base + 0x109DE88, &paintCount, 4) || !srvCopy(base + 0xF4EDF8, (void *)&paints, sizeof paints) || paintCount <= 0 || paintCount > 100000 || !paints) { liveryTestResult(requested, 0, "livery list not readable", bike, current, object, ""); return; }
-  for (i = 0; i < paintCount; i++) {
-    char name[0x85];
-    if (!srvCopy(paints + (size_t)i * 0x18C, entry, sizeof entry)) break;
-    if (*(int *)entry != bikeIndex) continue;
-    memcpy(name, entry + 4, 0x84); name[0x84] = 0;
-    if (!found && _stricmp(name, requested) == 0) { found = 1; memcpy(root, entry + 0x88, 0x104); root[0x104] = 0; }
-    if (lat + 140 < sizeof list) { if (lat) list[lat++] = ','; lat = jstr(list, lat, name, sizeof list - 4); list[lat] = 0; }
-  }
-  if (!requested[0]) { liveryTestResult(requested, 0, "listed only", bike, current, object, list); return; }
-  if (!found) { liveryTestResult(requested, 0, "that livery is not installed for this bike", bike, current, object, list); return; }
-  if (!object) { liveryTestResult(requested, 0, "your bike has no model right now", bike, current, object, list); return; }
-  if (strlen(root) + strlen(bike) + strlen(requested) + 24 >= sizeof path) { liveryTestResult(requested, 0, "path too long", bike, current, object, list); return; }
-  sprintf(path, "%sbikes\\%s\\paints\\%s.pnt", root, bike, requested);
+  if (!*(const int *)(rec + 0x274)) FAIL("no model right now");
+#define REC(off) (memcpy(name, rec + (off), 32), name[32] = 0, name)
+#define WANT(key, off) (testValue(req, key, want, sizeof want), want[0] ? want : REC(off))
+#define PART(label) do { memcpy(o + at, ",\"" label "\":[", sizeof(label) + 4); at += sizeof(label) + 4; } while (0)
   g_gameCallThread = GetCurrentThreadId();
-  for (i = 0; i < 6; i++) {
-    int id = *(const int *)(rec + 0x274 + BIKE_PARTS[i]);
-    if (id > 0) ((dispatch_t)mxbm_orig_ui)(0x9E, id, path, path);
-  }
+
+  /* Bike livery. */
+  copy(owner, REC(0x30), sizeof owner); idx = modelIndex(base, L_BIKES, owner);
+  PART("bike"); found = paintPath(base, P_BIKE, idx, owner, WANT("bike", 0x90), "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a, o, &at, sizeof o - 2000); o[at++] = ']';
+  testValue(req, "bike", want, sizeof want);
+  if (want[0] && found) { paintParts(dispatch, rec, BIKE_PARTS, 6, a); applied |= 1; }
+
+  /* Rider body: suit | gloves. */
+  copy(owner, REC(0xD0), sizeof owner); idx = modelIndex(base, L_RIDERS, owner);
+  PART("suit"); found = paintPath(base, P_SUIT, idx, owner, WANT("suit", 0x170), "%srider\\riders\\%s\\paints\\%s.pnt", a, sizeof a, o, &at, sizeof o - 2000); o[at++] = ']';
+  PART("gloves"); found |= paintPath(base, P_GLOVES, idx, owner, WANT("gloves", 0x1F0), "%srider\\riders\\%s\\gloves\\%s.pnt", b, sizeof b, o, &at, sizeof o - 2000) << 1; o[at++] = ']';
+  testValue(req, "suit", want, sizeof want); i = want[0] != 0; testValue(req, "gloves", want, sizeof want); i |= want[0] != 0;
+  if (i && found) { sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, rec, BODY_PART, 1, two); applied |= 2; }
+
+  /* Boots (two models). */
+  copy(owner, REC(0x1B0), sizeof owner); idx = modelIndex(base, L_BOOTS, owner);
+  PART("boots"); found = paintPath(base, P_BOOTS, idx, owner, WANT("boots", 0x1D0), "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a, o, &at, sizeof o - 2000); o[at++] = ']';
+  testValue(req, "boots", want, sizeof want);
+  if (want[0] && found) { paintParts(dispatch, rec, BOOT_PARTS, 2, a); applied |= 4; }
+
+  /* Helmet: helmet paint | goggles. */
+  copy(owner, REC(0xF0), sizeof owner); idx = modelIndex(base, L_HELMETS, owner);
+  PART("helmet"); found = paintPath(base, P_HELMET, idx, owner, WANT("helmet", 0x110), "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a, o, &at, sizeof o - 2000); o[at++] = ']';
+  PART("goggles"); found |= paintPath(base, P_GOGGLES, idx, owner, WANT("goggles", 0x130), "%srider\\helmets\\%s\\goggles\\%s.pnt", b, sizeof b, o, &at, sizeof o - 2000) << 1; o[at++] = ']';
+  testValue(req, "helmet", want, sizeof want); i = want[0] != 0; testValue(req, "goggles", want, sizeof want); i |= want[0] != 0;
+  if (i && found) { sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, rec, HELMET_PART, 1, two); applied |= 8; }
+
   g_gameCallThread = 0;
-  liveryTestResult(requested, 1, "applied", bike, current, object, list);
+  at += (size_t)sprintf(o + at, ",\"applied\":%d,\"reason\":\"%s\"}", applied, req[0] ? "done" : "listed only");
+  writeSmall("mxbm_test_result.json", o);
+#undef FAIL
+#undef REC
+#undef WANT
+#undef PART
 }
 
 /* Polled from the server-list thread: a request file queues the test for the game's thread. */
 static void liveryTestPoll(void) {
-  char path[MAX_PATH * 2 + 40], buf[132] = {0}; FILE *f; size_t n;
+  char path[MAX_PATH * 2 + 40], buf[1024] = {0}; FILE *f; size_t n;
   if (!mxbm_orig_ui || mxbm_pending) return; /* needs the UI hook to reach the game's thread */
   sprintf(path, "%smxbm_test_livery.txt", g_dir);
   f = fopen(path, "rb"); if (!f) return;
@@ -781,7 +850,7 @@ static void liveryTestPoll(void) {
   DeleteFileA(path);
   while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == ' ')) buf[--n] = 0;
   buf[n] = 0;
-  copy(g_testLivery, buf, sizeof g_testLivery);
+  copy(g_testRequest, buf, sizeof g_testRequest);
   mxbm_pending = 1;
 }
 
