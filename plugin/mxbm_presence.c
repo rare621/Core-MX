@@ -381,8 +381,9 @@ static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
 }
 
 /* Connected server, from the game (this build only): name at RVA 0x9CC334 (64 bytes, followed by
- * the MOTD) and the connection address at RVA 0xE53DE0, laid out like a server-list record
- * (01, IPv4-mapped IPv6 address from +0x0B, port big-endian at +0x11). Online race events only. */
+ * the MOTD) and the connection address at RVA 0xE53DE0. Browser joins use a server-list record
+ * (01, IPv4-mapped IPv6 address from +0x0B, port big-endian at +0x11). Direct-connect joins use
+ * (00, IPv4 at +0x01, port big-endian at +0x05). Online race events only. */
 static int g_buildOk = 0;
 static int connectedServer(char *name, size_t ncap, char *addr, size_t acap) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL), *nm, *cb;
@@ -392,10 +393,16 @@ static int connectedServer(char *name, size_t ncap, char *addr, size_t acap) {
   for (i = 0; i < ncap - 1 && nm[i]; i++) { if (nm[i] < 0x20 || nm[i] == 0x7f) return 0; name[i] = (char)nm[i]; }
   name[i] = 0;
   if (!name[0]) return 0;
-  if (cb[0] != 1 || cb[0x0B] != 0xff || cb[0x0C] != 0xff || !cb[0x0D]) return 0;
-  port = ((unsigned)cb[0x11] << 8) | cb[0x12];
+  if (cb[0] == 1 && cb[0x0B] == 0xff && cb[0x0C] == 0xff && cb[0x0D]) {
+    port = ((unsigned)cb[0x11] << 8) | cb[0x12];
+    if (!port) return 0;
+    sprintf(addr, "%u.%u.%u.%u:%u", cb[0x0D], cb[0x0E], cb[0x0F], cb[0x10], port);
+    return 1;
+  }
+  if (cb[0] != 0 || !cb[1]) return 0;
+  port = ((unsigned)cb[5] << 8) | cb[6];
   if (!port) return 0;
-  sprintf(addr, "%u.%u.%u.%u:%u", cb[0x0D], cb[0x0E], cb[0x0F], cb[0x10], port);
+  sprintf(addr, "%u.%u.%u.%u:%u", cb[1], cb[2], cb[3], cb[4], port);
   return 1;
 }
 
