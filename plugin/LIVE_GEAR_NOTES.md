@@ -116,6 +116,34 @@ repainted instead of the bike.
 Rider part ids in the same block (from 0x4CE00): gloves +0x1D4, goggles +0x1E0; ids 47–55 sit at
 +0x1D4..+0x214 in the test. Suit, helmet and boots still to map.
 
+## 6b. CONFIRMED: live rider paints, outside view (2026-11-18, offline Testing, on track)
+
+Same engine command 0x9E, one per rider model (all in the block at record + 0x274):
+
+| model        | block offset   | paint text sent                                              |
+|--------------|----------------|--------------------------------------------------------------|
+| rider body   | +0x1D4         | `<root>rider\riders\<rider>\paints\<suit>.pnt` `|` `<root>rider\riders\<rider>\gloves\<gloves>.pnt` |
+| boots (L, R) | +0x1D8, +0x1DC | `<root>rider\boots\<boots>\paints\<paint>.pnt`               |
+| helmet       | +0x1E0         | `<root>rider\helmets\<helmet>\paints\<paint>.pnt` `|` `<root>rider\helmets\<helmet>\goggles\<goggles>.pnt` |
+
+(Separator `|` is the word at RVA 0x337CB0.) Lists: rider models 0xF3DC68 (count 0xF3DC60, stride
+0x1224); boots models 0xF4EDB0 (count 0xF3DB58, stride 0x208); helmets 0xF3DC70 (count 0xF3DC64,
+stride 0x268); paints (stride 0x18C, +0x00 owner index, +0x04 name, +0x88 root): suit 0xF3DC90
+(count 0xF3DB50), gloves 0xF48208 (0xF3DC58), boots 0xF432A0 (0xF48660), helmet 0x109E090
+(0xF48620), goggles 0xF3DC28 (0x10A30F4).
+
+Result: suit, gloves, boots, helmet and goggles all turned red in the external and replay cameras
+while on track; the change survived riding out of the pits. First person still showed the old gear.
+
+**First person:** your own vehicle is built twice by RVA 0x45020: the second call to RVA 0x419C0
+passes the block + 0x3C4 with the prefix `cockpit/`. That second set holds the first-person model
+ids, confirmed in game on track in first person (bike 52, 53, 54, 55 at +0x3C4 + {0x00, 0x10, 0x50, 0x60}; body 56, boots 57/58,
+helmet 59 at +0x3C4 + {0x1D4, 0x1D8, 0x1DC, 0x1E0}). With both sets painted, the livery and every
+rider paint changed in first person and in the outside cameras, on track (2026-11-18).
+
+In RVA 0x4CE00, `[block + 0x1D0] == 0` means the rider has no model yet: the game then builds it
+(0x3F070, model + paints); otherwise it only repaints (the path the plugin copies).
+
 ## 6. Re-applying a bike livery without rebuilding (first idea, superseded by 6a)
 
 RVA 0x4DC50 `(int bikeIndex, const char *paintName, int *bikeObject)`: finds `paintName` for that
