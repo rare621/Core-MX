@@ -222,7 +222,15 @@ const routes = {
       const prev = db.servers[k] || { seenBy: [] };
       const riders = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
       db.servers[k] = {
-        name: state.server, address: state.serverAddress || null,
+        // A Host World server keeps the host's address while the host is still on it, even when
+        // another rider (whose report carries no address) reports the same server.
+        ...(() => {
+          if (s.hosting === true && state.serverAddress) return { address: state.serverAddress, hosted: true, hostedBy: me.id };
+          const hp = prev.hosted && prev.hostedBy !== me.id ? presence.get(prev.hostedBy) : null;
+          const hostStillThere = hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && serverKey(hp.state.server || '') === k;
+          return hostStillThere ? { address: prev.address, hosted: true, hostedBy: prev.hostedBy } : { address: state.serverAddress || null, hosted: false };
+        })(),
+        name: state.server,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',
         riders, categories: [...new Set(riders.map((r) => r.category).filter(Boolean))],
         session: state.session,
@@ -246,7 +254,7 @@ const routes = {
           return matchingRows.length === 1 && matchingUsers.length === 1
             ? { ...r, coremxName: matchingUsers[0].user.name } : r;
         });
-        return { name: s.name, address: s.address, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
+        return { name: s.name, address: s.address, hosted: !!s.hosted, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
       })
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];

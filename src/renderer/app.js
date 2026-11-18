@@ -3615,7 +3615,7 @@ api.on('jobs:update', (j) => {
   const go = async () => {
     clearInterval(timer); m.close();
     toast(`Restarting MX Bikes to join <b>${esc(p.server || p.address)}</b>…`, 'info', 6000);
-    try { await api.invoke('game:restartAndJoin', p.address); } catch (e) { toast(esc(cleanErr(e)), 'err', 7000); }
+    try { await api.invoke('game:restartAndJoin', p.address, p.server || ''); } catch (e) { toast(esc(cleanErr(e)), 'err', 7000); }
   };
   $('[data-rj-now]', m).addEventListener('click', go);
   timer = setInterval(() => { left--; const el = $('[data-rj-left]', m); if (el) el.textContent = left; if (left <= 0) go(); }, 1000);

@@ -1248,20 +1248,20 @@ function registerIpc() {
   handle('game:setValues', async (values) => profile.writeValues(profUserDir(), await profName(), values));
   handle('game:quickStart', async (opts) => game.quickStart(profUserDir(), await profName(), opts));
   handle('game:running', () => profile.isGameRunning());
-  handle('game:join', async (address) => {
+  handle('game:join', async (address, name) => {
     const addr = game.validAddress(address);
     if (!addr) throw new Error('That address should look like 123.45.67.89:54210');
     if (await profile.isGameRunning()) throw new Error('Close MX Bikes, then click Join again to connect directly to this server.');
     const exe = paths.findGameExe(store.get('settings').gameInstallDir);
     if (!exe) throw new Error("Couldn't find mxbikes.exe — set the game install folder in Settings.");
     game.launch(exe, ['-directconnect', addr]);
-    if (online) online.noteJoin(addr);
+    if (online) online.noteJoin(addr, typeof name === 'string' ? name : '');
     return true;
   });
   // After a missing track is installed: close MX Bikes the normal way (a window close request,
   // like clicking X; never a forced kill, so it saves its profile), wait for it to exit, then
   // launch it straight into the server.
-  handle('game:restartAndJoin', async (address) => {
+  handle('game:restartAndJoin', async (address, name) => {
     const addr = game.validAddress(address);
     if (!addr) throw new Error('That server address is not valid');
     const exe = paths.findGameExe(store.get('settings').gameInstallDir);
@@ -1276,7 +1276,7 @@ function registerIpc() {
       await new Promise((r) => setTimeout(r, 2500)); // let it finish writing its profile
     }
     game.launch(exe, ['-directconnect', addr]);
-    if (online) online.noteJoin(addr);
+    if (online) online.noteJoin(addr, typeof name === 'string' ? name : '');
     return true;
   });
   // ---- graphics mods in the game folder ----
