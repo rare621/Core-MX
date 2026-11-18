@@ -29,7 +29,8 @@ const KINDS = {
   protectionPaint: { label: 'Chest protector paint', base: () => 'rider/protections', paintModels: () => 'rider/protections' },
   helmetcam:       { label: 'Helmet camera', base: () => 'rider/helmetcams' },
   riderModel:      { label: 'Rider model', base: () => 'rider/riders' },
-  animation:       { label: 'Rider animation', base: () => 'rider/animations' },
+  animation:       { label: 'Rider animation (mods folder)', base: () => 'rider/animations' },
+  animationGame:   { label: 'Rider animation (game folder)', base: () => 'rider/animations/mx', root: 'game' },
   tyre:            { label: 'Tyres', base: () => 'tyres' },
   sound:           { label: 'Bike sound', base: () => 'bikes' },
   plugin:          { label: 'Game plugin', base: () => 'plugins', root: 'game' },
@@ -206,7 +207,8 @@ function plan(files, ctx, opts = {}) {
       const segs = f.rel.split('/').slice(strip);
       const fname = segs[segs.length - 1];
       const skip = segs.length === 1 && /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname);
-      const dest = skip ? null : kind === 'plugin' ? (segs[0].toLowerCase() === 'plugins' ? segs.join('/') : ['plugins', ...segs].join('/')) : segs.join('/');
+      const dest = kind === 'animationGame' ? (/\.anm$/i.test(fname) ? `rider/animations/mx/${fname}` : null)
+        : skip ? null : kind === 'plugin' ? (segs[0].toLowerCase() === 'plugins' ? segs.join('/') : ['plugins', ...segs].join('/')) : segs.join('/');
       const status = !dest ? 'skip' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how: 'game' });
       continue;
@@ -275,6 +277,7 @@ function plan(files, ctx, opts = {}) {
       }
     }
     if (!dest && /\.pkz$/i.test(fname)) { dest = `${base}/${fname}`; how = 'model'; }
+    if (!dest && kind === 'animation' && /\.anm$/i.test(fname)) { dest = `rider/animations/mx/${fname}`; how = 'animation'; }
     if (!dest && segs.length > 1) {
       for (let j = segs.length - 2; j >= 0; j--) {
         const s = lsegs[j];
@@ -328,6 +331,22 @@ function plan(files, ctx, opts = {}) {
     entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how, ...(bikeMatch ? { bikeMatch } : {}) });
   }
 
+  // Several animation downloads contain alternatives with the same ANM name.
+  // Never silently let the last archive entry win over another variant.
+  const ambiguousAnimations = new Set();
+  if (kind === 'animation' || kind === 'animationGame') {
+    const byDestination = new Map();
+    for (const entry of entries.filter((e) => e.dest)) {
+      const key = entry.dest.toLowerCase();
+      byDestination.set(key, (byDestination.get(key) || 0) + 1);
+    }
+    for (const entry of entries.filter((e) => e.dest && byDestination.get(e.dest.toLowerCase()) > 1)) {
+      ambiguousAnimations.add(entry.dest.toLowerCase());
+      entry.dest = null;
+      entry.status = 'unresolved';
+      entry.how = 'multiple-variants';
+    }
+  }
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
   const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest);
   const needsSoundBike = kind === 'sound' && entries.some((e) => e.status === 'unresolved' && !DOC_EXT.test(e.rel));
@@ -336,8 +355,10 @@ function plan(files, ctx, opts = {}) {
   const bikeResults = [...bikeMatches.values()];
   const bikeCompatibility = { targets: bikeTargetChecks, messages: [...new Set(bikeResults.map((result) => result.message))], blocked: bikeBlocked, multiple: bikeResults.every((result) => result.target) && new Set(bikeResults.map((result) => result.target)).size > 1 };
   const warnings = [];
+  if (ambiguousAnimations.size) warnings.push('This download contains multiple variants for the same animation file. Install one variant at a time; CoreMX will not pick one silently.');
+  if ((kind === 'animation' || kind === 'animationGame') && ctx.animationLocation === null) warnings.push('The creator did not specify whether this animation belongs in the game install folder or mods folder. Check the installation instructions and change the content type below if needed.');
   const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
-  if (!installable && !awaitingTarget && !needsSoundBike) warnings.push('Choose the content type or destination folder to continue.');
+  if (!installable && !awaitingTarget && !needsSoundBike && !ambiguousAnimations.size) warnings.push('Choose the content type or destination folder to continue.');
   if ((counts.unresolved || 0) > awaitingTarget && !needsSoundBike) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
   if (needsSoundBike && o.soundBike) warnings.push('Some sound files are for a different engine size or have an unknown layout. Check the file list before installing.');
   const otherSoundVariants = entries.filter((e) => e.how === 'other-engine-size').length;
@@ -357,8 +378,8 @@ function plan(files, ctx, opts = {}) {
   }
   const requiredModels = [...required.values()];
   for (const m of requiredModels.filter((m) => m.kind !== 'bike' && !m.installed && !m.included)) warnings.push(`These paints need the ${m.name} model. Install that model too before equipping the paints.`);
-  if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : 'graphics mods'} go there.`);
-  if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
+  if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : kind === 'animationGame' ? 'animations' : 'graphics mods'} go there.`);
+  if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : kind === 'animationGame' ? 'The creator requires these .anm files in MX Bikes/rider/animations/mx. Close the game before installing or changing them.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
   else if (/^tools|^plugins|reshade/i.test(ctx.categoryNames ? ctx.categoryNames.join(' ') : '')) warnings.push('Tools, plugins and ReShade presets usually go in the game install folder, not mods/. Check the mod description.');
 
   // Everything placed by the archive's own folder structure counts as certain even without a known type.

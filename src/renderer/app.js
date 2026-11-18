@@ -171,6 +171,7 @@ $('#rail').addEventListener('wheel', (e) => {
 $('#railAccount').addEventListener('click', (e) => { if (e.target.closest('[data-notifications]')) { openNotifications(); return; } const b = e.target.closest('[data-view]'); if (b) go(b.dataset.view); });
 
 function go(view) {
+  const previousView = S.view;
   // old view names still used in a few places
   if (view === 'browse') { S.getSrc = 'free'; view = 'get'; }
   if (view === 'shops') { S.getSrc = S.shop.id; view = 'get'; }
@@ -182,6 +183,14 @@ function go(view) {
     S.rider.modelKey = null; S.rider.bikeModelKey = null; S.rider.modelOk = false;
   }
   S.view = view;
+  if (view === 'friends' && previousView !== 'friends') {
+    S.live.friendsNext = 0;
+    S.live.friendsLoading = true;
+    refreshLiveList('friends', true).finally(() => {
+      S.live.friendsLoading = false;
+      if (S.view === 'friends') renderFriends($('#content'));
+    });
+  }
   document.body.dataset.view = view;
   closeDrawer();
   renderRail();
@@ -259,6 +268,7 @@ const LIB_TABS = {
     { id: 'tracks', label: 'Tracks', icon: 'track', match: (i) => i.group === 'tracks' },
     { id: 'other', label: 'Tyres & other', icon: 'tyre', match: (i) => ['tyres', 'misc', 'other'].includes(i.group) },
     { id: 'graphics', label: 'Graphics', icon: 'sparkle', match: () => false },
+    { id: 'animations', label: 'Animations', icon: 'rider', match: () => false },
     { id: 'plugins', label: 'Plugins', icon: 'box', match: () => false },
     { id: 'apps', label: 'Apps', icon: 'settings', match: () => false },
   ],
@@ -355,6 +365,7 @@ function renderLibrary(c) {
   renderLibItems();
   if (!S.gfx && !S.gfxLoading) S.gfxLoading = api.invoke('graphics:scan').then((g) => { S.gfx = g; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.gfxLoading = null; });
   if (!S.plugins && !S.pluginsLoading) S.pluginsLoading = api.invoke('plugins:scan').then((items) => { S.plugins = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.pluginsLoading = null; });
+  if (!S.animations && !S.animationsLoading) S.animationsLoading = api.invoke('animations:scan').then((items) => { S.animations = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.animationsLoading = null; });
   if (!S.apps && !S.appsLoading) S.appsLoading = api.invoke('apps:list').then((items) => { S.apps = items; if ($('#libTabs')) drawLibTabs(); }).catch(() => {}).finally(() => { S.appsLoading = null; });
 }
 
@@ -459,7 +470,7 @@ document.addEventListener('click', (e) => {
 function drawLibTabs() {
   const all = libItems();
   $('#libTabs').innerHTML = LIB_TABS[S.lib.scope || 'mods'].map((t) => {
-    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length + S.gfx.installed.length : '') : t.id === 'plugins' ? (S.plugins ? S.plugins.length : '') : t.id === 'apps' ? (S.apps ? S.apps.length : '') : compactGearItems(all.filter(t.match)).length;
+    const n = t.id === 'graphics' ? (S.gfx ? S.gfx.items.length + S.gfx.installed.length : '') : t.id === 'animations' ? (S.animations ? S.animations.length : '') : t.id === 'plugins' ? (S.plugins ? S.plugins.length : '') : t.id === 'apps' ? (S.apps ? S.apps.length : '') : compactGearItems(all.filter(t.match)).length;
     if (!n && t.id === 'more') return '';
     return `<button class="bigtab ${t.id === currentTab().id ? 'active' : ''}" data-libtab="${t.id}">${icon(t.icon)}<span>${t.label}</span><span class="n">${n}</span></button>`;
   }).join('');
@@ -557,6 +568,11 @@ function cardHtml(it) {
 let libObserver = null;
 function renderLibItems() {
   if (!$('#libScroll')) return;
+  if (currentTab().id === 'animations') {
+    drawLibTabs(); $('#libFilters').innerHTML = ''; renderBulk();
+    renderAnimationsInto($('#libScroll'));
+    return;
+  }
   if (currentTab().id === 'plugins') {
     drawLibTabs(); $('#libFilters').innerHTML = ''; renderBulk();
     renderPluginsInto($('#libScroll'));
@@ -620,9 +636,44 @@ async function renderPluginsInto(sc) {
     S.plugins = await api.invoke('plugins:scan');
     if (!sc.isConnected || S.lib.tab !== 'plugins') return;
     drawLibTabs();
-    sc.innerHTML = `<div class="srv-list" style="max-width:960px">${S.plugins.map((item) => `<div class="srv"><div class="srv-ico">${icon('box')}</div><div class="srv-txt"><div class="t">${esc(item.title)}</div><div class="m">MX Bikes/plugins/${esc(item.name)}${item.managed ? ' · Installed with CoreMX' : ''}</div></div><div class="jactions"><button class="btn btn-sm" data-reveal-plugin="${esc(item.name)}">${icon('folder')}Open folder</button>${item.recordKey ? `<button class="btn btn-sm btn-danger" data-remove-plugin="${esc(item.recordKey)}">${icon('trash')}Remove</button>` : ''}</div></div>`).join('') || '<div class="set-card muted">No game plugins found in MX Bikes/plugins.</div>'}</div>`;
+    sc.innerHTML = `<div class="srv-list" style="max-width:960px">${S.plugins.map((item) => `<div class="srv"><div class="srv-ico">${icon('box')}</div><div class="srv-txt"><div class="t">${esc(item.title)}</div><div class="m">${item.enabled ? 'Enabled' : 'Disabled'} · ${esc(item.name)}${item.managed ? ' · Installed with CoreMX' : ''}</div></div><div class="jactions"><button class="btn btn-sm" data-reveal-plugin="${esc(item.name)}">${icon('folder')}Open folder</button><button class="btn btn-sm" data-toggle-plugin="${esc(item.name)}" data-enable="${item.enabled ? 'false' : 'true'}">${icon(item.enabled ? 'power' : 'check')}${item.enabled ? 'Disable' : 'Enable'}</button>${item.recordKey && item.enabled ? `<button class="btn btn-sm btn-danger" data-remove-plugin="${esc(item.recordKey)}">${icon('trash')}Remove</button>` : ''}</div></div>`).join('') || '<div class="set-card muted">No game plugins found.</div>'}</div>`;
   } catch (error) { if (sc.isConnected) sc.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
 }
+async function renderAnimationsInto(sc) {
+  sc.innerHTML = '<div class="loadmore"><div class="spinner"></div></div>';
+  try {
+    S.animations = await api.invoke('animations:scan');
+    if (!sc.isConnected || S.lib.tab !== 'animations') return;
+    drawLibTabs();
+    sc.innerHTML = `<div class="srv-list" style="max-width:960px">${S.animations.map((item) => `<div class="srv"><div class="srv-ico">${icon('rider')}</div><div class="srv-txt"><div class="t">${esc(item.title)}</div><div class="m">${item.enabled ? 'Enabled' : 'Disabled'} · ${item.location === 'game' ? 'MX Bikes install folder' : 'MX Bikes mods folder'} · ${esc(item.name)}</div></div><div class="jactions"><button class="btn btn-sm" data-reveal-animation="${esc(item.id)}">${icon('folder')}Open folder</button><button class="btn btn-sm" data-toggle-animation="${esc(item.id)}" data-enable="${item.enabled ? 'false' : 'true'}">${icon(item.enabled ? 'power' : 'check')}${item.enabled ? 'Disable' : 'Enable'}</button>${item.recordKey ? `<button class="btn btn-sm btn-danger" data-remove-animation="${esc(item.recordKey)}">${icon('trash')}Remove</button>` : ''}</div></div>`).join('') || '<div class="set-card muted">No rider animations found in the game or mods folder.</div>'}</div>`;
+  } catch (error) { if (sc.isConnected) sc.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; }
+}
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-toggle-animation]'); if (!button || button.disabled) return;
+  button.disabled = true;
+  try { const enabled = button.dataset.enable === 'true'; await api.invoke('animations:setEnabled', button.dataset.toggleAnimation, enabled); await renderAnimationsInto($('#libScroll')); toast(`Animation ${enabled ? 'enabled' : 'disabled'}. Restart MX Bikes to use the change.`, 'ok', 4000); }
+  catch (error) { button.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+});
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-reveal-animation]'); if (!button) return;
+  try { await api.invoke('animations:reveal', button.dataset.revealAnimation); }
+  catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+});
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-remove-animation]'); if (!button || !await confirmBox('Remove rider animation', 'Move unchanged files installed by CoreMX to the Recycle Bin?', 'Remove', true)) return;
+  try { const result = await api.invoke('installs:uninstall', button.dataset.removeAnimation); await renderAnimationsInto($('#libScroll')); toast(result?.kept ? `${result.kept} changed file${result.kept === 1 ? '' : 's'} kept` : 'Animation moved to the Recycle Bin', result?.kept ? 'info' : 'ok', 5000); }
+  catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+});
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('[data-toggle-plugin]'); if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    const enabled = button.dataset.enable === 'true';
+    await api.invoke('plugins:setEnabled', button.dataset.togglePlugin, enabled);
+    await renderPluginsInto($('#libScroll'));
+    toast(`Plugin ${enabled ? 'enabled' : 'disabled'}. Restart MX Bikes to use the change.`, 'ok', 4000);
+  } catch (error) { button.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+});
 document.addEventListener('click', async (e) => {
   const button = e.target.closest('[data-reveal-plugin]'); if (!button) return;
   try { await api.invoke('plugins:reveal', button.dataset.revealPlugin); }
@@ -962,9 +1013,10 @@ function hostMode(d) {
 
 // ---------- Get Mods: free (mxb-mods.com) + both shops behind one switch ----------
 S.getSrc = 'free';
-// Keep a bounded snapshot for each Get Mods source/filter/sort/search combination.
-// A refresh builds all previously viewed pages offscreen before swapping the list.
-const BROWSE_CACHE_KEY = 'coremx:browse:v1';
+// Keep one complete merged source page for each filter, with an overall size cap.
+// MXB Mods and CoreMX can each contribute 30 cards to that page. Later pages
+// load live so returning to a filter never silently skips uncached results.
+const BROWSE_CACHE_KEY = 'coremx:browse:v2';
 function browseKey() { const b = S.browse; return JSON.stringify([S.getSrc, b.tab, b.kind || 'all', b.brand || '', b.sort, b.query]); }
 function browseCacheRead(key) {
   try {
@@ -975,65 +1027,69 @@ function browseCacheRead(key) {
   return null;
 }
 function browseCacheWrite(key, b) {
-  if (!b.page || !b.posts.length) return;
+  const first = b.firstPage;
+  if (!first || first.page !== 1) return;
   try {
     const all = JSON.parse(localStorage.getItem(BROWSE_CACHE_KEY) || '{}');
-    all[key] = { at: Date.now(), page: b.page, totalPages: b.totalPages, total: b.total, cursor: b.cursor, posts: b.posts };
-    for (const old of Object.keys(all).sort((a, c) => all[c].at - all[a].at).slice(24)) delete all[old];
+    if (first.posts.length) all[key] = { ...first, posts: first.posts.slice(0, 60) };
+    else delete all[key];
+    const recent = Object.keys(all).sort((a, c) => all[c].at - all[a].at);
+    for (const old of recent.slice(24)) delete all[old];
+    while (JSON.stringify(all).length > 1500000 && Object.keys(all).length > 1) {
+      const oldest = Object.keys(all).sort((a, c) => all[a].at - all[c].at)[0];
+      delete all[oldest];
+    }
     localStorage.setItem(BROWSE_CACHE_KEY, JSON.stringify(all));
   } catch { /* Full or disabled browser storage must not block browsing. */ }
 }
 function browseCachedStart() {
   const b = S.browse, key = browseKey(), hit = browseCacheRead(key);
-  b.cacheKey = key; b.error = null; b.loading = false;
+  try { localStorage.removeItem('coremx:browse:v1'); } catch {}
+  b.cacheKey = key; b.error = null; b.loading = false; b.autoScanning = false; b.emptyPages = 0;
   b.page = hit?.page || 0; b.totalPages = hit?.totalPages || 1;
-  b.total = hit?.total || 0; b.cursor = hit?.cursor || null; b.posts = hit?.posts || [];
-  renderBrowseGrid();
-  if (hit) browseRefresh(key, b.reqId, hit.page);
+  b.total = hit?.total || 0; b.cursor = hit?.cursor || null; b.posts = hit?.posts || []; b.firstPage = hit || null;
+  if (hit) browseRefresh(key, b.reqId);
   else browseLoad();
+  if (hit) renderBrowseGrid();
 }
-async function browseRefresh(key, reqId, pages) {
+async function browseRefresh(key, reqId) {
   const b = S.browse;
   if (b.refreshing?.key === key && b.refreshing.reqId === reqId) return;
   b.refreshing = { key, reqId };
   try {
     const request = { query: b.query, tab: b.tab, kind: b.kind || 'all', brand: b.brand || '', scope: S.getSrc, perPage: 30, orderby: b.sort };
-    const fresh = { posts: [], page: 0, totalPages: 1, total: 0, cursor: null };
-    for (let n = 1; n <= pages; n++) {
-      const r = await api.invoke('site:search', { ...request, page: n, cursor: fresh.cursor });
-      if (r.communityError && request.scope === 'free') throw new Error(r.communityError);
-      fresh.page = r.page; fresh.totalPages = r.totalPages; fresh.total = r.total; fresh.cursor = r.nextCursor || null;
-      fresh.posts.push(...r.posts.filter((p) => !fresh.posts.some((x) => x.id === p.id)));
-      if (n >= r.totalPages) break;
-    }
-    if (reqId !== b.reqId || key !== browseKey()) return;
+    const r = await api.invoke('site:search', { ...request, page: 1, cursor: null });
+    if (r.communityError && !r.posts.length) throw new Error(r.communityError);
+    if (reqId !== b.reqId || key !== browseKey() || b.page !== 1 || b.loading || b.autoScanning) return;
     // A source failure must not replace a complete cached section with a partial one.
-    b.posts = fresh.posts; b.page = fresh.page; b.totalPages = fresh.totalPages;
-    b.total = fresh.total; b.cursor = fresh.cursor; b.reqId++;
+    if (!r.posts.length && b.posts.length) return;
+    b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, posts: r.posts.slice(0, 60) };
+    b.posts = r.posts; b.page = 1; b.totalPages = r.totalPages;
+    b.total = r.total; b.cursor = r.nextCursor || null; b.reqId++;
     browseCacheWrite(key, b);
     renderBrowseGrid();
   } catch { /* Keep the last complete snapshot and retry on the next visit. */ }
   finally { if (b.refreshing?.key === key && b.refreshing.reqId === reqId) b.refreshing = null; }
 }
-function isFree() { return (S.view === 'get' && ['free', 'addons'].includes(S.getSrc)) || (S.view === 'graphics' && S.gfxTab === 'get'); }
-function isShop() { return S.view === 'get' && !['free', 'addons'].includes(S.getSrc); }
+function isFree() { return (S.view === 'get' && S.getSrc === 'free') || (S.view === 'graphics' && S.gfxTab === 'get'); }
+function isShop() { return S.view === 'get' && S.getSrc !== 'free'; }
 function renderGet(c) {
+  if (S.getSrc === 'addons') S.getSrc = 'free';
   const SOURCES = [
-    ['free', 'globe', 'Free mods', 'coremx.app + mxb-mods.com'],
-    ['addons', 'layers', 'Add-ons', 'Free, needs another mod'],
+    ['free', 'globe', 'Mods', 'coremx.app + mxb-mods.com'],
     ['hub', 'cart', 'MXB Hub', 'Paid store'],
     ['mxbs', 'cart', 'MX Bikes Shop', 'Paid store'],
   ];
   const src = ([id, ic, label, hint]) => `<button class="src-tile ${S.getSrc === id ? 'active' : ''}" data-src="${id}"><span class="src-ico">${icon(ic)}</span><span class="src-txt"><b>${label}</b><small>${hint}</small></span></button>`;
   c.innerHTML = `<div class="view col"><div class="get-head"><div class="get-title"><h2>Get Mods</h2><span class="sub">Browse, check what you need and install in one click</span></div><div class="src-tiles">${SOURCES.map(src).join('')}</div></div><div class="view" id="getBody"></div></div>`;
   const body = $('#getBody');
-  if (['free', 'addons'].includes(S.getSrc)) { renderBrowse(body); return; }
+  if (S.getSrc === 'free') { renderBrowse(body); return; }
   if (S.shop.id !== S.getSrc) { S.shop.id = S.getSrc; S.shop.cat = 0; S.shop.sort = 'date'; S.shop.query = ''; S.shop.products = []; S.shop.page = 0; S.shop.totalPages = 1; S.shop.total = 0; S.shop.req++; S.shop.loading = false; }
   renderShops(body);
 }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-src]');
-  if (b && S.view === 'get') { if (S.getSrc === b.dataset.src) return; S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.cursor = null; S.browse.kind = 'all'; S.browse.brand = ''; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; if (S.getSrc === 'addons' && !['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(S.browse.tab)) S.browse.tab = 'all'; renderGet($('#content')); }
+  if (b && S.view === 'get') { if (S.getSrc === b.dataset.src) return; S.getSrc = b.dataset.src; S.browse.posts = []; S.browse.cursor = null; S.browse.kind = 'all'; S.browse.brand = ''; S.browse.page = 0; S.browse.totalPages = 1; S.browse.loading = false; S.browse.reqId = (S.browse.reqId || 0) + 1; renderGet($('#content')); }
 });
 
 // ---------- OEM packs ----------
@@ -1173,14 +1229,14 @@ function renderBrowse(c) {
     $('#brKind').addEventListener('click', (e) => { const b = e.target.closest('[data-browse-kind]'); if (b) { S.browse.kind = b.dataset.browseKind; drawBrowseKind(); browseReset(); } });
   }
   $('#brSort').value = S.browse.sort;
-  $('#brTabs').innerHTML = S.tabs.filter((t) => S.view !== 'get' || S.getSrc !== 'addons' || ['all', 'riderkit', 'helmets', 'boots', 'protection', 'goggles'].includes(t.id)).map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${icon(TAB_ICONS[t.id] || 'grid')}${esc(t.label)}</button>`).join('');
+  $('#brTabs').innerHTML = S.tabs.map((t) => `<button class="chip ${S.browse.tab === t.id ? 'active' : ''}" data-tab="${t.id}">${icon(TAB_ICONS[t.id] || 'grid')}${esc(t.label)}</button>`).join('');
   drawBrowseBrands();
   drawBrowseKind();
   if (S.browse.cacheKey !== browseKey()) browseReset();
-  else { renderBrowseGrid(); if (S.browse.posts.length) browseRefresh(browseKey(), S.browse.reqId, S.browse.page); else if (!S.browse.loading) browseLoad(); }
+  else { renderBrowseGrid(); if (S.browse.posts.length && S.browse.page === 1) browseRefresh(browseKey(), S.browse.reqId); else if (!S.browse.posts.length && !S.browse.loading) browseLoad(); }
 }
 
-const TAB_ICONS = { all: 'grid', tracks: 'track', bikes: 'bike', liveries: 'paint', riderkit: 'shirt', riders: 'rider', helmets: 'helmet', boots: 'boot', gloves: 'glove', protection: 'shield', goggles: 'goggles', sounds: 'power', wheels: 'tyre', graphics: 'sparkle', modpacks: 'box', other: 'settings', paid: 'cart' };
+const TAB_ICONS = { all: 'grid', tracks: 'track', bikes: 'bike', liveries: 'paint', riderkit: 'shirt', riders: 'rider', helmets: 'helmet', boots: 'boot', gloves: 'glove', protection: 'shield', goggles: 'goggles', sounds: 'power', animations: 'rider', wheels: 'tyre', graphics: 'sparkle', modpacks: 'box', other: 'settings', paid: 'cart' };
 const LIVERY_BRANDS = ['Virtual Team Bike Liveries', 'MSM', 'Alta', 'Beta', 'Fantic', 'GasGas', 'Honda', 'Husaberg', 'Husqvarna', 'KTM', 'Kawasaki', 'Suzuki', 'TM', 'Triumph', 'Yamaha'];
 function drawBrowseBrands() {
   const box = $('#brBrands'); if (!box) return;
@@ -1191,9 +1247,10 @@ function drawBrowseBrands() {
 function drawBrowseKind() {
   const box = $('#brKind'); if (!box) return;
   const labels = { helmets: ['Helmet models', 'Helmet paints'], boots: ['Boot models', 'Boot paints'], protection: ['Protection models', 'Protection paints'] }[S.browse.tab];
-  box.hidden = !labels || S.view === 'get' && ['free', 'addons'].includes(S.getSrc);
+  box.hidden = !labels;
   if (!labels) { box.innerHTML = ''; return; }
-  const choices = [['all', 'All'], ['models', labels[0]], ['paints', labels[1]], ...(S.browse.tab === 'helmets' ? [['addons', 'Addons']] : [])];
+  const choices = [['all', 'All'], ['models', labels[0]], ['paints', labels[1]]];
+  if (S.browse.tab === 'helmets') choices.push(['addons', 'Helmet add-ons']);
   box.innerHTML = choices.map(([kind, label]) => `<button class="chip ${(S.browse.kind || 'all') === kind ? 'active' : ''}" data-browse-kind="${kind}">${label}</button>`).join('');
 }
 
@@ -1206,23 +1263,40 @@ function browseReset() {
 
 async function browseLoad() {
   const b = S.browse;
-  if (b.loading || b.refreshing?.key === browseKey() || b.page >= b.totalPages) return;
+  if (b.loading || b.page >= b.totalPages) return;
   b.loading = true; b.error = null;
   const reqId = b.reqId;
+  const nextPage = b.page + 1;
+  let autoAdvance = false;
   renderBrowseGrid();
   try {
     let timeout;
-    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', brand: b.brand || '', scope: S.view === 'get' ? S.getSrc : 'all', page: b.page + 1, perPage: 30, orderby: b.sort, cursor: b.cursor });
+    const request = api.invoke('site:search', { query: b.query, tab: b.tab, kind: b.kind || 'all', brand: b.brand || '', scope: S.view === 'get' ? S.getSrc : 'all', page: nextPage, perPage: 30, orderby: b.sort, cursor: b.cursor });
     const r = await Promise.race([request, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('MXB Mods took too long to respond. Try again.')), 30000); })]).finally(() => clearTimeout(timeout));
     if (reqId !== b.reqId) return;
+    if (!Array.isArray(r.posts) || r.page !== nextPage) throw new Error('The mod listing returned an invalid page. Try again.');
+    if (r.communityError && !r.posts.length) throw new Error(r.communityError);
     b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
-    b.posts.push(...r.posts.filter((p) => !b.posts.some((x) => x.id === p.id)));
+    const seen = new Set(b.posts.map((p) => String(p.id)));
+    const added = r.posts.filter((p) => !seen.has(String(p.id)));
+    b.posts.push(...added);
+    if (nextPage === 1) b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, posts: r.posts.slice(0, 60) };
+    b.emptyPages = added.length ? 0 : (b.emptyPages || 0) + 1;
+    autoAdvance = !added.length && b.page < b.totalPages && b.emptyPages < 5;
     browseCacheWrite(b.cacheKey || browseKey(), b);
   } catch (e) {
     if (reqId === b.reqId) b.error = e.message;
   } finally {
     if (reqId === b.reqId) b.loading = false;
-    if (reqId === b.reqId && isFree()) renderBrowseGrid();
+    if (reqId === b.reqId && isFree()) {
+      b.autoScanning = autoAdvance && !b.error;
+      renderBrowseGrid();
+      if (b.autoScanning) setTimeout(() => {
+        if (reqId !== b.reqId || !isFree() || !$('#brScroll')) { b.autoScanning = false; return; }
+        b.autoScanning = false;
+        browseLoad();
+      }, 0);
+    }
   }
 }
 
@@ -1232,13 +1306,21 @@ function siteCard(p) {
   // A website paint category does not necessarily mean a dependency: many
   // standalone kit packs are tagged under every gear type.  Only label a card
   // as requiring a model after its creator instructions confirm that fact.
-  const dependencyLabel = S.view === 'get' && S.getSrc === 'addons' && p.needsModelNotice ? 'Requires another model' : '';
+  const dependencyLabel = p.needsModelNotice ? 'Requires another model' : paintRequirement(p) ? `Requires matching ${paintRequirement(p)}` : '';
   return `<div class="card" data-post="${esc(p.id)}">
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
       <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
       <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
+}
+
+function paintRequirement(p) {
+  const categories = p.categories || [];
+  if (categories.includes(127) && !categories.includes(313)) return 'helmet model';
+  if (categories.includes(126) && !categories.includes(343)) return 'boot model';
+  if (categories.includes(135) && !categories.includes(344)) return 'protector model';
+  return '';
 }
 
 function heroCard(p) {
@@ -1260,10 +1342,10 @@ function renderBrowseGrid() {
   const hero = S.view === 'get' && S.getSrc === 'free' && !b.query && b.tab === 'all' && b.posts.length >= 4 && b.posts[0].image ? b.posts[0] : null;
   if (hero) html += heroCard(hero);
   if (b.posts.length) html += `<div class="grid big" data-browse-grid="${b.reqId}">${b.posts.filter((p) => p !== hero).map(siteCard).join('')}</div>`;
-  else if (b.loading) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
+  else if (b.loading || b.autoScanning) html += `<div class="grid big">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`;
   else if (b.error) html += `<div class="empty"><div>${icon('alert')}<h3>Couldn't load free mods</h3><div>${esc(b.error)}</div><div style="margin-top:12px"><button class="btn" data-act="browse-retry">${icon('refresh')}Retry</button></div></div></div>`;
   else html += `<div class="empty"><div>${icon('search')}<h3>No mods found${b.page < b.totalPages ? ' on this page' : ''}</h3><div>Try another search or category.</div>${b.page < b.totalPages ? '<button class="btn" data-act="browse-more">Check next page</button>' : ''}</div></div>`;
-  const moreHtml = `<div class="loadmore" id="brMore">${b.error ? `<span class="muted">${esc(b.error)}</span><button class="btn" data-act="browse-retry">Retry</button>` : b.loading ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
+  const moreHtml = `<div class="loadmore" id="brMore">${b.error ? `<span class="muted">${esc(b.error)}</span><button class="btn" data-act="browse-retry">Retry</button>` : b.loading || b.autoScanning ? '<div class="spinner"></div>' : '<button class="btn" data-act="browse-more">Load more</button>'}</div>`;
   if (b.page < b.totalPages && b.posts.length) html += moreHtml;
   const top = sc.scrollTop;
   const existing = sc.querySelector(`[data-browse-grid="${b.reqId}"]`);
@@ -1284,7 +1366,7 @@ function renderBrowseGrid() {
   sc.scrollTop = top;
   if (brObserver) brObserver.disconnect();
   const more = $('#brMore');
-  if (more && !b.error && !b.loading) {
+  if (more && !b.error && !b.loading && !b.autoScanning) {
     brObserver = new IntersectionObserver((ents) => { if (ents.some((e) => e.isIntersecting)) browseLoad(); }, { root: sc, rootMargin: '700px' });
     brObserver.observe(more);
   }
@@ -1292,7 +1374,7 @@ function renderBrowseGrid() {
   // repainting image-heavy cards. Keep the observer, but also load when the
   // user actually reaches the end of the browse scroller.
   sc.onscroll = () => {
-    if (b.loading || b.error || b.page >= b.totalPages) return;
+    if (b.loading || b.autoScanning || b.error || b.page >= b.totalPages) return;
     if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 700) browseLoad();
   };
 }
@@ -1488,6 +1570,7 @@ async function openPost(summary, { install = false, file = null } = {}) {
       ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap').length > 1 ? '<p class="muted">Choose the model swap for your bike and downloaded paint variant. The linked versions are alternatives.</p>' : ''}
       ${(p.modelDependencies || []).filter((d) => d.kind === 'bikeSwap' || p.downloads.filter((dl) => !dl.shop).length <= 1).map((d, i) => `<div class="notice ${d.installed === true ? 'ok' : d.installed === false ? 'warn' : 'info'}">${icon(d.installed === true ? 'check' : d.installed === false ? 'alert' : 'info')}<div><b>${d.kind === "bikeSwap" ? "Required bike model swap" : "Base model"}: ${esc(d.label)}</b><div>${d.installed === true ? `Installed${d.matchedName ? ` (${esc(d.matchedName)})` : ''}${d.kind === 'bikeSwap' && !d.active ? ' — select it under Rider → Bike → Appearance before riding.' : ' — ready to use.'}` : d.installed === false ? 'Missing — install the base model before equipping this add-on.' : d.unidentified ? 'The listing does not identify the model. Download for review to check the files before installing.' : 'Couldn’t verify it locally. Check the creator’s required model before installing.'}</div>${d.url ? dependencyButton(d) : `<button class="btn btn-sm" data-find-required="${(p.modelDependencies || []).indexOf(d)}">${icon('search')}Find base model</button>`}</div></div>`).join('')}
       ${p.needsModelNotice && needsModelWarning(p) && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>The creator specifies another model for these paints. Check the description and install the matching model before equipping them.</div></div>` : ''}
+      ${paintRequirement(p) && !p.needsModelNotice && !p.modelDependencies?.length ? `<div class="notice info">${icon('info')}<div>These paint files need the matching ${esc(paintRequirement(p))}. The base model may be included with MX Bikes or linked in the creator's instructions; the paint download does not necessarily include it.</div></div>` : ''}
       ${(p.dependencies || []).some((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)) ? `<div class="dependency-links"><b>Related model pages</b><div>${p.dependencies.filter((d) => d.url && !(p.modelDependencies || []).some((m) => m.url === d.url)).map((d) => dependencyButton(d, d.label)).join('')}</div></div>` : ''}
       ${p.madeFor ? `<div class="notice info">${icon('info')}<div>${esc(p.madeFor)}</div></div>` : ''}
       ${p.paid ? `<div class="notice warn">${icon('alert')}<div>This is a paid mod — buy it from the creator's store, then drag the downloaded file onto this window to install it.</div></div>` : ''}
@@ -1603,11 +1686,14 @@ function warnBeforePaintInstall(p, staged = false) {
 
 async function startDownload(p, dl) {
   p = { ...p, modelDependencies: dl.modelDependencies ?? p.modelDependencies, dependencies: dl.modelDependencies?.length ? dl.modelDependencies : p.dependencies };
-  const requireReview = needsModelWarning(p);
-  if (requireReview && !await warnBeforePaintInstall(p)) return false;
+  const modelWarning = needsModelWarning(p);
+  if (modelWarning && !await warnBeforePaintInstall(p)) return false;
+  const animation = (p.categories || []).some((id) => Number(id) === 519);
+  const animationLocation = animation ? p.animationLocation : null;
+  const requireReview = modelWarning || animation;
   const id = await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
-    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview, modelWarningAccepted: requireReview,
+    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview, modelWarningAccepted: modelWarning, animationLocation,
   });
   if (id && !S.jobs.has(id)) S.jobs.set(id, { id, title: p.title, url: dl.url, status: 'queued', createdAt: Date.now() });
   refreshInlineDownloads();
@@ -1856,7 +1942,7 @@ async function openReview(id) {
     const swapHelp = (p.dependencies || []).filter((d) => d.kind === 'bikeSwap').map((d) => `<div class="notice ${d.installed ? 'ok' : 'warn'}">${icon(d.installed ? 'check' : 'alert')}<div><b>Required model swap: ${esc(d.label)}</b><div>${d.installed ? 'Installed. Select this appearance on the matching bike before riding.' : 'This paint needs the matching model swap. Buy or install that model before using the paint.'}</div>${d.url ? dependencyButton(d) : ''}</div></div>`).join('');
     const warn = swapHelp + bikeHelp + p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
     const waiting = p.needsPaintTarget || p.needsRiderTarget || p.needsSoundBike;
-    const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || e.bikeMatch?.message || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${e.bikeMatch?.status === 'missing' ? 'Bike mod not installed' : e.bikeMatch?.status === 'incompatible' ? 'Incompatible bike' : waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
+    const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || e.bikeMatch?.message || '')}">${e.dest ? (p.root === 'game' ? 'game/' : 'mods/') + esc(e.dest) : `<span class="muted">${e.how === 'multiple-variants' ? 'Multiple variants — install separately' : e.bikeMatch?.status === 'missing' ? 'Bike mod not installed' : e.bikeMatch?.status === 'incompatible' ? 'Incompatible bike' : waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: e.how === 'multiple-variants' ? 'Choose variant' : waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
     $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `Install for <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : 'Pick the base bike this download was made for.' : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
       <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
     $('#rvSummary', m).textContent = waiting ? `Choose ${p.needsSoundBike ? 'an installed bike' : bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
@@ -3132,7 +3218,7 @@ document.addEventListener('click', async (e) => {
     case 'run-setup': openSetup(0); break;
     case 'packs-refresh': renderPacks($('#content'), true); break;
     case 'open-site': api.invoke('open:external', 'https://coremx.app/#/browse?src=local'); break;
-    case 'browse-more': browseLoad(); break;
+    case 'browse-more': S.browse.emptyPages = 0; browseLoad(); break;
     case 'browse-retry': if (S.browse.posts.length) browseLoad(); else browseReset(); break;
     case 'pick-user': case 'pick-install': S.env = await api.invoke('settings:pickFolder', act === 'pick-user' ? 'user' : 'install'); render(); if (S.env.modsFound) rescan(true); break;
     case 'redetect': S.env = await api.invoke('settings:redetect'); render(); if (S.env.modsFound) rescan(true); toast('Folders re-detected', 'ok', 1800); break;
@@ -3302,7 +3388,7 @@ api.on('jobs:review', (id) => {
 });
 const onLibraryChanged = debounce(async () => {
   S.gearThumbs.clear();
-  S.gfx = null; S.plugins = null; S.apps = null;
+  S.gfx = null; S.animations = null; S.plugins = null; S.apps = null;
   await refreshInstalledIds(); await rescan(true);
   for (const refresh of openPostRefreshers) refresh().catch(() => {});
   S.friendDialog?.refresh(true);
@@ -3548,7 +3634,7 @@ async function handleOpenLink(l) {
     const t = await api.invoke('deeplink:target', l);
     if (!t) { toast('That mod could not be found. It may have been removed.', 'err', 5000); return; }
     if (t.source === 'mxbmods' || t.source === 'local') {
-      S.getSrc = t.addon ? 'addons' : 'free';
+      S.getSrc = 'free';
       Object.assign(S.browse, { posts: [], cursor: null, kind: 'all', tab: 'all', page: 0, totalPages: 1, loading: false, reqId: (S.browse.reqId || 0) + 1 });
       go('get'); await openPost(t.post, { install: true, file: Number.isInteger(l.file) ? l.file : null }); return;
     }
