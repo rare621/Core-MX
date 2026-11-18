@@ -123,7 +123,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // Remember which address this server name had when we joined it from the app.
       const known = cfg().addresses || {};
       const lj = cfg().lastJoin;
-      const resolved = await resolveServerAddress(next.server).catch(() => null);
+      // The plugin reads the exact address of the connected server from the game; it wins over
+      // the game-list lookup (several servers can share one name) and remembered joins.
+      const fromGame = /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(next.serverAddress || '')) ? next.serverAddress : null;
+      const resolved = fromGame || await resolveServerAddress(next.server).catch(() => null);
       // Only remember the join address when the game landed on the server that was clicked (a join
       // that timed out, followed by joining another server in game, must not label that server).
       const sameServer = lj && (!lj.name || lj.name.toLowerCase() === next.server.toLowerCase());
@@ -160,17 +163,19 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         hostName = profileText.match(/^hostsetup_name=(.*)$/m)?.[1]?.trim() || '';
       }
     } catch {}
+    // Hosting from Host World: the server name is the session name from Host setup ([ui]
+    // hostsetup_name in the profile). The service then uses the host's public IP; any address the
+    // plugin read from the game is not the address friends need, so it is not sent.
+    const hosting = !!(s.inEvent && s.server && hostName && hostName.toLowerCase() === String(s.server).trim().toLowerCase());
     return {
       inGame: gameRunning, inEvent: !!s.inEvent,
-      server: s.server || null, serverAddress: s.serverAddress || null,
+      server: s.server || null, serverAddress: hosting ? null : s.serverAddress || null,
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
-      // Hosting from Host World: the server name is the session name from Host setup ([ui]
-      // hostsetup_name in the profile). The plugin's server type is not a host flag (seen as 1 and 2
-      // while hosting). The game gives no address, so the service adds the host's public IP and the
-      // game's default port (54210; Host World has no port setting).
-      ...(s.inEvent && s.server && hostName && hostName.toLowerCase() === String(s.server).trim().toLowerCase() ? { hosting: true, hostPort: 54210 } : {}),
+      // (The plugin's server type is not a host flag: seen as 1 and 2 while hosting. Host World has
+      // no port setting, so the game's default port 54210 is used.)
+      ...(hosting ? { hosting: true, hostPort: 54210 } : {}),
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
