@@ -2219,7 +2219,7 @@ document.addEventListener('change', (e) => {
 });
 async function loadRiderModel() {
   const R = S.rider;
-  const withBike = riderShowBike();
+  let withBike = false; try { withBike = localStorage.getItem('coremx.showBike') === '1'; } catch {}
   const key = JSON.stringify([R.profile, R.bike, R.lo && R.lo.current, withBike, withBike && R.lo?.identity?.riderNumber]);
   const status = $('#stageStatus'), note = $('#stageNote');
   if (R.modelKey === key && R.modelOk) { if (status) status.hidden = true; if (note) note.innerHTML = R.modelNote || ''; return; }
