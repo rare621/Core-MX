@@ -440,6 +440,10 @@ select option { background: var(--solid-2); color: var(--text); }
 .srv { padding: 12px 14px; border-radius: 18px; background: rgba(255, 255, 255, .04); box-shadow: var(--hairline); border: 0; transition: background .2s, transform .3s var(--spring); animation: rowIn .4s var(--out) both; }
 .srv:hover { background: rgba(255, 255, 255, .075); transform: translateX(2px); }
 .srv-txt .t { font-weight: 650; font-size: 14.5px; }
+.srv-heading { display: flex; align-items: center; gap: 7px; min-width: 0; margin-bottom: 3px; }
+.srv-heading .t { flex: 0 1 auto; min-width: 0; }
+.live-host-label { flex: none; padding: 2px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.live-address-status { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ride-friends { display: flex; flex-direction: column; gap: 8px; }
 .ride-friend { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 16px; background: rgba(48, 209, 88, .07); box-shadow: inset 0 0 0 1px rgba(48, 209, 88, .22); animation: rowIn .4s var(--out) both; }
 .ride-friend .fr-av { position: relative; flex: none; }
