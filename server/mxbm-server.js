@@ -231,7 +231,9 @@ const routes = {
           if (s.hosting === true && state.serverAddress) {
             const continuing = prev.hosted && prev.hostedBy === me.id && previous?.inEvent &&
               serverKey(previous.server || '') === k && Date.now() - previousPresence.at < ONLINE_TTL;
-            const observed = continuing && prev.observedAddress && Date.now() - prev.observedAt < ONLINE_TTL;
+            // Keep the real address for the whole hosting session. It used to expire 2 minutes after the last
+            // rider's report, which put the public-IP:54210 guess back and made later joins time out.
+            const observed = continuing && prev.observedAddress;
             return {
               address: observed ? prev.observedAddress : state.serverAddress,
               hosted: true, hostedBy: me.id, guessedAddress: state.serverAddress,
@@ -244,7 +246,8 @@ const routes = {
           if (hostStillThere) {
             const sameTrack = !prev.trackId || !state.trackId || prev.trackId === state.trackId;
             const fromGame = state.serverAddress && state.serverAddressSource === 'game' && sameTrack;
-            const observed = fromGame ? state.serverAddress : prev.observedAddress && Date.now() - prev.observedAt < ONLINE_TTL ? prev.observedAddress : null;
+            // Same session as long as the host is still on it (hostStillThere), so keep what a game saw.
+            const observed = fromGame ? state.serverAddress : prev.observedAddress || null;
             const guessedAddress = prev.guessedAddress || prev.address || null;
             return {
               address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, guessedAddress,
