@@ -3029,13 +3029,24 @@ S.settingsTab = 'general';
 S.admin = { unlocked: false, stats: null };
 const ADMIN_STEAM_ID = '76561198098586128';
 function settingsTabs() {
-  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button>${S.accounts.steam?.steamId === ADMIN_STEAM_ID ? `<button class="${S.settingsTab === 'admin' ? 'active' : ''}" data-settings-tab="admin">${icon('shield')}Admin</button>` : ''}</div>`;
+  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button><button class="${S.settingsTab === 'credits' ? 'active' : ''}" data-settings-tab="credits">${icon('rider')}Creator & Tester</button>${S.accounts.steam?.steamId === ADMIN_STEAM_ID ? `<button class="${S.settingsTab === 'admin' ? 'active' : ''}" data-settings-tab="admin">${icon('shield')}Admin</button>` : ''}</div>`;
 }
 document.addEventListener('click', (e) => { const tab = e.target.closest('[data-settings-tab]'); if (tab) { S.settingsTab = tab.dataset.settingsTab; renderSettings($('#content')); } });
+function renderCreditsSettings(c) {
+  c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings">
+    <div class="set-card"><h3>Creator & Tester</h3><p>The people behind CoreMX.</p>
+      <div class="srv-list">
+        <div class="srv"><div class="srv-ico">${icon('rider')}</div><div class="srv-txt"><div class="t">Rare621</div><div class="m">Creator</div></div><button class="btn btn-sm" data-open="https://steamcommunity.com/id/Rare621/" aria-label="Open Rare621's Steam profile">${icon('external')}Steam profile</button></div>
+        <div class="srv"><div class="srv-ico">${icon('check')}</div><div class="srv-txt"><div class="t">Raze392</div><div class="m">Tester</div></div><button class="btn btn-sm" data-open="https://steamcommunity.com/id/Raze392/" aria-label="Open Raze392's Steam profile">${icon('external')}Steam profile</button></div>
+      </div>
+    </div>
+  </div></div></div></div>`;
+}
 async function renderSettings(c) {
   if (S.settingsTab === 'admin') return renderAdminSettings(c);
   if (S.settingsTab === 'health') return renderHealth(c);
   if (S.settingsTab === 'plugins') return renderPluginSettings(c);
+  if (S.settingsTab === 'credits') return renderCreditsSettings(c);
   if (!S.accounts.shops.length) await refreshAccounts();
   const env = S.env, s = env.settings;
   const pathRow = (val, ok, which) => `<div class="path-row"><div class="path">${ok ? `<span class="ok">${icon('check')}</span>` : `<span class="bad">${icon('alert')}</span>`}${esc(val || 'Not found')}</div>

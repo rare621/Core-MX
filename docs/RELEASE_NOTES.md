@@ -1,3 +1,7 @@
+## 1.0.30 — Creator and tester credits
+
+- Added a Creator & Tester tab in Settings, linking to Rare621 and Raze392 on Steam.
+
 ## 1.0.24 — Full mod categories and window navigation
 
 - Best match now fills each Get Mods category from the full catalog after its ranked items. Add-ons and narrow categories no longer appear empty just because the site's global popularity list has few matches. If that ranking is unavailable, Best match still loads the category.
