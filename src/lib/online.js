@@ -177,11 +177,20 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       riderName, riderProfile,
       // (The plugin's server type is not a host flag: seen as 1 and 2 while hosting. Host World has
       // no port setting, so the game's default port 54210 is used.)
-      ...(hosting ? { hosting: true, hostPort: 54210 } : {}),
+      ...(hosting ? { hosting: true, hostPort: 54210, ...publicAddress() } : {}),
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
 
+  // The game's outside IP:port as seen by a STUN server (the plugin asks from the game's own socket
+  // while hosting); routers often map 54210 to another outside port, which is what friends must use.
+  function publicAddress() {
+    try {
+      const p = JSON.parse(fs.readFileSync(path.join(userDir(), 'mxbm_public.json'), 'utf8'));
+      if (/^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(p.address) && Date.now() - p.at < 6 * 60 * 1000) return { hostAddress: p.address };
+    } catch {}
+    return {};
+  }
   // MX Bikes servers are IPv4. When this PC reaches the service over IPv6, the service can't see
   // the IPv4 address friends must join, so a hosting app makes one request forced over IPv4.
   let hostIpAt = 0;

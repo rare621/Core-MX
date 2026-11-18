@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 12;
+const VERSION = 13;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -198,9 +198,17 @@ const routes = {
     if (s.hosting === true && state.inEvent && state.server && !state.serverAddress) {
       const port = Number(s.hostPort) >= 1024 && Number(s.hostPort) <= 65535 ? Number(s.hostPort) : 54210;
       let addr = `${clientIp(req)}:${port}`;
-      // Over IPv6 the request carries no IPv4; use the IPv4 the app recorded with /v1/hostip.
+      // The host's outside address from STUN (the router may map 54210 to another port). Only its
+      // port is taken from the app: the IP must equal the one this service sees for that player.
       const seen = hostIps.get(me.id);
-      if (!isAddress(addr) && seen && Date.now() - seen.at < 30 * 60 * 1000) addr = `${seen.ip}:${port}`;
+      const fresh = seen && Date.now() - seen.at < 30 * 60 * 1000;
+      const stun = String(s.hostAddress || '');
+      if (isAddress(stun)) {
+        const ip = stun.split(':')[0];
+        if (ip === clientIp(req) || (fresh && ip === seen.ip)) addr = stun;
+      }
+      // Over IPv6 the request carries no IPv4; use the IPv4 the app recorded with /v1/hostip.
+      if (!isAddress(addr) && fresh) addr = `${seen.ip}:${port}`;
       if (isAddress(addr)) state.serverAddress = addr;
     }
     // The game plugin reports a fresh non-event state as soon as MX Bikes
