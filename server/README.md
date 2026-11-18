@@ -44,8 +44,10 @@ For deployment instructions, verification, and Cloudflare upload limits, see [On
 - The game plugin (`plugin/mxbm_presence.dlo`, installed from the app) writes the server name, track and
   rider list to `Documents\PiBoSo\MX Bikes\mxbm_presence.json`. The app reports that here every 30 s while the game is open.
 - A server stays on the list for 20 minutes after anyone last reported it.
-- Join addresses: the game doesn't tell plugins a server's IP, so a server becomes joinable from the list
-  once an app user has joined it through the app.
+- Join addresses: the plugin reads the connected endpoint when the supported game build exposes it.
+  For a home-hosted World, a joined rider's game-observed endpoint takes priority over the host's
+  estimated public address and default port while that host session remains active. Direct Join
+  still requires the host's endpoint to be reachable; the online service does not relay game traffic.
 - Friends see each other only when both have added each other. "Let friends see which server I'm on" off
   hides you from friends but still updates the server's track.
 - Accounts are Steam IDs claimed first-come. If someone needs a reset, stop the service and delete their

@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 11;
+const VERSION = 12;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -158,7 +158,7 @@ function presenceView(id) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip'], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address'], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // First run of an app: claim a Steam ID and get a token. A claimed ID can't be re-claimed.
   'POST /v1/register': async (req, body) => {
@@ -188,6 +188,7 @@ const routes = {
     const s = body.state || {};
     const state = {
       inGame: !!s.inGame, inEvent: !!s.inEvent, server: str(s.server, 64) || null, serverAddress: isAddress(s.serverAddress) ? s.serverAddress : null,
+      serverAddressSource: s.serverAddressSource === 'game' ? 'game' : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
       riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
@@ -206,7 +207,8 @@ const routes = {
     // closes or the rider leaves a server.  Remove that reporter from the
     // old server immediately instead of leaving a "just now" ghost entry
     // until the normal 20-minute server TTL expires.
-    const previous = presence.get(me.id)?.state;
+    const previousPresence = presence.get(me.id);
+    const previous = previousPresence?.state;
     if (previous?.server && (!state.inEvent || previous.server !== state.server)) {
       const oldKey = serverKey(previous.server), old = db.servers[oldKey];
       if (old) {
@@ -222,13 +224,34 @@ const routes = {
       const prev = db.servers[k] || { seenBy: [] };
       const riders = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
       db.servers[k] = {
-        // A Host World server keeps the host's address while the host is still on it, even when
-        // another rider (whose report carries no address) reports the same server.
+        // A rider who reached this Host World server can report the endpoint read from the game.
+        // Prefer that fresh observation over the host's public-IP:54210 guess. Keep it only while
+        // the same host remains in the same session; a reused server name must not inherit it.
         ...(() => {
-          if (s.hosting === true && state.serverAddress) return { address: state.serverAddress, hosted: true, hostedBy: me.id };
+          if (s.hosting === true && state.serverAddress) {
+            const continuing = prev.hosted && prev.hostedBy === me.id && previous?.inEvent &&
+              serverKey(previous.server || '') === k && Date.now() - previousPresence.at < ONLINE_TTL;
+            const observed = continuing && prev.observedAddress && Date.now() - prev.observedAt < ONLINE_TTL;
+            return {
+              address: observed ? prev.observedAddress : state.serverAddress,
+              hosted: true, hostedBy: me.id, guessedAddress: state.serverAddress,
+              observedAddress: observed ? prev.observedAddress : null,
+              observedAt: observed ? prev.observedAt : null,
+            };
+          }
           const hp = prev.hosted && prev.hostedBy !== me.id ? presence.get(prev.hostedBy) : null;
           const hostStillThere = hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && serverKey(hp.state.server || '') === k;
-          return hostStillThere ? { address: prev.address, hosted: true, hostedBy: prev.hostedBy } : { address: state.serverAddress || null, hosted: false };
+          if (hostStillThere) {
+            const sameTrack = !prev.trackId || !state.trackId || prev.trackId === state.trackId;
+            const fromGame = state.serverAddress && state.serverAddressSource === 'game' && sameTrack;
+            const observed = fromGame ? state.serverAddress : prev.observedAddress && Date.now() - prev.observedAt < ONLINE_TTL ? prev.observedAddress : null;
+            const guessedAddress = prev.guessedAddress || prev.address || null;
+            return {
+              address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, guessedAddress,
+              observedAddress: observed, observedAt: fromGame ? Date.now() : observed ? prev.observedAt : null,
+            };
+          }
+          return { address: state.serverAddress || null, hosted: false };
         })(),
         name: state.server,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',
@@ -254,7 +277,7 @@ const routes = {
           return matchingRows.length === 1 && matchingUsers.length === 1
             ? { ...r, coremxName: matchingUsers[0].user.name } : r;
         });
-        return { name: s.name, address: s.address, hosted: !!s.hosted, trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
+        return { name: s.name, address: s.address, hosted: !!s.hosted, addressObserved: !!(s.hosted && s.observedAddress), trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
       })
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];

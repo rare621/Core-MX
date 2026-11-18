@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 11);
+  assert.equal(health.version, 12);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -68,10 +68,29 @@ test('a Host World session gets the host public IP and the game port as its addr
   await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210 } });
   const hosted = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
   assert.equal(hosted.address, '203.0.113.9:54210');
+  assert.equal(hosted.addressObserved, false);
+  const rider = await call()('POST', '/v1/register', { steamId: '76561198000000013', name: 'JoinedRider' });
+  const riderCall = call(rider.token);
+  const riderState = { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', serverAddress: '198.51.100.22:61234' };
+  // A name-based browser lookup cannot replace the host address.
+  await riderCall('POST', '/v1/presence', { state: { ...riderState, serverAddressSource: 'browser' } });
+  assert.equal((await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee').address, '203.0.113.9:54210');
+  // An endpoint read from a rider's connected game wins and survives host heartbeats.
+  await riderCall('POST', '/v1/presence', { state: { ...riderState, serverAddressSource: 'game' } });
+  const observed = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
+  assert.equal(observed.address, '198.51.100.22:61234');
+  assert.equal(observed.addressObserved, true);
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210 } });
+  assert.equal((await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee').address, '198.51.100.22:61234');
   // Not hosting: no address is invented.
   await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Someone else', trackId: 't' } });
   const joined = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'Someone else');
   assert.equal(joined.address, null);
+  // Reusing the old session name must start with the host's own unverified address again.
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210 } });
+  const restarted = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
+  assert.equal(restarted.address, '203.0.113.9:54210');
+  assert.equal(restarted.addressObserved, false);
   // A host whose app reaches the service over IPv6: presence carries no IPv4, so the IPv4 seen on
   // /v1/hostip (requested over IPv4) is used.
   const v6 = await call()('POST', '/v1/register', { steamId: '76561198000000012', name: 'V6Host' });
