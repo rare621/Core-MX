@@ -2130,17 +2130,17 @@ function drawRider(c) {
       </div><div class="stage-note muted" id="stageNote"></div></div>
       <div class="rider-wrap">
       <div class="outfit-bike-context"><span class="muted">Outfit for ${esc(bikeTitle(R.bike))}</span><button class="btn btn-sm" data-rider-tab="bike">${icon('bike')}Bike & livery</button></div>
-      <div class="section-title">Game identity</div><div class="rider-identity-card"><label class="rider-identity-row"><span><b>Nickname</b><small>The name shown to other riders in MX Bikes.</small></span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.nickname)}" autocomplete="off" spellcheck="false"></label><div class="rider-identity-row"><span><b>Race number</b><small>MX Bikes shows this in My Profiles.</small></span><span class="rider-identity-unavailable">Set in MX Bikes</span></div></div><p class="muted rider-identity-note">Nickname changes are previewed here until you click Apply. CoreMX online syncing still uses your Steam account.</p>
+      <div class="section-title">Game identity</div><div class="rider-identity-card"><label class="rider-identity-row"><span><b>Nickname</b><small>The name shown to other riders in MX Bikes.</small></span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.nickname)}" autocomplete="off" spellcheck="false"></label><label class="rider-identity-row"><span><b>Race number</b><small>Shown on your plates and kit in MX Bikes (0–999).</small></span><input class="input rider-number-input" id="riderNumberInput" inputmode="numeric" maxlength="3" value="${esc(lo.identity.riderNumber || '')}" placeholder="—" autocomplete="off"></label></div><p class="muted rider-identity-note">Nickname and number changes are previewed here until you click Apply. CoreMX online syncing still uses your Steam account.</p>
       ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g && s.id !== 'bikeAppearance').map(tile).join('')}</div>`).join('')}
       <p class="muted" style="margin-top:22px;font-size:12px">${icon('info')} Close MX Bikes before changing gear here. A backup of your profile is kept next to it.</p>
     </div></div></div></div></div>`;
   mountRiderViewer();
   mountProfileControls();
-  for (const [id, key] of [['riderNameInput', 'nickname']]) {
+  for (const [id, key] of [['riderNameInput', 'nickname'], ['riderNumberInput', 'riderNumber']]) {
     const input = $('#' + id);
     input?.addEventListener('change', () => {
       const value = input.value.trim();
-      const saved = lo.savedIdentity.nickname;
+      const saved = lo.savedIdentity[key] || '';
       const draft = { ...R.identityDraft };
       if (value === saved) delete draft[key]; else draft[key] = value;
       R.identityDraft = draft;
