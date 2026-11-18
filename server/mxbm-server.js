@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 10;
+const VERSION = 11;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -55,6 +55,7 @@ async function cleanCache() {
 cleanCache();
 setInterval(cleanCache, 30000).unref();
 const presence = new Map(); // steamId -> { at, share, state }
+const hostIps = new Map(); // steamId -> { ip, at } (IPv4 seen on /v1/hostip)
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -157,7 +158,7 @@ function presenceView(id) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting'], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip'], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // First run of an app: claim a Steam ID and get a token. A claimed ID can't be re-claimed.
   'POST /v1/register': async (req, body) => {
@@ -172,6 +173,16 @@ const routes = {
 
   // What the plugin sees right now. `share: false` hides you from friends but still adds the
   // server's track to the shared list.
+  // A hosting app calls this over IPv4 so the service learns the host's IPv4 address (MX Bikes
+  // servers are IPv4) even when the app's other requests travel over IPv6. The address is what this
+  // service sees on the connection, never a value the app supplies.
+  'POST /v1/hostip': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const ip = clientIp(req);
+    if (!isAddress(`${ip}:54210`)) return [200, { ok: false }];
+    hostIps.set(me.id, { ip, at: Date.now() });
+    return [200, { ok: true }];
+  },
   'POST /v1/presence': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
     const s = body.state || {};
@@ -185,7 +196,10 @@ const routes = {
     // from the host's own connection, so its public IP plus the game port is where friends join.
     if (s.hosting === true && state.inEvent && state.server && !state.serverAddress) {
       const port = Number(s.hostPort) >= 1024 && Number(s.hostPort) <= 65535 ? Number(s.hostPort) : 54210;
-      const addr = `${clientIp(req)}:${port}`;
+      let addr = `${clientIp(req)}:${port}`;
+      // Over IPv6 the request carries no IPv4; use the IPv4 the app recorded with /v1/hostip.
+      const seen = hostIps.get(me.id);
+      if (!isAddress(addr) && seen && Date.now() - seen.at < 30 * 60 * 1000) addr = `${seen.ip}:${port}`;
       if (isAddress(addr)) state.serverAddress = addr;
     }
     // The game plugin reports a fresh non-event state as soon as MX Bikes

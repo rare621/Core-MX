@@ -169,6 +169,22 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     };
   }
 
+  // MX Bikes servers are IPv4. When this PC reaches the service over IPv6, the service can't see
+  // the IPv4 address friends must join, so a hosting app makes one request forced over IPv4.
+  let hostIpAt = 0;
+  function postOverIPv4(route) {
+    const base = (cfg().url || '').replace(/\/+$/, '');
+    if (!base || !cfg().token) return Promise.resolve(null);
+    const url = new URL(base + route), lib = url.protocol === 'https:' ? require('https') : require('http');
+    return new Promise((resolve, reject) => {
+      const req = lib.request(url, { method: 'POST', family: 4, timeout: 10000, headers: { authorization: `Bearer ${cfg().token}`, 'content-type': 'application/json', 'content-length': 2 } }, (res) => {
+        let body = ''; res.on('data', (d) => { body += d; }); res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('timeout', () => req.destroy(new Error('timeout')));
+      req.on('error', reject);
+      req.end('{}');
+    });
+  }
   async function report(force) {
     const c = cfg();
     if (!c.url || !c.token) return;
@@ -176,6 +192,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const key = JSON.stringify(state);
     // The manager stays online even with MX Bikes closed. Keep its heartbeat alive.
     if (!force && key === lastSent && Date.now() - lastSentAt < REPORT_EVERY) return;
+    if (state.hosting && Date.now() - hostIpAt > 5 * 60 * 1000) { hostIpAt = Date.now(); await postOverIPv4('/v1/hostip').catch(() => {}); }
     try {
       const result = await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
       activeUsers = Number.isInteger(result.activeUsers) ? result.activeUsers : null;
