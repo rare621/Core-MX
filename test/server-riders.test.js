@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 10);
+  assert.equal(health.version, 11);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -72,4 +72,10 @@ test('a Host World session gets the host public IP and the game port as its addr
   await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Someone else', trackId: 't' } });
   const joined = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'Someone else');
   assert.equal(joined.address, null);
+  // A host whose app reaches the service over IPv6: presence carries no IPv4, so the IPv4 seen on
+  // /v1/hostip (requested over IPv4) is used.
+  const v6 = await call()('POST', '/v1/register', { steamId: '76561198000000012', name: 'V6Host' });
+  await call(v6.token, { 'x-forwarded-for': '198.51.100.7' })('POST', '/v1/hostip', {});
+  await call(v6.token, { 'x-forwarded-for': '2001:db8::7' })('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'What!', trackId: 'Havoc Raceway', hosting: true, hostPort: 54210 } });
+  assert.equal((await call(v6.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'What!').address, '198.51.100.7:54210');
 });
