@@ -42,6 +42,7 @@ const BROWSE_TABS = [
   { id: 'protection', label: 'Protection', cats: [36] },
   { id: 'goggles', label: 'Goggles', cats: [380] },
   { id: 'sounds', label: 'Sounds', cats: [46] },
+  { id: 'animations', label: 'Animations', cats: [519] },
   { id: 'wheels', label: 'Wheels', cats: [95, 382] },
   { id: 'graphics', label: 'Graphics', cats: [174, 609, 130] },
   { id: 'modpacks', label: 'Modpacks', cats: [93] },
@@ -56,7 +57,7 @@ let categoryMap = null; // id -> {name, parent}
 const GEAR_CATEGORIES = { helmets: { models: [313], paints: [127], addons: [34] }, boots: { models: [343], paints: [126] }, protection: { models: [344], paints: [135] } };
 const ADDON_CATEGORIES = { riderkit: [35, 52, 129, 309, 534], helmets: [127, 34], boots: [126], protection: [135], goggles: [380] };
 // Standalone content (tracks, whole bikes, models, sounds, graphics, packs, tools) never needs a paint base model.
-const STANDALONE = [22, 45, 304, 313, 343, 344, 365, 46, 174, 609, 130, 93, 40, 95, 382];
+const STANDALONE = [22, 45, 304, 313, 343, 344, 365, 46, 519, 174, 609, 130, 93, 40, 95, 382];
 const standalone = (ids) => (ids || []).some((id) => STANDALONE.includes(Number(id))) && !(ids || []).some((id) => [127, 126, 135, 35, 52, 129, 309, 534, 37, 380, 34].includes(Number(id)));
 function needsCustomModel(html) {
   const text = decode(html).replace(/\s+/g, ' ').replace(/\bno (?:other |additional |extra )?(?:mods?|models?)(?: are| is)? (?:required|needed)\b/gi, '');
@@ -144,7 +145,7 @@ function isAddonPost(post) {
   if (ids.some((id) => [313, 343, 344, 365, 45, 304, 22].includes(id))) return false;
   return ids.some((id) => [127, 34, 126, 135, 380].includes(id)) || !!post.needsModelNotice || !!post.modelDependencies?.length;
 }
-function scopePosts(posts, scope) { return scope === 'all' ? posts : posts.filter((p) => isAddonPost(p) === (scope === 'addons')); }
+function scopePosts(posts, scope) { return scope === 'addons' ? posts.filter(isAddonPost) : posts; }
 function browseCategory(tab, kind = 'all') {
   const base = BROWSE_TABS.find((x) => x.id === tab) || BROWSE_TABS[0];
   return GEAR_CATEGORIES[tab]?.[kind] ? { ...base, cats: GEAR_CATEGORIES[tab][kind] } : base;
@@ -279,7 +280,7 @@ async function archiveLiveries({ brand, query, page, perPage, cursor }, cats) {
     const byId = new Map(resolved.map((post) => [post.id, post]));
     for (const id of ids) {
       const post = byId.get(id);
-      if (post && !isAddonPost(post) && (!query || post.title.toLowerCase().includes(query.toLowerCase()))) posts.push(post);
+      if (post && (!query || post.title.toLowerCase().includes(query.toLowerCase()))) posts.push(post);
     }
     more = !!$('link[rel="next"]').attr('href') || !!$('#posts').nextAll().find(`a[href*="/page/${archivePage + 1}/"]`).length;
     archivePage++;
@@ -325,7 +326,7 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     const enriched = await enrichListings(await summarizeAll(response.json, cats), deadline);
     for (const p of enriched) {
       offset++;
-      if (matches(p) && isAddonPost(p) === (scope === 'addons')) posts.push(p);
+      if (matches(p) && (scope !== 'addons' || isAddonPost(p))) posts.push(p);
       if (posts.length >= perPage) break;
     }
   }

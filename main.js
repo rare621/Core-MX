@@ -28,6 +28,9 @@ const ranked = require('./src/lib/ranked');
 const graphics = require('./src/lib/graphics');
 const graphicsPackages = require('./src/lib/graphics-packages');
 const pluginFiles = require('./src/lib/plugin-files');
+const pluginState = require('./src/lib/plugin-state');
+const animationInstall = require('./src/lib/animation-install');
+const animationState = require('./src/lib/animation-state');
 const recentInstalls = require('./src/lib/recent-installs');
 const equipInstalled = require('./src/lib/equip-installed');
 const serverPing = require('./src/lib/server-ping');
@@ -463,7 +466,7 @@ function jobView(j) {
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
       warnings: p.warnings, confident: p.confident, kinds: p.kinds, trackTypes: p.trackTypes,
       requiredModels: p.requiredModels, dependencies: p.dependencies, needsPaintTarget: p.needsPaintTarget, riderModels: p.riderModels, needsRiderTarget: p.needsRiderTarget, requiresModelWarning: p.requiresModelWarning,
-      entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size, bikeMatch: e.bikeMatch })),
+      entries: p.entries.slice(0, 500).map((e) => ({ rel: e.rel, dest: e.dest, status: e.status, size: e.size, how: e.how, bikeMatch: e.bikeMatch })),
       totalEntries: p.entries.length,
     },
   };
@@ -518,7 +521,7 @@ async function afterDownload(j, file) {
     j.files = await archive.stage(file, j.stageDir, store.get('settings'));
     j.ctx = {
       modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, categories: j.categories || [], categoryNames: j.categoryNames || [], title: j.title,
-      reinstall: !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [],
+      reinstall: !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [], animationLocation: j.animationLocation,
     };
     if (!j.ctx.categories.length) {
       // Uploaded from the computer: no site category, so look inside the files.
@@ -556,7 +559,7 @@ async function doInstall(j, opts) {
     j.plan = installer.plan(j.files, j.ctx, opts);
     if (j.plan.needsSoundBike) throw new Error('Choose a compatible installed bike for every sound file before installing.');
     if (j.plan.root === 'game' && !store.get('settings').gameInstallDir) throw new Error('Set your MX Bikes install folder in Settings first.');
-    if (j.plan.kind === 'plugin' && await profile.isGameRunning()) throw new Error('Close MX Bikes before installing a game plugin.');
+    if (['plugin', 'animation', 'animationGame'].includes(j.plan.kind) && await profile.isGameRunning()) throw new Error('Close MX Bikes before installing or changing animations and plugins.');
     if (j.plan.kind === 'bikeSwap') {
       if (j.plan.counts.unresolved || !j.plan.installable) throw new Error('Choose the exact base bike for this model swap first.');
       const visualEntries = [...require('./src/lib/bike-swaps').groups(j.plan).values()].flat();
@@ -606,17 +609,21 @@ function installKey(j, written) { return j.postId ? String(j.postId) : j.shopKey
 async function recordInstall(j, written) {
   const key = installKey(j, written);
   const hashes = {};
-  if (j.plan?.kind === 'plugin') for (const entry of j.plan.entries.filter((e) => e.dest && written.includes('game:' + e.dest))) {
-    hashes['game:' + entry.dest] = await pluginFiles.digest(entry.abs);
+  if (['plugin', 'animation', 'animationGame'].includes(j.plan?.kind)) for (const entry of j.plan.entries.filter((e) => e.dest && written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest))) {
+    hashes[(j.plan.root === 'game' ? 'game:' : '') + entry.dest] = await pluginFiles.digest(entry.abs);
   }
   store.update('installs', (all) => {
     const prev = all[key];
     all[key] = {
       postId: j.postId || null, shopKey: j.shopKey || null, title: j.title, link: j.link || null, image: j.image || null,
       categories: j.categories || [], siteModified: j.modified || null, installedAt: Date.now(),
-      downloads: { ...(prev?.downloads || {}), ...((j.url || j.source) ? { [j.url || j.source]: written } : {}) },
+      downloads: {
+        ...Object.fromEntries(Object.entries(prev?.downloads || {}).filter(([url, files]) =>
+          url === (j.url || j.source) || !Array.isArray(files) || !files.some((file) => written.includes(file)))),
+        ...((j.url || j.source) ? { [j.url || j.source]: written } : {}),
+      },
       source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.kind === 'graphics' ? true : undefined,
-      hashes: { ...(prev?.hashes || {}), ...hashes }, files: Array.from(new Set([...(prev && j.plan?.root !== 'game' ? prev.files : []), ...written])),
+      hashes: { ...(prev?.hashes || {}), ...hashes }, files: Array.from(new Set([...(prev && (j.plan?.root !== 'game' || j.plan?.kind === 'animationGame') ? prev.files : []), ...written])),
     };
     return all;
   });
@@ -911,7 +918,10 @@ function registerIpc() {
   handle('site:search', async (q) => {
     if (!['free', 'addons'].includes(q?.scope)) return site.search(q);
     if (q?.scope === 'free' && q.tab === 'liveries' && q.brand) return site.search(q);
-    const [legacy, community] = await Promise.allSettled([site.search(q), coremx.search(q)]);
+    // The website supplies model/paint/add-on subcategories. CoreMX uploads
+    // currently have only a parent gear category, so keep them in All rather
+    // than guessing which child filter they belong to.
+    const [legacy, community] = await Promise.allSettled([site.search(q), q.kind && q.kind !== 'all' ? Promise.resolve({ posts: [], total: 0, totalPages: 1 }) : coremx.search(q)]);
     if (q.orderby?.startsWith('popular') && legacy.status === 'rejected') throw legacy.reason;
     if (legacy.status === 'rejected' && (community.status === 'rejected' || !community.value.posts.length)) throw legacy.reason;
     const a = legacy.status === 'fulfilled' ? legacy.value : { posts: [], total: 0, page: q.page || 1, totalPages: 1 };
@@ -964,6 +974,7 @@ function registerIpc() {
   handle('site:post', async (id) => {
     const post = typeof id === 'string' && id.startsWith('coremx:') ? await coremx.post(id) : id < 0 ? await coremx.post(-id) : await site.post(id), rec = store.get('installs')[id];
     post.installKind = installer.kindFromCategories(post.categories);
+    if (post.installKind === 'animation') post.animationLocation = animationInstall.destination(post.instructions, post.description);
     if (post.installKind === 'bikePaint') post.needsModelNotice = false;
     // Tracks, whole bikes and other standalone mods only keep requirements the creator declared explicitly.
     if (site.standalone(post.categories)) post.dependencies = (post.dependencies || []).filter((d) => d.declared || d.kind === 'bikeSwap');
@@ -1017,6 +1028,8 @@ function registerIpc() {
     const j = newJob({
       title: d.title, postId: d.postId, shopKey: d.shopKey, url: d.url, image: d.image, link: d.link, modified: d.modified,
       categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, requireReview: !!d.requireReview, modelWarningAccepted: !!d.modelWarningAccepted,
+      ...(Array.isArray(d.categories) && d.categories.some((id) => Number(id) === 519) ? { opts: { kind: d.animationLocation === 'game' ? 'animationGame' : 'animation' } } : {}),
+      animationLocation: d.animationLocation ?? null,
     });
     runDownload(j);
     return j.id;
@@ -1391,19 +1404,33 @@ function registerIpc() {
   handle('servers:save', (list) => { store.set('servers', list); return list; });
   handle('friends:list', () => store.get('friends') || []);
   handle('plugins:scan', async () => {
-    const gameDir = store.get('settings').gameInstallDir;
-    const pluginsDir = gameDir && path.join(gameDir, 'plugins');
-    if (!pluginsDir || !fs.existsSync(pluginsDir)) return [];
-    const records = Object.entries(store.get('installs') || {});
-    return (await fsp.readdir(pluginsDir, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.dlo$/i.test(entry.name)).map((entry) => {
-      const record = records.find(([, rec]) => (rec.files || []).some((file) => file.toLowerCase() === `game:plugins/${entry.name.toLowerCase()}`));
-      return { name: entry.name, title: record?.[1].title || entry.name.replace(/\.dlo$/i, ''), path: path.join(pluginsDir, entry.name), managed: !!record, recordKey: record?.[0] || '' };
-    });
+    return pluginState.list(store.get('settings').gameInstallDir, store.get('installs') || {});
   });
   handle('plugins:reveal', (name) => {
-    if (!/^[^\\/:*?"<>|]+\.dlo$/i.test(name)) throw new Error('Invalid plugin name');
-    const file = path.join(store.get('settings').gameInstallDir || '', 'plugins', name);
+    const file = pluginState.revealPath(store.get('settings').gameInstallDir, name);
     if (!insideGame(file) || !fs.existsSync(file)) throw new Error('Game plugin is missing');
+    shell.showItemInFolder(file);
+  });
+  handle('plugins:setEnabled', async (name, enabled) => {
+    if (discoveryInstall) await discoveryInstall;
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before changing a loaded plugin.');
+    const gameDir = store.get('settings').gameInstallDir;
+    const result = await pluginState.setEnabled(gameDir, name, enabled);
+    if (name.toLowerCase() === 'frostmod.dlo') store.update('settings', (s) => ({ ...s, frostmodAutoInstall: enabled }));
+    return result;
+  });
+  handle('animations:scan', () => animationState.list(store.get('settings').gameInstallDir, modsDir(), disabledDir(), store.get('installs') || {}));
+  handle('animations:setEnabled', async (id, enabled) => {
+    if (await profile.isGameRunning()) throw new Error('Close MX Bikes before changing a loaded animation.');
+    const result = await animationState.setEnabled(store.get('settings').gameInstallDir, modsDir(), disabledDir(), id, enabled);
+    send('library:changed', {});
+    return result;
+  });
+  handle('animations:reveal', (id) => {
+    const args = [store.get('settings').gameInstallDir, modsDir(), disabledDir(), id];
+    const active = animationState.filePath(...args, true).file;
+    const file = fs.existsSync(active) ? active : animationState.filePath(...args, false).file;
+    if (!fs.existsSync(file)) throw new Error('Animation file is missing.');
     shell.showItemInFolder(file);
   });
   handle('apps:list', () => (store.get('apps') || []).filter((item) => /\.exe$/i.test(item.path) && fs.existsSync(item.path)));
@@ -1760,6 +1787,35 @@ function registerIpc() {
       const result = await uninstallPluginRecord(key);
       if (!result.kept) resetJobs();
       return result;
+    }
+    if (['animation', 'animationGame'].includes(rec.kind)) {
+      if (await profile.isGameRunning()) throw new Error('Close MX Bikes before removing an animation.');
+      const kept = [], removed = [];
+      for (const rel of rec.files || []) {
+        const prefix = rel.startsWith('game:') ? 'game:rider/animations/mx/' : 'rider/animations/';
+        const suffix = rel.startsWith('game:rider/animations/mx/') ? rel.slice('game:rider/animations/mx/'.length)
+          : rel.startsWith('rider/animations/') ? rel.slice('rider/animations/'.length) : null;
+        if (!suffix || !/\.(?:anm|pkz)$/i.test(suffix)) { kept.push(rel); continue; }
+        const id = prefix === 'game:rider/animations/mx/' ? `game:${suffix}` : `mods:${suffix}`;
+        try {
+          const args = [store.get('settings').gameInstallDir, modsDir(), disabledDir(), id];
+          const activePath = animationState.filePath(...args, true);
+          const disabledPath = animationState.filePath(...args, false);
+          await animationState.assertSafe(activePath.root, activePath.file);
+          await animationState.assertSafe(disabledPath.root, disabledPath.file);
+          const active = activePath.file;
+          const file = fs.existsSync(active) ? active : disabledPath.file;
+          if (!fs.existsSync(file)) { removed.push(rel); continue; }
+          if (!rec.hashes?.[rel] || await pluginFiles.digest(file) !== rec.hashes[rel]) { kept.push(rel); continue; }
+          await shell.trashItem(file);
+          if (fs.existsSync(active + '.mxbm-bak')) await fsp.rename(active + '.mxbm-bak', active);
+          removed.push(rel);
+        } catch { kept.push(rel); }
+      }
+      store.update('installs', (all) => { const next = { ...all }; if (kept.length) next[key] = { ...rec, files: kept }; else delete next[key]; return next; });
+      if (!kept.length) resetJobs();
+      await scan(); send('library:changed', {});
+      return { removed: removed.length, kept: kept.length };
     }
     if (bikeSwaps.hasRecord(key)) { await bikeSwaps.removeRecord(key); for (const rel of rec.files) if (/\.pnt$/i.test(rel) && insideRootsStrict(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel)); store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; }); resetJobs(); send('library:changed', {}); return; }
     if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); resetJobs(); send('library:changed', {}); return; }

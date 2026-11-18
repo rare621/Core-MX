@@ -78,7 +78,35 @@ test('Best match finds add-ons even when the global popular list has none in tha
   const result = await module.exports.search({ tab: 'boots', scope: 'addons', perPage: 30, orderby: 'relevance' });
   assert.deepEqual(Array.from(result.posts, p => p.id), [7]);
 });
-test('filtered browsing reads separate instructions, keeps stock kits in MXB Mods and advances raw cursors without skipping matches', async () => {
+test('helmet subfilters use the website model, paint and add-on categories', async () => {
+  const rows = [
+    { id: 1, title: { rendered: 'Model' }, categories: [313], link: 'https://mxb-mods.com/model/' },
+    { id: 2, title: { rendered: 'Paint' }, categories: [127], link: 'https://mxb-mods.com/paint/' },
+    { id: 3, title: { rendered: 'Add-on' }, categories: [34], link: 'https://mxb-mods.com/addon/' },
+  ];
+  const fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.includes('/categories')) return new Response(JSON.stringify([
+      { id: 33, name: 'Helmets', parent: 0 },
+      { id: 313, name: 'Helmet Models', parent: 33 },
+      { id: 127, name: 'Helmet Paints', parent: 33 },
+      { id: 34, name: 'Helmet Addons', parent: 33 },
+    ]));
+    if (u.pathname.includes('/posts')) {
+      const ids = (u.searchParams.get('categories') || '').split(',').map(Number);
+      const selected = rows.filter((p) => ids.includes(p.categories[0]) || ids.includes(33));
+      return new Response(JSON.stringify(selected), { headers: { 'x-wp-total': String(selected.length) } });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  };
+  const module = { exports: {} }, context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch } } : require(name) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
+  for (const [kind, expected] of [['all', [1, 2, 3]], ['models', [1]], ['paints', [2]], ['addons', [3]]]) {
+    const result = await module.exports.search({ tab: 'helmets', kind, scope: 'free', perPage: 30, orderby: 'date' });
+    assert.deepEqual(Array.from(result.posts, (p) => p.id), expected);
+  }
+});
+test('filtered browsing mixes stock kits and add-ons while advancing raw cursors without skipping matches', async () => {
   const calls = [];
   const rows = [1,2,3,4].map((id) => ({ id, title: { rendered: 'Kit ' + id }, categories: [35], content: { rendered: '' }, excerpt: { rendered: '' }, link: `https://mxb-mods.com/kit-${id}/` }));
   const fetch = async (url) => {
@@ -92,8 +120,8 @@ test('filtered browsing reads separate instructions, keeps stock kits in MXB Mod
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
   const site = module.exports;
   const main = await site.search({ tab: 'riderkit', scope: 'free', perPage: 2, orderby: 'date' });
-  assert.deepEqual(Array.from(main.posts, (p) => p.id), [1,3]); assert.equal(main.nextCursor.offset, 3);
-  const next = await site.search({ tab: 'riderkit', scope: 'free', perPage: 2, orderby: 'date', page: 2, cursor: main.nextCursor }); assert.equal(next.posts.length, 0);
+  assert.deepEqual(Array.from(main.posts, (p) => p.id), [1,2]); assert.equal(main.nextCursor.offset, 2);
+  const next = await site.search({ tab: 'riderkit', scope: 'free', perPage: 2, orderby: 'date', page: 2, cursor: main.nextCursor }); assert.deepEqual(Array.from(next.posts, (p) => p.id), [3,4]);
   const addons = await site.search({ tab: 'riderkit', scope: 'addons', perPage: 2, orderby: 'date' });
   assert.deepEqual(Array.from(addons.posts, (p) => p.id), [2,4]); assert.ok(addons.posts.every((p) => p.gearKind === 'paint' && p.needsModelNotice));
   assert.equal(calls.filter((u) => /\/kit-\d+\/$/.test(u)).length, 4); assert.ok(calls.every((u) => !/\.(pnt|zip|pkz)/i.test(u)));

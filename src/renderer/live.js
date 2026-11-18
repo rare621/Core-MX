@@ -260,7 +260,11 @@ async function renderFriends(c) {
   if (connected && Date.now() >= (S.live.friendsNext || 0) && !S.live.friendsRequest) {
     S.live.friendsLoading = true;
     refreshLiveList('friends')
-      .finally(() => { S.live.friendsLoading = false; if (S.friendsPanel?.body) renderFriends(S.friendsPanel.body); });
+      .finally(() => {
+        S.live.friendsLoading = false;
+        if (S.friendsPanel?.body) renderFriends(S.friendsPanel.body);
+        if (S.view === 'friends') renderFriends($('#content'));
+      });
   }
   const live = new Map((S.live.friends || []).map((f) => [f.id, f]));
   const paints = new Map(((st && st.paintSync && st.paintSync.friends) || []).map((f) => [f.id, f]));

@@ -34,8 +34,8 @@ async function websiteNotifications() {
   return { signedIn: true, notifications: Array.isArray(data) ? data : Array.isArray(data.notifications) ? data.notifications : Array.isArray(data.items) ? data.items : [] };
 }
 function websiteSession() { return { signedIn: !!websiteCookie }; }
-const CATEGORY = { tracks: [22], bikes: [45], liveries: [37], riderkit: [35], riders: [365], helmets: [33], boots: [31], gloves: [32], protection: [36], goggles: [380], sounds: [], wheels: [], graphics: [174], modpacks: [], other: [] };
-const CAT_NAME = { tracks: 'Tracks', bikes: 'Bikes', liveries: 'Bike liveries', riderkit: 'Rider kits', riders: 'Rider models', helmets: 'Helmets', boots: 'Boots', gloves: 'Gloves', protection: 'Protection', goggles: 'Goggles', sounds: 'Sounds', wheels: 'Wheels', graphics: 'Graphics', modpacks: 'Modpacks', other: 'Other' };
+const CATEGORY = { tracks: [22], bikes: [45], liveries: [37], riderkit: [35], riders: [365], helmets: [33], boots: [31], gloves: [32], protection: [36], goggles: [380], sounds: [], animations: [519], wheels: [], graphics: [174], modpacks: [], other: [] };
+const CAT_NAME = { tracks: 'Tracks', bikes: 'Bikes', liveries: 'Bike liveries', riderkit: 'Rider kits', riders: 'Rider models', helmets: 'Helmets', boots: 'Boots', gloves: 'Gloves', protection: 'Protection', goggles: 'Goggles', sounds: 'Sounds', animations: 'Animations', wheels: 'Wheels', graphics: 'Graphics', modpacks: 'Modpacks', other: 'Other' };
 const text = s => String(s || '').slice(0, 20000);
 const esc = s => text(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -110,7 +110,7 @@ async function search({ query = '', tab = 'all', scope = 'free', page = 1, perPa
     : orderby === 'popular-month' || orderby === 'popular-all' ? 'popular' : 'new';
   url.searchParams.set('sort', sort);
   const data = await json(url.href, fetcher);
-  const posts = (data.mods || []).map(m => normalize(m)).filter(Boolean).filter(m => scope === 'addons' ? m.addon : !m.addon);
+  const posts = (data.mods || []).map(m => normalize(m)).filter(Boolean).filter(m => scope !== 'addons' || m.addon);
   return { posts, total: Number(data.total) || 0, page: Number(data.page) || page, totalPages: Math.max(1, Math.ceil((Number(data.total) || 0) / (Number(data.per) || perPage))) };
 }
 
