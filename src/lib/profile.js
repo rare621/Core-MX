@@ -108,8 +108,9 @@ async function writeNickname(userDir, value) {
   await backupAndWrite(file, lines);
 }
 
-function riderIdentity(_prof, nickname = '') {
-  return { nickname };
+// MX Bikes keeps the race number per profile as [info] race_number (set in My Profiles).
+function riderIdentity(prof, nickname = '') {
+  return { nickname, riderNumber: String(prof?.sections?.info?.values?.race_number ?? '').trim() };
 }
 
 function validateRiderIdentity(changes) {
@@ -119,7 +120,9 @@ function validateRiderIdentity(changes) {
     if (!nickname || nickname.length > 40 || /[=\r\n\x00-\x1f]/.test(nickname) || [...nickname].some((char) => char.codePointAt(0) > 255)) throw new Error('Nickname must be 1–40 characters supported by MX Bikes');
   }
   if (Object.hasOwn(changes, 'riderNumber')) {
-    throw new Error('Set the race number in MX Bikes. Its current value is not stored in the profile file CoreMX edits.');
+    const n = String(changes.riderNumber ?? '').trim();
+    if (!/^\d{1,3}$/.test(n)) throw new Error('Race number must be 0–999');
+    values.push(['info', 'race_number', String(Number(n))]);
   }
   return values;
 }

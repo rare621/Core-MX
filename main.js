@@ -1581,7 +1581,7 @@ function registerIpc() {
     lo.current.bikeAppearance = changes.bikeAppearance ?? appearances.active;
     lo.savedCurrent.bikeAppearance = appearances.active;
     const nickname = await profile.readNickname(profUserDir());
-    lo.identity = { ...profile.riderIdentity(prof, nickname), ...(Object.hasOwn(changes, 'nickname') ? { nickname: changes.nickname } : {}) };
+    lo.identity = { ...profile.riderIdentity(prof, nickname), ...(Object.hasOwn(changes, 'nickname') ? { nickname: changes.nickname } : {}), ...(Object.hasOwn(changes, 'riderNumber') ? { riderNumber: changes.riderNumber } : {}) };
     lo.savedIdentity = profile.riderIdentity(prof, nickname);
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
@@ -1628,7 +1628,7 @@ function registerIpc() {
     catch (error) { if (Object.hasOwn(changes, 'bikeAppearance')) await bikeSwaps.select(bike, previousAppearance); throw error; }
     const saved = await profile.readProfile(profUserDir(), name), actual = await profile.loadout(modsDir(), saved, bike, stockRiderPkz());
     const identity = profile.riderIdentity(saved, await profile.readNickname(profUserDir()));
-    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : slot === 'nickname' ? identity.nickname : actual.current[slot] || '') !== value)) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
+    if (profile.currentBike(saved) !== bike || Object.entries(changes).some(([slot, value]) => (slot === 'bikeAppearance' ? bikeSwaps.list(bike).active : slot === 'nickname' ? identity.nickname : slot === 'riderNumber' ? identity.riderNumber : actual.current[slot] || '') !== (slot === 'riderNumber' ? String(Number(value)) : value))) throw new Error('Saved profile did not match the requested setup. Preview changes were kept.');
     online?.syncPaints().catch(() => {}); return { saved: true };
   }
   let pendingWatch = null;
