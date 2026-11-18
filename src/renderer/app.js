@@ -2125,7 +2125,7 @@ function drawRider(c) {
       <span class="sub">Preview your setup, then Apply to save it to the game</span>
       <button class="btn" data-act="rider-copy-all">${icon('copy')}Use this outfit on all bikes</button></div>
     <div class="scroller"><div class="rider-layout">
-      <div class="rider-stage-col"><div class="rider-stage" id="riderStage">
+      <div class="rider-stage-col"><div class="stage-bar"><label class="stage-toggle"><span class="toggle"><input type="checkbox" id="showBikeToggle" ${riderShowBike() ? 'checked' : ''}><span class="sw"></span></span><span>Show bike</span></label></div><div class="rider-stage" id="riderStage">
         <div class="stage-status" id="stageStatus"><div class="spinner"></div></div>
         <div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div>
       </div><div class="stage-note muted" id="stageNote"></div></div>
@@ -2210,17 +2210,28 @@ function mountRiderViewer() {
   if (!attach()) window.addEventListener('riderviewer-ready', attach, { once: true });
 }
 
+// Outfit page: optionally show your current bike next to the rider (remembered between sessions).
+function riderShowBike() { try { return localStorage.getItem('coremx.showBike') === '1'; } catch { return false; } }
+document.addEventListener('change', (e) => {
+  if (e.target.id !== 'showBikeToggle') return;
+  try { localStorage.setItem('coremx.showBike', e.target.checked ? '1' : '0'); } catch {}
+  loadRiderModel();
+});
 async function loadRiderModel() {
   const R = S.rider;
-  const key = JSON.stringify([R.profile, R.bike, R.lo && R.lo.current]);
+  const withBike = riderShowBike();
+  const key = JSON.stringify([R.profile, R.bike, R.lo && R.lo.current, withBike, withBike && R.lo?.identity?.riderNumber]);
   const status = $('#stageStatus'), note = $('#stageNote');
   if (R.modelKey === key && R.modelOk) { if (status) status.hidden = true; if (note) note.innerHTML = R.modelNote || ''; return; }
   R.modelKey = key;
   if (status) { status.hidden = false; status.innerHTML = '<div class="spinner"></div>'; }
   try {
-    const m = await api.invoke('rider:model', R.profile, R.bike, R.lo.current);
+    const [m, bike] = await Promise.all([
+      api.invoke('rider:model', R.profile, R.bike, R.lo.current),
+      withBike ? api.invoke('bike:model', R.profile, R.bike, R.lo.current.bikePaint || '', 1024, { ...R.lo.current, riderNumber: R.lo.identity?.riderNumber ?? '' }).catch(() => null) : null,
+    ]);
     if (R.modelKey !== key) return; // a newer request is on its way
-    R.viewer.load(m);
+    if (bike && R.viewer.loadScene) R.viewer.loadScene({ rider: m, bike }); else R.viewer.load(m);
     R.modelOk = true;
     R.modelNote = m.warnings.length ? `${icon('info')} ${esc(m.warnings.join(' '))}` : '';
     const st = $('#stageStatus'), nt = $('#stageNote');
