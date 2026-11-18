@@ -279,7 +279,7 @@ async function renderFriends(c) {
   const st = await liveStatus();
   // The page may have changed while waiting; don't draw Friends over another page.
   if (c.id === 'content' && S.view !== 'friends') return;
-  if (!c.isConnected) return;
+  if (c.isConnected === false) return;
   const connected = !!(st && st.service.connected);
   if (connected && Date.now() >= (S.live.friendsNext || 0) && !S.live.friendsRequest) {
     S.live.friendsLoading = true;
@@ -380,7 +380,7 @@ async function renderFriends(c) {
             <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
     </section></div></div></div></div>`;
-  c.firstElementChild._friendsDisplayKey = displayKey;
+  if (c.firstElementChild) c.firstElementChild._friendsDisplayKey = displayKey;
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
   if (search) {
