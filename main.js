@@ -1666,7 +1666,12 @@ function registerIpc() {
     const tyre = Object.hasOwn(previewCurrent, 'tyres') ? previewCurrent.tyres : selected?.current.tyres;
     if (tyre && !gearAssets.validName(tyre)) throw new Error('Invalid tyre selection');
     if (tyre && !selected?.options.tyres.includes(tyre)) throw new Error('That tyre set is not available for this bike');
-    return modelWorkers.build('bike', { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, tyresOverride: tyre,
+    // Race number on the plates, in the chosen number font (previewed values win over saved ones).
+    const font = Object.hasOwn(previewCurrent, 'bikeFont') ? previewCurrent.bikeFont : selected?.current.bikeFont;
+    const savedNumber = active ? profile.riderIdentity(await profile.readProfile(profUserDir(), active)).riderNumber : '';
+    const number = Object.hasOwn(previewCurrent, 'riderNumber') ? String(previewCurrent.riderNumber ?? '').trim() : savedNumber;
+    const plate = font && selected?.options.bikeFont?.includes(font) && /^\d{1,3}$/.test(number) ? { font, number } : null;
+    return modelWorkers.build('bike', { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, tyresOverride: tyre, plate,
       ...bikeSwaps.preview(bike, previewCurrent.bikeAppearance),
       bikeDir: await profile.findBikeDir(modsDir(), bike), paint, texMax: Math.min(1024, Math.max(128, Number(texMax) || 1024)) });
   });
