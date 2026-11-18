@@ -221,7 +221,7 @@ async function joinServer(address, server) {
       if (ok) { findTrack(server.track); return; }
     }
   }
-  try { await api.invoke('game:join', address); toast(`Joining <b>${esc(server ? server.name || address : address)}</b>…`, 'ok', 3000); }
+  try { await api.invoke('game:join', address, server && server.name ? server.name : ''); toast(`Joining <b>${esc(server ? server.name || address : address)}</b>…`, 'ok', 3000); }
   catch (e) { toast(esc(cleanErr(e)), 'err', 6000); }
 }
 

@@ -139,6 +139,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // Resolve locally observed browser addresses on every poll, and report
       // them to friends too. Do not persist discovered entries beyond their TTL.
       next.serverAddress = resolved || known[next.server] || null;
+      next.serverAddressSource = fromGame ? 'game' : resolved ? 'browser' : next.serverAddress ? 'saved' : null;
       const recent = store.get('recentServers') || [];
       const previous = recent.find((s) => s.name.toLowerCase() === next.server.toLowerCase());
       if (!previous || current?.server !== next.server || previous.address !== next.serverAddress || Date.now() - previous.at > 10 * 60 * 1000) {
@@ -170,6 +171,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return {
       inGame: gameRunning, inEvent: !!s.inEvent,
       server: s.server || null, serverAddress: hosting ? null : s.serverAddress || null,
+      serverAddressSource: hosting ? null : s.serverAddressSource || null,
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,

@@ -1,7 +1,9 @@
-CoreMX 1.0.34
+CoreMX 1.0.35
 
-- The website proxy now passes the player's IP to the online service so hosted sessions can report an address.
-- Hosting over IPv6 can discover the host's IPv4 address through one IPv4 request.
-- Update the online service and website proxy with the server ZIP included in this release.
+- A rider's game-reported endpoint now takes priority over an estimated home-host address while the same host session is active.
+- Live servers label home-host addresses as observed or estimated, so a direct Join timeout is easier to understand.
+- Joining from CoreMX passes the selected server name to the game launch handler, helping recent-server tracking match the intended server.
 
-Existing CoreMX installations on 1.0.33 receive this update from the public Core-MX GitHub release.
+This update does not add a PiBoSo master-server relay. Direct Join still depends on the host being reachable.
+
+Server operators: replace mxbm-server.js from the included mxbm-online-service.zip in your existing online-service folder, then restart it. Keep mxbm-data.json, admin.key, and mxbm-files. The service reports version 12 after the update.
