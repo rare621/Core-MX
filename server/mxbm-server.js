@@ -73,7 +73,7 @@ function clientIp(req) {
   const peer = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
   const local = peer === '::1' || /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(peer);
   if (local) {
-    const fwd = String(req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0]).trim().replace(/^::ffff:/, '');
+    const fwd = String(req.headers['x-coremx-client-ip'] || req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0]).trim().replace(/^::ffff:/, '');
     if (/^(\d{1,3}\.){3}\d{1,3}$/.test(fwd)) return fwd;
   }
   return peer;
