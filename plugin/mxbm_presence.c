@@ -1140,12 +1140,12 @@ static const char *const OV_LABEL[OV_ROWS] = { "Bike livery", "Suit", "Gloves", 
 static const char *const OV_SLOT[OV_ROWS] = { "bikePaint", "suitPaint", "glovesPaint", "bootsPaint", "helmetPaint", "gogglesPaint" };
 static const int OV_OFF[OV_ROWS] = { 0x90, 0x170, 0x1F0, 0x1D0, 0x110, 0x130 }, OV_GROUP[OV_ROWS] = { 1, 2, 2, 4, 8, 8 };
 static char g_ovOpt[OV_ROWS][OV_MAXOPT][64];
-static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovRow = 0, g_ovOpen = 0, g_ovFont = 0;
+static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovOpen = 0, g_ovFont = 0;
 static volatile LONG g_ovDirty = 0;
 static unsigned long long g_ovMsgUntil = 0;
 static char g_ovMsg[100], g_fontName[64];
-static SPluginQuad_t g_quads[16];
-static SPluginString_t g_strings[40];
+static SPluginQuad_t g_quads[96];
+static SPluginString_t g_strings[64];
 static int g_nq, g_ns;
 
 /* Copies the game's font next to the plugin (once) and registers it. */
@@ -1238,57 +1238,201 @@ static int keyPressed(int vk) {
 }
 static int gameInFront(void) { DWORD pid = 0; HWND w = GetForegroundWindow(); if (w) GetWindowThreadProcessId(w, &pid); return pid == GetCurrentProcessId(); }
 
+/* Layout, mimicking CoreMX's Rider page: Outfit and Bike tabs, gear grouped like the app (Head,
+ * Body, Hands & feet / Bike), a card per slot (label above value), a picker list beside the cards,
+ * an orange Save button. Coordinates are fractions of the screen (0..1). The game hides and locks
+ * the system cursor while you ride, so the overlay draws its own pointer from the mouse position
+ * and reads left clicks while it is open (the game sees the clicks too). Keyboard: Up/Down card,
+ * Left/Right change, Tab switch tab, Enter save, F8 close. Locked during Race 1 and Race 2. */
+typedef struct { const char *group; int row; } OvCard;
+static const OvCard OV_OUTFIT[] = { { "HEAD", 4 }, { NULL, 5 }, { "BODY", 1 }, { "HANDS & FEET", 2 }, { NULL, 3 } };
+static const OvCard OV_BIKE[] = { { "BIKE", 0 } };
+static int g_ovTab = 0, g_ovCard = 0, g_ovPicker = -1, g_ovScroll = 0;
+typedef struct { float x0, y0, x1, y1; int kind, value; } OvHit; /* kind: 1 tab, 2 card, 3 option, 4 save, 5 close, 6 scroll */
+static OvHit g_ovHits[64]; static int g_ovNHits;
+#define OV_ACCENT 0xFF328CFFu   /* orange (ABGR) */
+#define OV_PICKER_ROWS 12
+#define OV_SAVED_MSG "Saved. Shared with CoreMX riders; written to your profile when MX Bikes closes."
+
+static void ovHit(float x0, float y0, float x1, float y1, int kind, int value) {
+  if (g_ovNHits < 64) { OvHit *h = &g_ovHits[g_ovNHits++]; h->x0 = x0; h->y0 = y0; h->x1 = x1; h->y1 = y1; h->kind = kind; h->value = value; }
+}
+static void ovBox(float x0, float y0, float x1, float y1, float t, unsigned long c) {
+  ovQuad(x0, y0, x1, y0 + t, c); ovQuad(x0, y1 - t, x1, y1, c); ovQuad(x0, y0, x0 + t, y1, c); ovQuad(x1 - t, y0, x1, y1, c);
+}
+static void ovTri(float ax, float ay, float bx, float by, float cx, float cy, unsigned long c) {
+  SPluginQuad_t *q;
+  if (g_nq >= (int)(sizeof g_quads / sizeof g_quads[0])) return;
+  q = &g_quads[g_nq++];
+  q->m_aafPos[0][0] = ax; q->m_aafPos[0][1] = ay; q->m_aafPos[1][0] = bx; q->m_aafPos[1][1] = by;
+  q->m_aafPos[2][0] = cx; q->m_aafPos[2][1] = cy; q->m_aafPos[3][0] = cx; q->m_aafPos[3][1] = cy;
+  q->m_iSprite = 0; q->m_ulColor = c;
+}
+/* Mouse position as screen fractions, from the game window's client area. */
+static int ovMouse(float *mx, float *my) {
+  POINT p; RECT rc; HWND w = GetForegroundWindow();
+  if (!w || !GetCursorPos(&p) || !ScreenToClient(w, &p) || !GetClientRect(w, &rc) || rc.right <= 0 || rc.bottom <= 0) return 0;
+  *mx = (float)p.x / (float)rc.right; *my = (float)p.y / (float)rc.bottom;
+  return 1;
+}
+static int ovRaceLocked(void) { return S.type == 2 && (S.session == 6 || S.session == 7); }
+static void ovSetValue(unsigned char *r, int row, int sel) {
+  g_ovSel[row] = sel;
+  setName(r + OV_OFF[row], g_ovOpt[row][sel]);
+  InterlockedOr(&g_ovDirty, OV_GROUP[row]);
+  InterlockedOr(&mxbm_pending, 4);
+}
+static void ovStep(unsigned char *r, int row, int dir) {
+  int c = g_ovCount[row], s = g_ovSel[row];
+  if (c <= 0) return;
+  ovSetValue(r, row, s < 0 ? 0 : (s + (dir > 0 ? 1 : c - 1)) % c);
+}
+static void ovSaveNow(unsigned char *r) { ovSave(r); copy(g_ovMsg, OV_SAVED_MSG, sizeof g_ovMsg); g_ovMsgUntil = nowMs() + 5000; }
+
 EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumString, void **_ppString) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r;
-  int f8, up, dn, lt, rt, en, row;
+  const OvCard *cards; int ncards, f8, up, dn, lt, rt, en, tab, click, locked, i;
+  float mx = -1, my = -1;
   (void)_iState;
   g_nq = g_ns = 0;
   if (_piNumQuads) *_piNumQuads = 0;
   if (_piNumString) *_piNumString = 0;
   if (!gameInFront()) return;
-  f8 = keyPressed(VK_F8); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT); en = keyPressed(VK_RETURN);
+  f8 = keyPressed(VK_F8); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT);
+  en = keyPressed(VK_RETURN); tab = keyPressed(VK_TAB); click = keyPressed(VK_LBUTTON);
   r = S.inEvent ? ownRecord(base) : 0;
   if (f8) {
-    g_ovOpen = !g_ovOpen;
+    g_ovOpen = !g_ovOpen; g_ovPicker = -1; g_ovMsgUntil = 0;
     if (g_ovOpen && r) ovLoadOptions(base, r);
-    g_ovMsgUntil = 0;
+    if (g_ovOpen) ClipCursor(NULL);
   }
   if (!g_ovOpen) return;
-  if (r && g_ovFont) {
-    if (up) g_ovRow = (g_ovRow + OV_ROWS - 1) % OV_ROWS;
-    if (dn) g_ovRow = (g_ovRow + 1) % OV_ROWS;
-    if ((lt || rt) && g_ovCount[g_ovRow] > 0) {
-      int c = g_ovCount[g_ovRow], s = g_ovSel[g_ovRow];
-      s = s < 0 ? 0 : (s + (rt ? 1 : c - 1)) % c;
-      g_ovSel[g_ovRow] = s;
-      setName(r + OV_OFF[g_ovRow], g_ovOpt[g_ovRow][s]);
-      InterlockedOr(&g_ovDirty, OV_GROUP[g_ovRow]);
-      InterlockedOr(&mxbm_pending, 4);
+  locked = ovRaceLocked();
+  cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+  if (g_ovCard >= ncards) g_ovCard = 0;
+  ovMouse(&mx, &my);
+
+  /* Input (hit areas are from the previous frame; the layout does not move between frames). */
+  if (tab) { g_ovTab = !g_ovTab; g_ovCard = 0; g_ovPicker = -1; }
+  cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+  if (r && !locked) {
+    if (g_ovPicker >= 0) {
+      int c = g_ovCount[g_ovPicker];
+      if (up && c) ovSetValue(r, g_ovPicker, (g_ovSel[g_ovPicker] + c - 1) % c);
+      if (dn && c) ovSetValue(r, g_ovPicker, (g_ovSel[g_ovPicker] + 1) % c);
+    } else {
+      if (up) g_ovCard = (g_ovCard + ncards - 1) % ncards;
+      if (dn) g_ovCard = (g_ovCard + 1) % ncards;
     }
-    if (en) { ovSave(r); copy(g_ovMsg, "Saved. CoreMX writes it to your profile when MX Bikes closes.", sizeof g_ovMsg); g_ovMsgUntil = nowMs() + 4000; }
+    if (lt || rt) ovStep(r, cards[g_ovCard].row, rt ? 1 : -1);
+    if (en) ovSaveNow(r);
   }
-  {
-    const float x0 = 0.03f, x1 = 0.40f, y0 = 0.16f, rowH = 0.042f;
-    const float y1 = y0 + 0.07f + rowH * OV_ROWS + 0.07f;
-    char line[100];
-    ovQuad(x0, y0, x1, y1, 0xD0141414);
-    ovQuad(x0, y0, x1, y0 + 0.004f, 0xFF328CFF);
-    ovText("CoreMX  -  Rider", x0 + 0.015f, y0 + 0.018f, 0.026f, 0, 0xFFFFFFFF);
-    if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.015f, y0 + 0.08f, 0.02f, 0, 0xFFB0B0B0);
-    else if (!g_ovFont) { /* no font: the game cannot draw our text, so only the panel shows */ }
-    else for (row = 0; row < OV_ROWS; row++) {
-      float y = y0 + 0.07f + rowH * row;
-      int sel = g_ovSel[row], c = g_ovCount[row];
-      char cur[33];
-      if (row == g_ovRow) ovQuad(x0 + 0.006f, y - 0.004f, x1 - 0.006f, y + rowH - 0.006f, 0x60328CFF);
-      ovText(OV_LABEL[row], x0 + 0.015f, y + 0.006f, 0.019f, 0, row == g_ovRow ? 0xFFFFFFFF : 0xFFB0B0B0);
-      memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
-      if (!c) sprintf(line, "%s", cur[0] ? cur : "none installed");
-      else sprintf(line, "<  %.60s  >  %d/%d", sel >= 0 ? g_ovOpt[row][sel] : (cur[0] ? cur : "default"), sel + 1, c);
-      ovText(line, x1 - 0.015f, y + 0.006f, 0.019f, 2, 0xFFFFFFFF);
+  if (click) {
+    for (i = g_ovNHits - 1; i >= 0; i--) {
+      const OvHit *h = &g_ovHits[i];
+      if (mx < h->x0 || mx > h->x1 || my < h->y0 || my > h->y1) continue;
+      if (h->kind == 1) { g_ovTab = h->value; g_ovCard = 0; g_ovPicker = -1; }
+      else if (h->kind == 5) { g_ovOpen = 0; return; }
+      else if (r && !locked) {
+        if (h->kind == 2) {
+          int row = cards[h->value].row;
+          g_ovCard = h->value; g_ovPicker = g_ovPicker == row ? -1 : row;
+          g_ovScroll = g_ovSel[row] > OV_PICKER_ROWS / 2 ? g_ovSel[row] - OV_PICKER_ROWS / 2 : 0;
+        }
+        else if (h->kind == 3 && g_ovPicker >= 0) ovSetValue(r, g_ovPicker, h->value);
+        else if (h->kind == 6 && g_ovPicker >= 0) g_ovScroll += h->value * (OV_PICKER_ROWS - 1);
+        else if (h->kind == 4) ovSaveNow(r);
+      }
+      break;
     }
-    if (g_ovMsgUntil > nowMs()) ovText(g_ovMsg, x0 + 0.015f, y1 - 0.06f, 0.017f, 0, 0xFF6CE07A);
-    ovText("Up/Down row   Left/Right change   Enter save   F8 close", x0 + 0.015f, y1 - 0.032f, 0.016f, 0, 0xFF909090);
+    cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+  }
+  if (g_ovPicker >= 0) {
+    int c = g_ovCount[g_ovPicker], s = g_ovSel[g_ovPicker];
+    if (s >= 0 && (up || dn)) { if (s < g_ovScroll) g_ovScroll = s; if (s >= g_ovScroll + OV_PICKER_ROWS) g_ovScroll = s - OV_PICKER_ROWS + 1; }
+    if (g_ovScroll > c - OV_PICKER_ROWS) g_ovScroll = c - OV_PICKER_ROWS;
+    if (g_ovScroll < 0) g_ovScroll = 0;
+  }
+
+  /* Drawing. */
+  g_ovNHits = 0;
+  {
+    const float x0 = 0.03f, x1 = 0.33f, y0 = 0.12f;
+    float y = y0 + 0.13f, y1;
+    char line[100];
+    int k, groups = 0;
+    for (k = 0; k < ncards; k++) if (cards[k].group) groups++;
+    y1 = y + groups * 0.032f + ncards * 0.062f + 0.13f;
+    ovQuad(x0, y0, x1, y1, 0xE6141418);
+    ovBox(x0, y0, x1, y1, 0.0015f, 0x30FFFFFF);
+    ovText("CoreMX", x0 + 0.014f, y0 + 0.016f, 0.018f, 0, OV_ACCENT);
+    ovText("Rider", x0 + 0.014f, y0 + 0.040f, 0.034f, 0, 0xFFFFFFFF);
+    /* Tabs (pills). */
+    for (k = 0; k < 2; k++) {
+      float tx0 = x0 + 0.014f + k * 0.075f, tx1 = tx0 + 0.068f, ty0 = y0 + 0.085f, ty1 = ty0 + 0.034f;
+      ovQuad(tx0, ty0, tx1, ty1, k == g_ovTab ? 0xEBFFFFFF : 0x14FFFFFF);
+      ovText(k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFF100D0C : 0xFFD0D0D0);
+      ovHit(tx0, ty0, tx1, ty1, 1, k);
+    }
+    /* Close (x). */
+    ovText("x", x1 - 0.016f, y0 + 0.014f, 0.022f, 2, 0xFFB0B0B0);
+    ovHit(x1 - 0.03f, y0 + 0.008f, x1 - 0.004f, y0 + 0.04f, 5, 0);
+    if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.014f, y, 0.017f, 0, 0xFFB0B0B0);
+    else for (k = 0; k < ncards; k++) {
+      int row = cards[k].row, sel = g_ovSel[row], c = g_ovCount[row], on = k == g_ovCard;
+      char cur[33];
+      if (cards[k].group) { ovText(cards[k].group, x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.032f; }
+      ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, row == g_ovPicker ? 0x40328CFF : on ? 0x24FFFFFF : 0x12FFFFFF);
+      if (on || row == g_ovPicker) ovBox(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, 0.0018f, row == g_ovPicker ? OV_ACCENT : 0x50FFFFFF);
+      ovText(OV_LABEL[row], x0 + 0.020f, y + 0.007f, 0.0145f, 0, 0xFF9A9A9A);
+      memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
+      sprintf(line, "%.42s", sel >= 0 ? g_ovOpt[row][sel] : cur[0] ? cur : c ? "Default" : "None installed");
+      ovText(line, x0 + 0.020f, y + 0.026f, 0.019f, 0, 0xFFFFFFFF);
+      if (c > 1) ovText("<  >", x1 - 0.022f, y + 0.018f, 0.018f, 2, 0xFFB0B0B0);
+      ovHit(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, 2, k);
+      y += 0.062f;
+    }
+    /* Save button and status. */
+    y = y1 - 0.105f;
+    if (r && !locked) {
+      ovQuad(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, OV_ACCENT);
+      ovText("Save", (x0 + x1) / 2, y + 0.011f, 0.019f, 1, 0xFFFFFFFF);
+      ovHit(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, 4, 0);
+    }
+    if (locked) ovText("Locked during the race. Change gear in practice, warm-up or testing.", x0 + 0.014f, y + 0.012f, 0.0145f, 0, 0xFF6CB4FF);
+    else if (g_ovMsgUntil > nowMs()) ovText(g_ovMsg, x0 + 0.014f, y + 0.052f, 0.0125f, 0, 0xFF6CE07A);
+    ovText("Click or Up/Down, Left/Right   Tab switch   Enter save   F8 close", x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
+
+    /* Picker beside the panel. */
+    if (r && !locked && g_ovPicker >= 0) {
+      const float px0 = x1 + 0.008f, px1 = px0 + 0.22f, py0 = y0, rowH = 0.034f;
+      int c = g_ovCount[g_ovPicker], shown = c < OV_PICKER_ROWS ? c : OV_PICKER_ROWS;
+      float py1 = py0 + 0.06f + shown * rowH + 0.05f;
+      ovQuad(px0, py0, px1, py1, 0xE6141418);
+      ovBox(px0, py0, px1, py1, 0.0015f, 0x30FFFFFF);
+      sprintf(line, "%s  (%d)", OV_LABEL[g_ovPicker], c);
+      ovText(line, px0 + 0.012f, py0 + 0.018f, 0.017f, 0, 0xFFFFFFFF);
+      for (k = 0; k < shown; k++) {
+        int opt = g_ovScroll + k; float oy = py0 + 0.055f + k * rowH;
+        if (opt >= c) break;
+        if (opt == g_ovSel[g_ovPicker]) ovQuad(px0 + 0.006f, oy - 0.003f, px1 - 0.006f, oy + rowH - 0.005f, 0x60328CFF);
+        sprintf(line, "%.40s", g_ovOpt[g_ovPicker][opt]);
+        ovText(line, px0 + 0.014f, oy + 0.004f, 0.0155f, 0, opt == g_ovSel[g_ovPicker] ? 0xFFFFFFFF : 0xFFC8C8C8);
+        ovHit(px0 + 0.006f, oy - 0.003f, px1 - 0.006f, oy + rowH - 0.005f, 3, opt);
+      }
+      if (c > OV_PICKER_ROWS) {
+        float by = py1 - 0.042f;
+        ovText("^ up", px0 + 0.014f, by + 0.008f, 0.015f, 0, g_ovScroll > 0 ? 0xFFD0D0D0 : 0xFF606060);
+        ovHit(px0 + 0.006f, by, (px0 + px1) / 2, by + 0.034f, 6, -1);
+        ovText("down v", px1 - 0.014f, by + 0.008f, 0.015f, 2, g_ovScroll + OV_PICKER_ROWS < c ? 0xFFD0D0D0 : 0xFF606060);
+        ovHit((px0 + px1) / 2, by, px1 - 0.006f, by + 0.034f, 6, 1);
+      }
+    }
+    /* Pointer: a white arrow with a dark edge. */
+    if (mx >= 0 && my >= 0 && mx <= 1 && my <= 1) {
+      ovTri(mx - 0.002f, my - 0.003f, mx - 0.002f, my + 0.032f, mx + 0.021f, my + 0.022f, 0xFF000000);
+      ovTri(mx, my, mx, my + 0.026f, mx + 0.016f, my + 0.019f, 0xFFFFFFFF);
+    }
   }
   if (_piNumQuads && _ppQuad) { *_piNumQuads = g_nq; *_ppQuad = g_quads; }
   if (_piNumString && _ppString) { *_piNumString = g_ns; *_ppString = g_strings; }

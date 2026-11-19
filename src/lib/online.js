@@ -248,7 +248,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const p = statePath();
     if (p) fs.watchFile(p, { interval: 2000 }, () => readState().catch(() => {}));
     timer = setInterval(() => readState().catch(() => {}), 10000);
-    looksTimer = setInterval(() => syncLooks(), 60 * 1000);
+    // While on a server, other riders' changes are picked up every 20 seconds.
+    looksTimer = setInterval(() => { if (current?.inEvent && current.server) syncLooks(); }, 20 * 1000);
     readState().catch(() => {});
     paintTimer = setInterval(() => syncPaints().catch(() => {}), PAINT_EVERY);
     // Not signed in yet (service was down): try again every minute, quietly.
