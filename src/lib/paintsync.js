@@ -20,7 +20,9 @@ const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { re
 const modelOf = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
 const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(full|neck)$/i.test(name) : name === 'default';
 
-async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
+// stockPkz: the game's own rider.pkz. A paint found only there is stock: every player has it, so it
+// is neither shared nor reported as missing.
+async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = null) {
   const protectedSet = new Set(protectedPaths.map((p) => String(p).replace(/^game:/, '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()));
   const protectedItem = (target) => protectedSet.has(String(target).replace(/\\/g, '/').toLowerCase());
   const lo = await profile.loadout(modsDir, prof, bike);
@@ -61,6 +63,7 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
         data = await gear.paintSource({ modsDir, rider }, s.id, c);
         target = data && (['suitPaint', 'glovesPaint'].includes(s.id) ? prefix : 'rider') + '/' + data.relative;
       }
+      if (!data && s.id !== 'bikePaint' && stockPkz && await gear.paintSource({ modsDir, rider, stockPkz }, s.id, c).catch(() => null)) continue;
       if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing or unreadable (it may be locked by its creator)');
       const needs = [];
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
@@ -92,8 +95,8 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
   return { bike, items, unavailable, equipped };
 }
 
-async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], onProgress = () => {} }) {
-  const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths);
+async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, onProgress = () => {} }) {
+  const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths, stockPkz);
   if (appearance) outfit.unavailable.push(appearance);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
