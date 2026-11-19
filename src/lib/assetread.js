@@ -11,7 +11,8 @@ const localPreviewEnabled = () => previewContext.getStore() === true;
 const withLocalPreview = (read) => previewContext.run(true, read);
 
 const FOOTER_SIZE = 62, MAX_DIRECTORY = 16 * 1024 * 1024;
-const DEFAULT_LIMIT = 128 * 1024 * 1024, MAX_DROP = 1024 * 1024;
+// Keep individual sealed assets readable up to the same limit as equipped sync.
+const DEFAULT_LIMIT = 512 * 1024 * 1024, MAX_DROP = 1024 * 1024;
 
 function footerInfo(footer, totalLength) {
   if (footer.length !== FOOTER_SIZE || footer.toString('ascii', 0, 4) !== 'KCOL') return null;

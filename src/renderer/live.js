@@ -271,6 +271,16 @@ async function setLiveServerAddress(server) {
 // ---------- Friends ----------
 // Layout: a slim online line, then your friends (status, join, their synced paints), then a small
 // "Sharing" card. Adding friends happens in one popup (Steam friends, or a friend code).
+function friendGearSummary(items) {
+  const files = items || [];
+  const got = files.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
+  const queued = files.filter((it) => it.state === 'ready').length;
+  const attention = files.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
+  const count = `${got} of ${files.length} free files synced`;
+  return { got, queued, attention, complete: got === files.length,
+    text: queued ? `${queued} update${queued === 1 ? '' : 's'} queued · ${count}`
+      : attention ? `${attention} file${attention === 1 ? '' : 's'} need attention · ${count}` : count };
+}
 async function renderFriends(c) {
   if (!c) return;
   if (c.id === 'content' && S.view !== 'friends') { if (S.friendsPanel?.body) await renderFriends(S.friendsPanel.body); if (S.view === 'online' && S.onlineTab === 'friends') return renderSync(c); return; }
@@ -309,11 +319,11 @@ async function renderFriends(c) {
   const paintLine = (f) => {
     const p = paints.get(f.code);
     if (!p || (!p.items.length && !(p.unavailable || []).length)) return '';
-    const got = p.items.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
+    const summary = friendGearSummary(p.items);
     const need = [...new Map(p.items.flatMap((it) => it.needs).map((n) => [`${n.kind}|${n.name}`, n])).values()];
     const bike = prettyBikeId(p.bikeName || p.bike || '');
     const protectedItems = (p.unavailable || []).filter((it) => /paid|store-protected/i.test(it.error || ''));
-    return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}${p.items.length ? `<div class="fr-sync-state ${got === p.items.length ? 'complete' : ''}">${icon(got === p.items.length ? 'check' : 'refresh')}<span>${got} of ${p.items.length} free files synced</span></div>` : ''}
+    return `<div class="fr-loadout">${bike ? `<div class="fr-bike">${icon('bike')}<span>${esc(bike)}</span></div>` : ''}${p.items.length ? `<div class="fr-sync-state ${summary.queued || summary.attention ? 'pending' : summary.complete ? 'complete' : ''}">${icon(summary.complete && !summary.queued && !summary.attention ? 'check' : 'refresh')}<span>${esc(summary.text)}</span></div>` : ''}
       ${paidModsSummary(protectedItems)}
       ${need.map((n) => `<button class="fr-need" data-act="paint-get" data-name="${esc(n.name)}" title="Search Get Mods for it">Needs ${esc({ bike: 'bike', helmet: 'helmet', boots: 'boots', protection: 'protector' }[n.kind] || n.kind)} ${esc(n.name.replace(/_/g, ' '))} ${icon('search')}</button>`).join('')}</div>`;
   };
@@ -468,7 +478,14 @@ document.addEventListener('click', async (e) => {
     await drawLiveServers();
     toast(changed ? 'Server list refreshed' : 'Showing the latest server list', 'ok', 1800);
   })();
-  if (act === 'live-friends-refresh') { await refreshLiveList('friends', true); return renderFriends($('#content')); }
+  if (act === 'live-friends-refresh') return busy(async () => {
+    S.live.friendsNext = 0;
+    S.live.friendsErr = null;
+    await refreshLiveList('friends', true);
+    await renderFriends($('#content'));
+    // The fresh card can show queued files immediately; download them now too.
+    api.invoke('online:paintSyncNow').then((st) => { S.live.status = st; renderFriends($('#content')); }).catch((err) => toast(esc(cleanErr(err)), 'err', 7000));
+  })();
   if (act === 'live-copy-link') { navigator.clipboard.writeText(`mxbm://join/${a.dataset.addr}`); toast('Join link copied', 'ok', 2000); return; }
   const j = e.target.closest('[data-live-join]');
   if (j) { e.stopPropagation(); const s = S.live.servers.servers[Number(j.dataset.liveJoin)]; return joinLiveServer(s); }
