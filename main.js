@@ -1470,6 +1470,7 @@ function registerIpc() {
   handle('online:serverRiders', (server) => online.serverRiders(String(server || '').slice(0, 64)));
   handle('online:syncServerRiders', (server, ids) => online.syncServerRiders(String(server || '').slice(0, 64), Array.isArray(ids) ? ids.map(String).slice(0, 32) : []));
   handle('online:serverShare', (on) => online.setServerShare(on));
+  handle('online:upnp', (on) => online.setUpnp(!!on));
   const friendPreviewLoadouts = new Map();
   handle('online:friendLoadout', async (friendId) => {
     const outfit = await online.friendLoadout(friendId);
@@ -2078,5 +2079,9 @@ app.whenReady().then(async () => {
   setInterval(() => removeOldDiscoveryPlugin().catch(() => {}), 30000).unref();
 });
 
-app.on('window-all-closed', () => { if (online) online.stop(); store && store.flush(); app.quit(); });
+// Closing: remove the router port mapping first (at most 3 s), then quit.
+app.on('window-all-closed', async () => {
+  if (online) await Promise.race([online.stop(), new Promise((r) => setTimeout(r, 3000))]).catch(() => {});
+  store && store.flush(); app.quit();
+});
 app.on('will-quit', () => modelWorkers.dispose());

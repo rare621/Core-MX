@@ -218,3 +218,43 @@ test('bundled HTTPS migration keeps existing credentials and never calls the pub
     t.mock.restoreAll();
   }
 });
+
+// Host World: while the player hosts, the game port is opened on the router, and closed after.
+test('hosting opens the router port; leaving the game or turning it off closes it', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-upnp-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'profiles', 'Rider'), { recursive: true });
+  await fs.writeFile(path.join(root, 'global.ini'), '[profile]\nlastprofile=Rider\n');
+  await fs.writeFile(path.join(root, 'profiles', 'Rider', 'profile.ini'), '[ui]\nhostsetup_name=My Track Day\n');
+  const presence = (server) => fs.writeFile(path.join(root, 'mxbm_presence.json'), JSON.stringify({ inEvent: true, server }));
+  t.mock.method(globalThis, 'fetch', async () => new Response('{}'));
+  const log = [];
+  const portMapper = { open: async (port) => { log.push(`open ${port}`); }, close: async () => { log.push('close'); } };
+  let running = true;
+  const f = fixture({ userDir: () => root, isGameRunning: async () => running, portMapper, resolveServerAddress: async () => null });
+
+  await presence('Someone Else');
+  await f.client.refresh();
+  assert.deepEqual(log, [], 'joining another server opens nothing');
+
+  await presence('My Track Day');
+  await f.client.refresh();
+  await f.client.refresh();
+  assert.deepEqual(log, ['open 54210'], 'opened once while hosting (renewed later, not every poll)');
+  assert.equal(f.client.status().upnp.state, 'open');
+
+  running = false;
+  await f.client.refresh();
+  assert.deepEqual(log, ['open 54210', 'close']);
+  assert.equal(f.client.status().upnp.state, 'off');
+
+  running = true;
+  await f.client.setUpnp(false);
+  await f.client.refresh();
+  assert.deepEqual(log, ['open 54210', 'close'], 'turned off: hosting opens nothing');
+  assert.equal(f.client.status().upnp.enabled, false);
+  await f.client.setUpnp(true);
+  assert.deepEqual(log, ['open 54210', 'close', 'open 54210']);
+  await f.client.stop();
+  assert.deepEqual(log, ['open 54210', 'close', 'open 54210', 'close'], 'closing CoreMX removes it');
+});

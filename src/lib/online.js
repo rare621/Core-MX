@@ -28,7 +28,7 @@ function looksText(loadouts, reload, stamp) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {} }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -44,6 +44,35 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const pendingCalls = new Map();
   let retryKey = '', retryAt = 0;
   let adminKey = '';
+  // Host World: forward the game port on the router (UPnP) while hosting; see ./upnp.js.
+  const HOST_PORT = 54210, UPNP_RENEW = 20 * 60 * 1000;
+  let mapper = portMapper;
+  const upnp = { state: 'off', error: null, at: null, busy: false };
+  async function syncPortMapping(hosting) {
+    const want = hosting && cfg().upnp !== false;
+    if (upnp.busy) return;
+    if (!want) {
+      if (upnp.state === 'open' || upnp.state === 'failed') {
+        upnp.busy = true;
+        try { if (mapper) await mapper.close(); } catch {}
+        upnp.busy = false; upnp.state = 'off'; upnp.error = null; upnp.at = null; onChange(status());
+      }
+      return;
+    }
+    // Renew the lease; after a failure try again every few minutes, quietly.
+    if (upnp.state === 'open' && Date.now() - upnp.at < UPNP_RENEW) return;
+    if (upnp.state === 'failed' && Date.now() - upnp.at < 5 * 60 * 1000) return;
+    upnp.busy = true;
+    try { mapper = mapper || require('./upnp').create(); await mapper.open(HOST_PORT); upnp.state = 'open'; upnp.error = null; }
+    catch (e) { upnp.state = 'failed'; upnp.error = e.message; mapper = portMapper; }
+    upnp.busy = false; upnp.at = Date.now(); onChange(status());
+  }
+  async function setUpnp(on) {
+    setCfg({ upnp: !!on });
+    upnp.at = 0;
+    await syncPortMapping(!!stateForReport().hosting);
+    return status();
+  }
   const progress = (value) => { paint.progress = value; if (Date.now() - progressAt > 150 || value.loaded === 0) { progressAt = Date.now(); onChange(status()); } };
 
   const cfg = () => store.get('online') || {};
@@ -169,6 +198,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (enteredServer) setTimeout(() => syncLooks(), 15000);
     else if (!next?.inEvent && looksKey) clearLooks();
     if (changed) onChange(status());
+    await syncPortMapping(!!stateForReport().hosting).catch(() => {});
     await report();
   }
 
@@ -266,7 +296,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // Windows locks loaded plugins: never replace one while the game is open.
     updatePluginIfNeeded();
   }
-  function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (looksTimer) clearInterval(looksTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); }
+  function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (looksTimer) clearInterval(looksTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); return closePort(); }
+  // Removes the router mapping (app closing).
+  async function closePort() { if (mapper && upnp.state === 'open') { upnp.state = 'off'; await mapper.close().catch(() => {}); } }
 
   // ---------- public ----------
   function status() {
@@ -277,6 +309,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       presence: current,
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers },
       serverShare: c.serverShare !== false,
+      upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT },
       paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
     };
   }
@@ -506,7 +539,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

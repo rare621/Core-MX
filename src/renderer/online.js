@@ -69,6 +69,15 @@ document.addEventListener('click', (e) => {
 
 // ---------- Plugin settings and automatic server addresses ----------
 S.allSrv = { q: '' };
+// Host World: friends can only join when the router lets them in (UPnP port mapping, src/lib/upnp.js).
+function upnpCard(u = {}) {
+  const line = u.enabled === false ? 'Off. Friends may get "connection timed out" unless you forward the port on your router yourself.'
+    : u.state === 'open' ? `Port ${u.port} (UDP) is open on your router while you host.`
+    : u.state === 'failed' ? `Couldn't open the port: ${esc(u.error || 'unknown error')}. Turn on UPnP in your router settings, or forward UDP ${u.port || 54210} to this PC.`
+    : 'Opens when you host a game from MX Bikes and closes when you stop.';
+  return `<div class="set-card"><h3>Open the game port while hosting</h3><p>When you host from MX Bikes (Host World), CoreMX asks your router (UPnP) to let friends in on UDP ${u.port || 54210}. The rule is removed when you stop hosting or close CoreMX.</p>
+    <div class="path-row"><span class="${u.state === 'open' ? 'ok' : 'muted'}">${line}</span><span class="grow"></span><label class="toggle"><input type="checkbox" id="upnpToggle" ${u.enabled !== false ? 'checked' : ''}><span class="sw"></span></label></div></div>`;
+}
 async function renderPluginSettings(c) {
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings" id="pluginSettings"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div>`;
   try {
@@ -78,9 +87,14 @@ async function renderPluginSettings(c) {
     box.innerHTML = `<p class="muted">Close MX Bikes before installing or removing plugins. Plugins load when the game starts.</p>
       ${row('presence', 'CoreMX presence', 'Reports your track, bike, server, riders and session stage to the manager and your friends.', online.plugin.installed, '', online.plugin.needsUpdate)}
       <p class="muted">The CoreMX plugin also saves server addresses from MX Bikes' Multiplayer list, so live servers and friends get a Join button.</p>
+      ${upnpCard(online.upnp)}
       <div class="set-card"><h3>In-game overlay key</h3><p>Opens the CoreMX overlay on track, to change your outfit and bike livery. Changes apply within a second, even while MX Bikes is running.</p>
         <div class="path-row"><select id="overlayKey">${['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11'].map((k) => `<option ${k === overlayKeyName() ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
         ${overlayKeyName() === 'F8' && plugins.some((p) => /^mxb_ragdoll\.dlo$/i.test(p.name) && p.enabled) ? `<div class="notice warn" style="margin-top:10px">${icon('alert')}<div>MX Bikes Ragdoll opens its own menu with F8 too. Pick another key so both don't open together.</div></div>` : ''}</div>`;
+    $('#upnpToggle', box)?.addEventListener('change', async (e) => {
+      try { await api.invoke('online:upnp', e.target.checked); toast(e.target.checked ? 'CoreMX opens the game port on your router while you host' : 'Router port opening turned off', 'ok', 2400); await renderPluginSettings(c); }
+      catch (err) { toast(esc(cleanErr(err)), 'err'); }
+    });
     $('#overlayKey', box)?.addEventListener('change', async (e) => {
       try { S.env = await api.invoke('settings:set', { overlayKey: e.target.value }); toast(`Overlay key set to <b>${esc(e.target.value)}</b>`, 'ok', 2200); await renderPluginSettings(c); }
       catch (err) { toast(esc(cleanErr(err)), 'err'); }
