@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 14;
+const VERSION = 15;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -93,7 +93,11 @@ function nameOnList(steamName, riderNames) {
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => x === '..' || x === '' || x === '.') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
 function storeSize() { let n = 0; for (const f of fs.readdirSync(FILES)) { try { n += fs.statSync(path.join(FILES, f)).size; } catch {} } return n; }
 
+// Only real HTTP status numbers; a connection that is already gone or answered is left alone
+// (an upload cut off mid-way used to pass "ECONNRESET" here and crash the service).
 function send(res, code, body) {
+  if (res.headersSent || res.writableEnded || res.destroyed) return;
+  if (!Number.isInteger(code) || code < 100 || code > 599) code = 500;
   const out = JSON.stringify(body);
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(out) });
   res.end(out);
@@ -499,7 +503,7 @@ async function fileRoute(req, res, sha) {
       req.on('data', (c) => { n += c.length; if (n > MAX_FILE) { reject(Object.assign(new Error('file too large (32 MB max)'), { code: 413 })); req.destroy(); } else chunks.push(c); });
       req.on('end', resolve); req.on('error', reject);
     });
-  } catch (e) { return send(res, e.code || 400, { error: e.message }); }
+  } catch (e) { return send(res, Number.isInteger(e.code) ? e.code : 400, { error: e.message }); }
   const buf = Buffer.concat(chunks);
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha) return send(res, 400, { error: 'file does not match its hash' });
   const owned = Object.values((auth(req).user.loadout || {}).items || []).find((it) => it.sha256 === sha);
