@@ -983,9 +983,33 @@ static int findPaint(const unsigned char *base, GameList l, GameList models, con
   return paintPath(base, l, modelIndex(base, models, model), model, name, fmt, out, cap, opts, &oat, 2);
 }
 
+/* Repaints groups of a built vehicle from the names in its record (1 bike, 2 body: suit|gloves,
+ * 4 boots, 8 helmet: helmet paint|goggles), the way the game's paint step does, in both model
+ * sets (outside and, for your own vehicle, first person). Returns how many groups were painted. */
+static int repaintGroups(const unsigned char *base, dispatch_t dispatch, const unsigned char *r, int groups) {
+  static char a[MAX_PATH * 2], b[MAX_PATH * 2], two[MAX_PATH * 4 + 2];
+  char bike[33], rider[33], helmet[33], boots[33], n1[33], n2[33]; int painted = 0;
+#define RN(dst, off) (memcpy(dst, r + (off), 32), dst[32] = 0, dst)
+  RN(bike, 0x30); RN(rider, 0xD0); RN(helmet, 0xF0); RN(boots, 0x1B0);
+  if (groups & 1 && findPaint(base, P_BIKE, L_BIKES, bike, RN(n1, 0x90), "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BIKE_PARTS, 6, a); painted++; }
+  if (groups & 2) {
+    findPaint(base, P_SUIT, L_RIDERS, rider, RN(n1, 0x170), "%srider\\riders\\%s\\paints\\%s.pnt", a, sizeof a);
+    findPaint(base, P_GLOVES, L_RIDERS, rider, RN(n2, 0x1F0), "%srider\\riders\\%s\\gloves\\%s.pnt", b, sizeof b);
+    sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, BODY_PART, 1, two); painted++;
+  }
+  if (groups & 4 && findPaint(base, P_BOOTS, L_BOOTS, boots, RN(n1, 0x1D0), "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BOOT_PARTS, 2, a); painted++; }
+  if (groups & 8) {
+    findPaint(base, P_HELMET, L_HELMETS, helmet, RN(n1, 0x110), "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a);
+    findPaint(base, P_GOGGLES, L_HELMETS, helmet, RN(n2, 0x130), "%srider\\helmets\\%s\\goggles\\%s.pnt", b, sizeof b);
+    sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, HELMET_PART, 1, two); painted++;
+  }
+#undef RN
+  return painted;
+}
+
 static void applyLooks(void) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
-  static char o[16384], a[MAX_PATH * 2], b[MAX_PATH * 2], two[MAX_PATH * 4 + 2];
+  static char o[16384], a[MAX_PATH * 2];
   dispatch_t dispatch = (dispatch_t)mxbm_orig_ui;
   char reload[160]; unsigned long long stamp; int n, i, own = 0, first = 1;
   size_t at;
@@ -1044,21 +1068,7 @@ static void applyLooks(void) {
         if (rebuild) {
           if (*(const int *)(r + 0x4EE8) == 0) *(volatile int *)(r + 0x4EE8) = 2;
         } else if (groups && *(const int *)(r + 0x4EE8) == 0 && *(const int *)(r + 0x274) > 0) {
-          char n1[33], n2[33];
-#define RN(dst, off) (memcpy(dst, r + (off), 32), dst[32] = 0, dst)
-          if (groups & 1 && findPaint(base, P_BIKE, L_BIKES, bike, RN(n1, 0x90), "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BIKE_PARTS, 6, a); painted++; }
-          if (groups & 2) {
-            findPaint(base, P_SUIT, L_RIDERS, rider, RN(n1, 0x170), "%srider\\riders\\%s\\paints\\%s.pnt", a, sizeof a);
-            findPaint(base, P_GLOVES, L_RIDERS, rider, RN(n2, 0x1F0), "%srider\\riders\\%s\\gloves\\%s.pnt", b, sizeof b);
-            sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, BODY_PART, 1, two); painted++;
-          }
-          if (groups & 4 && findPaint(base, P_BOOTS, L_BOOTS, boots, RN(n1, 0x1D0), "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BOOT_PARTS, 2, a); painted++; }
-          if (groups & 8) {
-            findPaint(base, P_HELMET, L_HELMETS, helmet, RN(n1, 0x110), "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a);
-            findPaint(base, P_GOGGLES, L_HELMETS, helmet, RN(n2, 0x130), "%srider\\helmets\\%s\\goggles\\%s.pnt", b, sizeof b);
-            sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, HELMET_PART, 1, two); painted++;
-          }
-#undef RN
+          painted += repaintGroups(base, dispatch, r, groups);
         }
       }
     }
@@ -1111,11 +1121,193 @@ static void looksPoll(void) {
   if (g_lookCount && S.inEvent && now - lastPass >= 5000) { lastPass = now; InterlockedOr(&mxbm_pending, 2); }
 }
 
+/* ===================== In-game overlay (F8) =====================
+ * A small Rider panel drawn through the plugin interface's Draw() (which the game calls only with
+ * the 3D world on screen: on track, spectating or in a replay). F8 opens and closes it; Up/Down
+ * picks a row, Left/Right changes the paint (shown at once on your rider and bike, first person
+ * included); Enter saves: the plugin writes mxbm_overlay_save.json and CoreMX queues the change
+ * like Apply does while the game runs (written to the profile when MX Bikes closes, shared with
+ * other riders straight away). Options are the paints installed for your current bike, rider
+ * model, boots and helmet, read from the game's own lists. Text uses the game's own font
+ * (ui\main.fnt, copied to plugins\mxbm_data\main.fnt and registered in DrawInit; a plugin can
+ * draw text only with a font it registers). Keys are read only while the game window is in front;
+ * the game still sees them too. */
+typedef struct { float m_aafPos[4][2]; int m_iSprite; unsigned long m_ulColor; } SPluginQuad_t;
+typedef struct { char m_szString[100]; float m_afPos[2]; int m_iFont; float m_fSize; int m_iJustify; unsigned long m_ulColor; } SPluginString_t;
+#define OV_ROWS 6
+#define OV_MAXOPT 160
+static const char *const OV_LABEL[OV_ROWS] = { "Bike livery", "Suit", "Gloves", "Boots paint", "Helmet paint", "Goggles" };
+static const char *const OV_SLOT[OV_ROWS] = { "bikePaint", "suitPaint", "glovesPaint", "bootsPaint", "helmetPaint", "gogglesPaint" };
+static const int OV_OFF[OV_ROWS] = { 0x90, 0x170, 0x1F0, 0x1D0, 0x110, 0x130 }, OV_GROUP[OV_ROWS] = { 1, 2, 2, 4, 8, 8 };
+static char g_ovOpt[OV_ROWS][OV_MAXOPT][64];
+static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovRow = 0, g_ovOpen = 0, g_ovFont = 0;
+static volatile LONG g_ovDirty = 0;
+static unsigned long long g_ovMsgUntil = 0;
+static char g_ovMsg[100], g_fontName[64];
+static SPluginQuad_t g_quads[16];
+static SPluginString_t g_strings[40];
+static int g_nq, g_ns;
+
+/* Copies the game's font next to the plugin (once) and registers it. */
+EXPORT int DrawInit(int *_piNumSprites, char **_pszSpriteName, int *_piNumFonts, char **_pszFontName) {
+  char exe[MAX_PATH * 2], me[MAX_PATH * 2], src[MAX_PATH * 2 + 32], dst[MAX_PATH * 2 + 32], *slash; HMODULE self = 0;
+  if (_piNumSprites) *_piNumSprites = 0;
+  if (_pszSpriteName) *_pszSpriteName = NULL;
+  if (_piNumFonts) *_piNumFonts = 0;
+  if (_pszFontName) *_pszFontName = NULL;
+  if (!_piNumFonts || !_pszFontName) return 0;
+  if (!GetModuleFileNameA(NULL, exe, sizeof exe) || !(slash = strrchr(exe, '\\'))) return 0;
+  slash[1] = 0;
+  if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(void *)DrawInit, &self) ||
+      !GetModuleFileNameA(self, me, sizeof me) || !(slash = strrchr(me, '\\'))) return 0;
+  slash[1] = 0;
+  sprintf(src, "%sui\\main.fnt", exe);
+  sprintf(dst, "%smxbm_data", me); CreateDirectoryA(dst, NULL);
+  sprintf(dst, "%smxbm_data\\main.fnt", me);
+  if (GetFileAttributesA(dst) == INVALID_FILE_ATTRIBUTES && !CopyFileA(src, dst, TRUE)) return 0;
+  copy(g_fontName, "mxbm_data\\main.fnt", sizeof g_fontName);
+  *_piNumFonts = 1; *_pszFontName = g_fontName; g_ovFont = 1;
+  return 0;
+}
+
+static void ovQuad(float x0, float y0, float x1, float y1, unsigned long c) {
+  SPluginQuad_t *q;
+  if (g_nq >= (int)(sizeof g_quads / sizeof g_quads[0])) return;
+  q = &g_quads[g_nq++];
+  q->m_aafPos[0][0] = x0; q->m_aafPos[0][1] = y0; q->m_aafPos[1][0] = x0; q->m_aafPos[1][1] = y1;
+  q->m_aafPos[2][0] = x1; q->m_aafPos[2][1] = y1; q->m_aafPos[3][0] = x1; q->m_aafPos[3][1] = y0;
+  q->m_iSprite = 0; q->m_ulColor = c;
+}
+static void ovText(const char *s, float x, float y, float size, int justify, unsigned long c) {
+  SPluginString_t *t;
+  if (!g_ovFont || g_ns >= (int)(sizeof g_strings / sizeof g_strings[0])) return;
+  t = &g_strings[g_ns++];
+  copy(t->m_szString, s, sizeof t->m_szString);
+  t->m_afPos[0] = x; t->m_afPos[1] = y; t->m_iFont = g_ovFont; t->m_fSize = size; t->m_iJustify = justify; t->m_ulColor = c;
+}
+
+/* Your own vehicle record, if it is built and this game build is the one checked. */
+static unsigned char *ownRecord(unsigned char *base) {
+  int own = 0; unsigned char *r;
+  if (!mxbm_orig_ui || !looksBuildOk(base) || !srvCopy(base + 0xE62710, &own, 4) || own < 1 || own > 50) return 0;
+  r = base + 0xF4EE20 + (size_t)(own - 1) * 0x5B24;
+  return *(const int *)r == 1 && *(const int *)(r + 0x274) > 0 ? r : 0;
+}
+
+/* Fills each row with the installed paints for your current models and finds the selected one. */
+static void ovLoadOptions(unsigned char *base, unsigned char *r) {
+  static const GameList *const PL[OV_ROWS] = { &P_BIKE, &P_SUIT, &P_GLOVES, &P_BOOTS, &P_HELMET, &P_GOGGLES };
+  static const GameList *const ML[OV_ROWS] = { &L_BIKES, &L_RIDERS, &L_RIDERS, &L_BOOTS, &L_HELMETS, &L_HELMETS };
+  static const int MOFF[OV_ROWS] = { 0x30, 0xD0, 0xD0, 0x1B0, 0xF0, 0xF0 };
+  static unsigned char e[0x18C];
+  int row;
+  for (row = 0; row < OV_ROWS; row++) {
+    char model[33], cur[33]; int owner, n = 0, i; const unsigned char *p = 0;
+    memcpy(model, r + MOFF[row], 32); model[32] = 0; memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
+    g_ovCount[row] = 0; g_ovSel[row] = -1;
+    owner = modelIndex(base, *ML[row], model);
+    if (owner < 0 || !srvCopy(base + PL[row]->count, &n, 4) || !srvCopy(base + PL[row]->ptr, (void *)&p, sizeof p) || n <= 0 || n > 100000 || !p) continue;
+    for (i = 0; i < n && g_ovCount[row] < OV_MAXOPT; i++) {
+      if (!srvCopy(p + (size_t)i * 0x18C, e, sizeof e) || *(int *)e != owner) continue;
+      memcpy(g_ovOpt[row][g_ovCount[row]], e + 4, 63); g_ovOpt[row][g_ovCount[row]][63] = 0;
+      if (_stricmp(g_ovOpt[row][g_ovCount[row]], cur) == 0) g_ovSel[row] = g_ovCount[row];
+      g_ovCount[row]++;
+    }
+  }
+}
+
+static void ovSave(unsigned char *r) {
+  char o[1024], v[33]; size_t at; int row;
+  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"bike\":", nowMs());
+  memcpy(v, r + 0x30, 32); v[32] = 0; at = jstr(o, at, v, sizeof o - 80);
+  memcpy(o + at, ",\"changes\":{", 12); at += 12;
+  for (row = 0; row < OV_ROWS; row++) {
+    memcpy(v, r + OV_OFF[row], 32); v[32] = 0;
+    at += (size_t)sprintf(o + at, "%s\"%s\":", row ? "," : "", OV_SLOT[row]);
+    at = jstr(o, at, v, sizeof o - 80);
+  }
+  o[at++] = '}'; o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_overlay_save.json", o);
+}
+
+static int keyPressed(int vk) {
+  static unsigned char down[256];
+  int now = (GetAsyncKeyState(vk) & 0x8000) != 0, was = down[vk & 0xFF];
+  down[vk & 0xFF] = (unsigned char)now;
+  return now && !was;
+}
+static int gameInFront(void) { DWORD pid = 0; HWND w = GetForegroundWindow(); if (w) GetWindowThreadProcessId(w, &pid); return pid == GetCurrentProcessId(); }
+
+EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumString, void **_ppString) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r;
+  int f8, up, dn, lt, rt, en, row;
+  (void)_iState;
+  g_nq = g_ns = 0;
+  if (_piNumQuads) *_piNumQuads = 0;
+  if (_piNumString) *_piNumString = 0;
+  if (!gameInFront()) return;
+  f8 = keyPressed(VK_F8); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT); en = keyPressed(VK_RETURN);
+  r = S.inEvent ? ownRecord(base) : 0;
+  if (f8) {
+    g_ovOpen = !g_ovOpen;
+    if (g_ovOpen && r) ovLoadOptions(base, r);
+    g_ovMsgUntil = 0;
+  }
+  if (!g_ovOpen) return;
+  if (r && g_ovFont) {
+    if (up) g_ovRow = (g_ovRow + OV_ROWS - 1) % OV_ROWS;
+    if (dn) g_ovRow = (g_ovRow + 1) % OV_ROWS;
+    if ((lt || rt) && g_ovCount[g_ovRow] > 0) {
+      int c = g_ovCount[g_ovRow], s = g_ovSel[g_ovRow];
+      s = s < 0 ? 0 : (s + (rt ? 1 : c - 1)) % c;
+      g_ovSel[g_ovRow] = s;
+      setName(r + OV_OFF[g_ovRow], g_ovOpt[g_ovRow][s]);
+      InterlockedOr(&g_ovDirty, OV_GROUP[g_ovRow]);
+      InterlockedOr(&mxbm_pending, 4);
+    }
+    if (en) { ovSave(r); copy(g_ovMsg, "Saved. CoreMX writes it to your profile when MX Bikes closes.", sizeof g_ovMsg); g_ovMsgUntil = nowMs() + 4000; }
+  }
+  {
+    const float x0 = 0.03f, x1 = 0.40f, y0 = 0.16f, rowH = 0.042f;
+    const float y1 = y0 + 0.07f + rowH * OV_ROWS + 0.07f;
+    char line[100];
+    ovQuad(x0, y0, x1, y1, 0xD0141414);
+    ovQuad(x0, y0, x1, y0 + 0.004f, 0xFF328CFF);
+    ovText("CoreMX  -  Rider", x0 + 0.015f, y0 + 0.018f, 0.026f, 0, 0xFFFFFFFF);
+    if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.015f, y0 + 0.08f, 0.02f, 0, 0xFFB0B0B0);
+    else if (!g_ovFont) { /* no font: the game cannot draw our text, so only the panel shows */ }
+    else for (row = 0; row < OV_ROWS; row++) {
+      float y = y0 + 0.07f + rowH * row;
+      int sel = g_ovSel[row], c = g_ovCount[row];
+      char cur[33];
+      if (row == g_ovRow) ovQuad(x0 + 0.006f, y - 0.004f, x1 - 0.006f, y + rowH - 0.006f, 0x60328CFF);
+      ovText(OV_LABEL[row], x0 + 0.015f, y + 0.006f, 0.019f, 0, row == g_ovRow ? 0xFFFFFFFF : 0xFFB0B0B0);
+      memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
+      if (!c) sprintf(line, "%s", cur[0] ? cur : "none installed");
+      else sprintf(line, "<  %.60s  >  %d/%d", sel >= 0 ? g_ovOpt[row][sel] : (cur[0] ? cur : "default"), sel + 1, c);
+      ovText(line, x1 - 0.015f, y + 0.006f, 0.019f, 2, 0xFFFFFFFF);
+    }
+    if (g_ovMsgUntil > nowMs()) ovText(g_ovMsg, x0 + 0.015f, y1 - 0.06f, 0.017f, 0, 0xFF6CE07A);
+    ovText("Up/Down row   Left/Right change   Enter save   F8 close", x0 + 0.015f, y1 - 0.032f, 0.016f, 0, 0xFF909090);
+  }
+  if (_piNumQuads && _ppQuad) { *_piNumQuads = g_nq; *_ppQuad = g_quads; }
+  if (_piNumString && _ppString) { *_piNumString = g_ns; *_ppString = g_strings; }
+}
+
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
   if (work & 1) runPaintTest();
   if (work & 2) applyLooks();
+  if (work & 4) {
+    unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r = ownRecord(base);
+    LONG groups = InterlockedExchange(&g_ovDirty, 0);
+    if (r && groups && *(const int *)(r + 0x4EE8) == 0) {
+      g_gameCallThread = GetCurrentThreadId();
+      repaintGroups(base, (dispatch_t)mxbm_orig_ui, r, (int)groups);
+      g_gameCallThread = 0;
+    }
+  }
 }
 
 static void serverListStart(void) {

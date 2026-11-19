@@ -3336,7 +3336,7 @@ api.on('rider:pendingApplied', (results) => {
   if (bad.length) toast(`Couldn't save your Rider changes: ${esc(bad[0].error)}`, 'err', 8000);
   else toast('MX Bikes closed, so your Rider changes are now saved to the game', 'ok', 4500);
 });
-api.on('rider:changed', async ({ active }) => { const profiles = await api.invoke('rider:profiles'); S.rider.profiles = profiles.profiles; if (!riderDirty()) { S.rider.profile = active; S.rider.bike = null; S.rider.saveState = ''; } S.rider.bikes = null; S.gearThumbs.clear(); if (S.view === 'rider') renderRider($('#content')); });
+api.on('rider:changed', async ({ active, fromGame }) => { if (fromGame) toast('Saved from the in-game overlay. It is written to your profile when MX Bikes closes.', 'ok', 4500); const profiles = await api.invoke('rider:profiles'); S.rider.profiles = profiles.profiles; if (!riderDirty()) { S.rider.profile = active; S.rider.bike = null; S.rider.saveState = ''; } S.rider.bikes = null; S.gearThumbs.clear(); if (S.view === 'rider') renderRider($('#content')); });
 const equipQueue = [];
 let equipPromptBusy = false;
 function installedEquipTarget(choice) {
