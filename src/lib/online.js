@@ -19,7 +19,8 @@ function looksText(loadouts, reload, stamp) {
   const lines = [`coremx-looks 1 ${stamp}`, `reload\t${reload.join(',')}`];
   for (const lo of loadouts) {
     const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
-    lines.push(['look', lo.num, clean(lo.bikeId), ...LOOK_FIELDS.map((f) => clean(cur[f]))].join('\t'));
+    // The CoreMX name is the last column (older plugins read only the gear columns).
+    lines.push(['look', lo.num, clean(lo.bikeId), ...LOOK_FIELDS.map((f) => clean(cur[f])), clean(lo.name).slice(0, 40)].join('\t'));
   }
   return lines.join('\n') + '\n';
 }
@@ -280,6 +281,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   // One plugin update at a time, whether started at app start or when the game closes.
   function updatePluginIfNeeded() {
+    if (!pluginUpdating && !pluginStatus().needsUpdate && pluginStatus().installed) ensureOverlayFont().catch(() => {});
     if (pluginUpdating || !pluginStatus().needsUpdate) return pluginUpdating || Promise.resolve();
     pluginUpdating = installPlugin().catch(() => {}).finally(() => { pluginUpdating = false; onChange(status()); });
     return pluginUpdating;
@@ -291,7 +293,29 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (await isGameRunning()) throw new Error('Close MX Bikes first — the game only loads plugins when it starts.');
     await fsp.mkdir(path.dirname(dst), { recursive: true });
     await fsp.copyFile(src, dst);
+    await ensureOverlayFont().catch(() => {});
     return status();
+  }
+  // The overlay draws text with the game's own font, registered by the plugin from
+  // pluginsmxbm_datamain.fnt. The plugin copies it from the loose uimain.fnt, but some installs
+  // only have it inside ui.pkz, so CoreMX puts it in place (a local copy of the player's own file).
+  async function ensureOverlayFont() {
+    const dst = pluginPath(), gameDir = installDir();
+    if (!dst || !gameDir) return;
+    const font = path.join(path.dirname(dst), 'mxbm_data', 'main.fnt');
+    if (fs.existsSync(font)) return;
+    const loose = path.join(gameDir, 'ui', 'main.fnt');
+    let data = null;
+    if (fs.existsSync(loose)) data = await fsp.readFile(loose);
+    else if (fs.existsSync(path.join(gameDir, 'ui.pkz'))) {
+      data = await require('./zipread').withZip(path.join(gameDir, 'ui.pkz'), async (entries, read) => {
+        const entry = entries.find((e) => e.fileName.split('\\').join('/').toLowerCase() === 'ui/main.fnt');
+        return entry ? read(entry, 8 * 1024 * 1024) : null;
+      });
+    }
+    if (!data) return;
+    await fsp.mkdir(path.dirname(font), { recursive: true });
+    await fsp.writeFile(font, data);
   }
   async function removePlugin() {
     const dst = pluginPath();

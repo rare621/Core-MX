@@ -418,7 +418,8 @@ static int g_buildOk = 0;
 static int connectedServer(char *name, size_t ncap, char *addr, size_t acap) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL), *nm, *cb;
   size_t i; unsigned port;
-  if (!g_buildOk || !base || S.type != 2 || ncap < 2 || acap < 24) return 0;
+  /* Any online session (hosted World games and practice report type 1, races type 2). */
+  if (!g_buildOk || !base || !S.haveServer || ncap < 2 || acap < 24) return 0;
   nm = base + 0x9CC334; cb = base + 0xE53DE0;
   for (i = 0; i < ncap - 1 && nm[i]; i++) { if (nm[i] < 0x20 || nm[i] == 0x7f) return 0; name[i] = (char)nm[i]; }
   name[i] = 0;
@@ -538,18 +539,24 @@ static int stunReply(const unsigned char *b, int n) {
   return 1;
 }
 
+/* For mxbm_stun.json: local ports the game received on, and what the STUN thread did. */
+static volatile unsigned g_stunPorts[6]; static volatile LONG g_stunPortN = 0;
+static volatile LONG g_stunSends = 0, g_stunReplies = 0, g_stunCalls = 0; static volatile int g_stunSendResult = 0;
 static int WINAPI hk_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen) {
+  InterlockedIncrement(&g_stunCalls);
   for (;;) {
     int r = real_recvfrom(s, buf, len, flags, from, fromlen);
     if (!g_gameSock && real_getsockname) {
       unsigned char a[64]; int al = sizeof a;
       /* port is at bytes 2..3 for both sockaddr_in and sockaddr_in6 */
-      if (real_getsockname(s, (struct sockaddr *)a, &al) == 0 && ((a[2] << 8) | a[3]) == 54210) {
-        g_gameSockV6 = ((struct sockaddr *)a)->sa_family == AF_INET6;
-        g_gameSock = s;
+      if (real_getsockname(s, (struct sockaddr *)a, &al) == 0) {
+        unsigned port = ((unsigned)a[2] << 8) | a[3]; LONG i, n = g_stunPortN, known = 0;
+        for (i = 0; i < n; i++) if (g_stunPorts[i] == port) known = 1;
+        if (!known && n < 6) { g_stunPorts[n] = port; InterlockedIncrement(&g_stunPortN); }
+        if (port == 54210) { g_gameSockV6 = ((struct sockaddr *)a)->sa_family == AF_INET6; g_gameSock = s; }
       }
     }
-    if (r >= 20 && g_stunPending && s == g_gameSock && stunReply((const unsigned char *)buf, r)) continue;
+    if (r >= 20 && g_stunPending && s == g_gameSock && stunReply((const unsigned char *)buf, r)) { InterlockedIncrement(&g_stunReplies); continue; }
     return r;
   }
 }
@@ -557,8 +564,18 @@ static int WINAPI hk_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 static DWORD WINAPI stunThread(LPVOID unused) {
   unsigned long long last = 0;
   (void)unused;
+  unsigned long long lastStatus = 0;
   while (!g_hookStop) {
     Sleep(1000);
+    if (nowMs() - lastStatus >= 10000) {
+      /* Status for diagnosing hosting addresses on a player's PC (no addresses in it). */
+      char o[400], ports[80] = ""; LONG i;
+      lastStatus = nowMs();
+      for (i = 0; i < g_stunPortN && i < 6; i++) sprintf(ports + strlen(ports), "%s%u", i ? "," : "", g_stunPorts[i]);
+      sprintf(o, "{\"v\":1,\"at\":%llu,\"hooked\":%s,\"receives\":%ld,\"ports\":[%s],\"gameSocket\":%s,\"inEvent\":%d,\"sends\":%ld,\"lastSend\":%d,\"replies\":%ld}",
+              nowMs(), g_iatRecv ? "true" : "false", (long)g_stunCalls, ports, g_gameSock ? "true" : "false", S.inEvent, (long)g_stunSends, g_stunSendResult, (long)g_stunReplies);
+      writeSmall("mxbm_stun.json", o);
+    }
     if (!g_gameSock || !S.inEvent || nowMs() - last < 120000) continue;
     last = nowMs();
     {
@@ -574,10 +591,11 @@ static DWORD WINAPI stunThread(LPVOID unused) {
         struct sockaddr_in6 to; const struct sockaddr_in *v4 = (const struct sockaddr_in *)res->ai_addr;
         memset(&to, 0, sizeof to); to.sin6_family = AF_INET6; to.sin6_port = v4->sin_port;
         to.sin6_addr.s6_addr[10] = 0xff; to.sin6_addr.s6_addr[11] = 0xff; memcpy(&to.sin6_addr.s6_addr[12], &v4->sin_addr, 4);
-        real_sendto(g_gameSock, (const char *)req, 20, 0, (const struct sockaddr *)&to, sizeof to);
+        g_stunSendResult = real_sendto(g_gameSock, (const char *)req, 20, 0, (const struct sockaddr *)&to, sizeof to);
       } else {
-        real_sendto(g_gameSock, (const char *)req, 20, 0, res->ai_addr, (int)res->ai_addrlen);
+        g_stunSendResult = real_sendto(g_gameSock, (const char *)req, 20, 0, res->ai_addr, (int)res->ai_addrlen);
       }
+      InterlockedIncrement(&g_stunSends);
       real_freeaddrinfo(res);
     }
   }
@@ -942,7 +960,7 @@ static void liveryTestPoll(void) {
  * address used is checked first against fingerprints of this build. Result: mxbm_looks_result.json.
  * Research notes: plugin/LIVE_GEAR_NOTES.md. */
 #define LOOK_MAX 50
-typedef struct { int num; char bike[64]; char f[11][64]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint protection protectionPaint */
+typedef struct { int num; char bike[64]; char f[11][64]; char name[48]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint protection protectionPaint; name = CoreMX name */
 static Look g_looks[LOOK_MAX], g_looksWork[LOOK_MAX];
 static int g_lookCount = 0;
 static unsigned long long g_looksStamp = 0, g_looksDone = 0;
@@ -951,7 +969,7 @@ static FILETIME g_looksMtime;
 static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
 /* What live looks did per rider, for the overlay's Riders tab: models waiting for the game's
  * rebuild (shown once you go to the pits and back to the track) and paints already applied. */
-typedef struct { int num; char bike[64]; char models[64]; int paints; } LookStatus;
+typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; } LookStatus;
 static LookStatus g_lookStatus[LOOK_MAX];
 static int g_lookStatusN = 0;
 static LookStatus *lookStatus(int num, const char *bike) {
@@ -1119,6 +1137,7 @@ static void applyLooks(void) {
     }
     if (r) {
       LookStatus *st = lookStatus(L->num, L->bike);
+      if (st && L->name[0]) copy(st->name, L->name, sizeof st->name);
       if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
     }
     if (at + 160 < sizeof o)
@@ -1151,16 +1170,17 @@ static void looksPoll(void) {
     g_looksMtime = fa.ftLastWriteTime;
     stamp = _strtoui64(buf + 15, NULL, 10);
     for (line = buf; line && *line; line = next) {
-      char *cols[16]; int c = 0;
+      char *cols[17]; int c = 0;
       next = strchr(line, '\n'); if (next) *next++ = 0;
       { size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0; }
       cols[c++] = line;
-      while (c < 16) { char *t = strchr(cols[c - 1], '\t'); if (!t) break; *t = 0; cols[c++] = t + 1; }
+      while (c < 17) { char *t = strchr(cols[c - 1], '\t'); if (!t) break; *t = 0; cols[c++] = t + 1; }
       if (strcmp(cols[0], "reload") == 0 && c > 1) copy(reload, cols[1], sizeof reload);
       else if (strcmp(cols[0], "look") == 0 && c >= 12 && count < LOOK_MAX) {
         int k; Look *L = &tmp[count]; memset(L, 0, sizeof *L);
         L->num = atoi(cols[1]); copy(L->bike, cols[2], sizeof L->bike);
         for (k = 0; k < 11 && 3 + k < c; k++) copy(L->f[k], cols[3 + k], sizeof L->f[k]);
+        if (c > 14) copy(L->name, cols[14], sizeof L->name);
         if (L->num > 0 && L->bike[0]) count++;
       }
     }
@@ -1519,7 +1539,13 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
         if (vr && st->models[0] && !waiting) st->models[0] = 0;   /* the game rebuilt them: done */
         ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, waiting ? 0x40328CFF : 0x12FFFFFF);
-        sprintf(line, "#%d  %.40s", st->num, st->bike);
+        {
+          /* "Name  ·  #501  ·  2023 Kawasaki KX250": the bike id without its class prefix, spaced. */
+          char bike[64]; const char *b = st->bike, *u = strchr(b, '_'); int i;
+          if (u && u - b <= 8) { int upper = 1; const char *q; for (q = b; q < u; q++) if (*q >= 'a' && *q <= 'z') upper = 0; if (upper) b = u + 1; }
+          copy(bike, b, sizeof bike); for (i = 0; bike[i]; i++) if (bike[i] == '_') bike[i] = ' ';
+          if (st->name[0]) sprintf(line, "%.30s   #%d   %.36s", st->name, st->num, bike); else sprintf(line, "#%d   %.40s", st->num, bike);
+        }
         ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
