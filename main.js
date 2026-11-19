@@ -867,6 +867,39 @@ function draftProfile(prof, bike, changes) {
   return next;
 }
 
+// Queued changes (Apply while the game runs, or the in-game overlay) remember the models they were
+// made for. If the game's own menus change a helmet, boots, protector or rider model meanwhile, a
+// queued paint for that model is dropped, so it is never written onto a model it doesn't belong to.
+const PAINT_MODEL = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection', suitPaint: 'rider', glovesPaint: 'rider' };
+async function pendingModels(name, bike) {
+  const lo = await profile.loadout(modsDir(), await profile.readProfile(profUserDir(), name), bike, stockRiderPkz());
+  return Object.fromEntries(['helmet', 'boots', 'protection', 'rider'].map((m) => [m, lo.current[m] || '']));
+}
+async function pendingStillValid(p) {
+  const changes = { ...(p.changes || {}) };
+  if (!p.models) return pendingPaintsExist(p.name, p.bike, changes);
+  const now = await pendingModels(p.name, p.bike).catch(() => null);
+  if (!now) return pendingPaintsExist(p.name, p.bike, changes);
+  for (const [slot, model] of Object.entries(PAINT_MODEL)) {
+    if (Object.hasOwn(changes, slot) && !Object.hasOwn(changes, model) && now[model] !== (p.models[model] || '')) delete changes[slot];
+  }
+  return pendingPaintsExist(p.name, p.bike, changes);
+}
+// Also for older queued changes without models: keep a queued paint only if it exists for the model
+// it would end up on (installed or stock).
+async function pendingPaintsExist(name, bike, changes) {
+  const out = { ...changes };
+  try {
+    const lo = await profile.loadout(modsDir(), draftProfile(await profile.readProfile(profUserDir(), name), bike, out), bike, stockRiderPkz());
+    for (const slot of Object.keys(PAINT_MODEL)) {
+      if (!Object.hasOwn(out, slot) || !out[slot]) continue;
+      const found = await gearAssets.paintSource({ modsDir: modsDir(), rider: lo.current.rider || 'default_mx', stockPkz: stockRiderPkz() }, slot, lo.current).catch(() => null);
+      if (!found) delete out[slot];
+    }
+  } catch {}
+  return out;
+}
+
 function registerIpc() {
   handle('app:env', () => environment());
   handle('app:updates', () => updates?.status() || { phase: 'idle', current: app.getVersion() });
@@ -1603,14 +1636,16 @@ function registerIpc() {
     if (!gearAssets.validName(bike)) throw new Error('Invalid bike');
     profile.validateRiderIdentity(changes);
     if (await profile.isGameRunning()) {
-      store.update('pendingApply', (all) => ({ ...(all || {}), [`${name}|${bike}`]: { name, bike, changes, at: Date.now() } }));
+      const models = (store.get('pendingApply') || {})[`${name}|${bike}`]?.models || await pendingModels(name, bike).catch(() => null);
+      store.update('pendingApply', (all) => ({ ...(all || {}), [`${name}|${bike}`]: { name, bike, changes, models, at: Date.now() } }));
       watchPendingApply();
       return { queued: true };
     }
     return applyRider(name, bike, changes);
   });
   queueRiderApply = async (name, bike, changes) => {
-    store.update('pendingApply', (all) => { const prev = (all || {})[`${name}|${bike}`]; return { ...(all || {}), [`${name}|${bike}`]: { name, bike, changes: { ...(prev?.changes || {}), ...changes }, at: Date.now() } }; });
+    const models = (store.get('pendingApply') || {})[`${name}|${bike}`]?.models || await pendingModels(name, bike).catch(() => null);
+    store.update('pendingApply', (all) => { const prev = (all || {})[`${name}|${bike}`]; return { ...(all || {}), [`${name}|${bike}`]: { name, bike, changes: { ...(prev?.changes || {}), ...changes }, models, at: Date.now() } }; });
     watchPendingApply();
     online?.syncPaints().catch(() => {});
   };
@@ -1657,7 +1692,7 @@ function registerIpc() {
       store.set('pendingApply', {});
       const results = [];
       for (const p of queued) {
-        try { await applyRider(p.name, p.bike, p.changes); results.push({ bike: p.bike, ok: true }); }
+        try { await applyRider(p.name, p.bike, await pendingStillValid(p)); results.push({ bike: p.bike, ok: true }); }
         catch (e) { results.push({ bike: p.bike, ok: false, error: e.message }); }
       }
       send('rider:pendingApplied', results);
@@ -1981,13 +2016,13 @@ app.whenReady().then(async () => {
       // other riders straight away, not only once the game has closed and they are written.
       const pending = bike && (store.get('pendingApply') || {})[`${list.last}|${bike}`];
       let prof = saved;
-      if (pending) { try { prof = draftProfile(saved, bike, pending.changes || {}); } catch {} }
+      if (pending) { try { prof = draftProfile(saved, bike, await pendingStillValid(pending)); } catch {} }
       // A purchase from a shop is personal to that account.  Keep those paths
       // out of peer sync even when the file itself is readable locally.
       const protectedPaths = Object.values(store.get('installs'))
         .filter((r) => r.shopKey || /mxbikes-shop|mxb-hub/i.test(String(r.link || '')))
         .flatMap((r) => r.files || []);
-      return bike ? { prof, bike, bikeName: bike, protectedPaths, appearance: bikeSwaps.shared(bike) } : null;
+      return bike ? { prof, bike, bikeName: bike, protectedPaths, stockPkz: stockRiderPkz(), appearance: bikeSwaps.shared(bike) } : null;
     },
     resolveServerAddress: async (name) => {
       const matches = [...((await knownServerAddresses()).get(serverNameKey(name)) || [])];

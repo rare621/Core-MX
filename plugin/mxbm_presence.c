@@ -1182,6 +1182,7 @@ static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovOpen = 0, g_ovFont = 0;
 static volatile LONG g_ovDirty = 0;
 static volatile LONG g_ownRebuild = 0;  /* a model change waits for the pits */
 static int g_ovModelChanged[OV_ROWS];   /* model rows changed since the overlay opened */
+static int g_ovEdited[OV_ROWS];         /* rows you changed (Save sends only these) */
 static unsigned long long g_ovMsgUntil = 0;
 
 static const GameList *ovPaintList(int row) {
@@ -1233,7 +1234,7 @@ static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
 }
 static void ovLoadOptions(unsigned char *base, unsigned char *r) {
   int row;
-  for (row = 0; row < OV_ROWS; row++) { ovLoadRow(base, r, row); g_ovModelChanged[row] = 0; }
+  for (row = 0; row < OV_ROWS; row++) { ovLoadRow(base, r, row); g_ovModelChanged[row] = 0; g_ovEdited[row] = 0; }
 }
 
 static void ovSave(unsigned char *r) {
@@ -1241,11 +1242,15 @@ static void ovSave(unsigned char *r) {
   at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"bike\":", nowMs());
   memcpy(v, r + 0x30, 32); v[32] = 0; at = jstr(o, at, v, sizeof o - 80);
   memcpy(o + at, ",\"changes\":{", 12); at += 12;
+  {
+  int first = 1;
   for (row = 0; row < OV_ROWS; row++) {
+    if (!g_ovEdited[row]) continue;   /* only what you changed, so the game's own menus keep the rest */
     memcpy(v, r + OV_OFF[row], 32); v[32] = 0;
     if (row == R_PROT && !v[0]) copy(v, "None", sizeof v);
-    at += (size_t)sprintf(o + at, "%s\"%s\":", row ? "," : "", OV_SLOT[row]);
+    at += (size_t)sprintf(o + at, "%s\"%s\":", first ? "" : ",", OV_SLOT[row]); first = 0;
     at = jstr(o, at, v, sizeof o - 80);
+  }
   }
   o[at++] = '}'; o[at++] = '}'; o[at] = 0;
   writeSmall("mxbm_overlay_save.json", o);
@@ -1352,7 +1357,7 @@ static int ovMouse(float *mx, float *my) {
 static int ovRaceLocked(void) { return S.type == 2 && (S.session == 6 || S.session == 7); }
 static void ovSetValue(unsigned char *base, unsigned char *r, int row, int sel) {
   int k;
-  g_ovSel[row] = sel;
+  g_ovSel[row] = sel; g_ovEdited[row] = 1;
   setName(r + OV_OFF[row], row == R_PROT && sel == 0 ? "" : g_ovOpt[row][sel]);
   if (OV_GROUP[row] == 0) {
     /* A different model: its paint lists change. Keep each paint if the new model has it, else
@@ -1362,6 +1367,7 @@ static void ovSetValue(unsigned char *base, unsigned char *r, int row, int sel) 
       if (OV_PARENT[k] != row) continue;
       ovLoadRow(base, r, k);
       if (g_ovSel[k] < 0) { setName(r + OV_OFF[k], g_ovCount[k] ? g_ovOpt[k][0] : ""); g_ovSel[k] = g_ovCount[k] ? 0 : -1; }
+      g_ovEdited[k] = 1;   /* the paint goes with the new model */
     }
     InterlockedExchange(&g_ownRebuild, 1);
   } else if (OV_GROUP[row] == 16 || (OV_PARENT[row] >= 0 && g_ovModelChanged[OV_PARENT[row]])) {
