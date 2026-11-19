@@ -1142,6 +1142,7 @@ static void applyLooks(void) {
         char bike[33], rider[33], helmet[33], boots[33];
         static const int P_OFF[6] = { 0x90, 0x110, 0x130, 0x170, 0x1F0, 0x1D0 }, P_F[6] = { 0, 3, 4, 5, 6, 8 }, P_GROUP[6] = { 1, 8, 8, 2, 2, 4 };
         memcpy(bike, r + 0x30, 32); bike[32] = 0; memcpy(rider, r + 0xD0, 32); rider[32] = 0;
+        int done[6] = { 0 };   /* paints set this pass: marked applied only once really drawn */
         memcpy(helmet, r + 0xF0, 32); helmet[32] = 0; memcpy(boots, r + 0x1B0, 32); boots[32] = 0;
         for (m = 0; m < 6; m++) {
           const char *want = L->f[P_F[m]]; int ok;
@@ -1161,13 +1162,15 @@ static void applyLooks(void) {
             if (strlen(missing) + strlen(want) + 16 < sizeof missing) sprintf(missing + strlen(missing), "%s%s: %s", missing[0] ? "; " : "", PAINT_KIND[m], want);
             continue;
           }
-          setName(r + P_OFF[m], want); groups |= P_GROUP[m]; LOOK_MARK(P_F[m], want);
+          setName(r + P_OFF[m], want); groups |= P_GROUP[m]; done[m] = 1;
         }
         if (rebuild) {
           if (*(const int *)(r + 0x4EE8) == 0) *(volatile int *)(r + 0x4EE8) = 2;
         } else if (groups && *(const int *)(r + 0x4EE8) == 0 && *(const int *)(r + 0x274) > 0) {
           painted += repaintGroups(base, dispatch, r, groups);
         }
+        /* Not drawn yet (or being rebuilt without our rebuild): try again next pass. */
+        if (rebuild || painted) for (m = 0; m < 6; m++) if (done[m]) LOOK_MARK(P_F[m], L->f[P_F[m]]);
       }
     }
 #undef LOOK_DONE
