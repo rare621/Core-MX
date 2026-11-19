@@ -1161,8 +1161,8 @@ typedef struct { char m_szString[100]; float m_afPos[2]; int m_iFont; float m_fS
  * rows (helmet, boots, chest protector/neck brace) list every installed model of that kind.
  * A model change needs your rider rebuilt, which the plugin does when you are back in the pits
  * (the game cannot rebuild your own rider safely while you ride): the old look is removed with
- * the game's RVA 0x4E0D0 and the build state set to 3, which makes the game's loop build it with
- * its full builder RVA 0x45020 (outside and first-person models), as for a postponed first build.
+ * the game's RVA 0x4E0D0 and the full builder RVA 0x45020 is called with flags 0, as your own
+ * vehicle's setup does (outside and first-person models); see mxbm_run_pending.
  * Until then, paints of a changed model are not previewed (they would land on the old model). */
 #define OV_ROWS 10
 #define OV_MAXOPT 400
