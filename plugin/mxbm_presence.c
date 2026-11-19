@@ -671,8 +671,6 @@ static void bookWrite(unsigned long long now) {
 static void liveryTestPoll(void);
 static void looksPoll(void);
 static void ownRebuildPoll(void);
-static DWORD WINAPI keyThread(LPVOID unused);
-static HANDLE g_keyThread = 0;
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -949,6 +947,19 @@ static unsigned long long g_looksStamp = 0, g_looksDone = 0;
 static char g_reload[160];
 static FILETIME g_looksMtime;
 static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
+/* What live looks did per rider, for the overlay's Riders tab: models waiting for the game's
+ * rebuild (shown once you go to the pits and back to the track) and paints already applied. */
+typedef struct { int num; char bike[64]; char models[64]; int paints; } LookStatus;
+static LookStatus g_lookStatus[LOOK_MAX];
+static int g_lookStatusN = 0;
+static LookStatus *lookStatus(int num, const char *bike) {
+  int i;
+  for (i = 0; i < g_lookStatusN; i++) if (g_lookStatus[i].num == num && _stricmp(g_lookStatus[i].bike, bike) == 0) return &g_lookStatus[i];
+  if (g_lookStatusN >= LOOK_MAX) return 0;
+  memset(&g_lookStatus[g_lookStatusN], 0, sizeof g_lookStatus[0]);
+  g_lookStatus[g_lookStatusN].num = num; copy(g_lookStatus[g_lookStatusN].bike, bike, sizeof g_lookStatus[0].bike);
+  return &g_lookStatus[g_lookStatusN++];
+}
 
 static unsigned fnv(const unsigned char *p, size_t n) { unsigned h = 0x811c9dc5u; while (n--) { h ^= *p++; h *= 0x01000193u; } return h; }
 static int looksBuildOk(const unsigned char *base) {
@@ -1039,6 +1050,7 @@ static void applyLooks(void) {
   for (i = 0; i < n; i++) {
     const Look *L = &g_looksWork[i];
     unsigned char *r = 0; int s, rebuild = 0, painted = 0, skipped = 0;
+    char kinds[64] = "";   /* models (and protector paint) waiting for the rebuild */
     char nm[33];
     for (s = 0; s < 50; s++) {
       unsigned char *c = base + 0xF4EE20 + (size_t)s * 0x5B24;
@@ -1052,6 +1064,8 @@ static void applyLooks(void) {
       static const int MODEL_OFF[4] = { 0xF0, 0x1B0, 0xD0, 0x210 }, MODEL_F[4] = { 2, 7, 1, 9 };
       const GameList *MODEL_L[4] = { &L_HELMETS, &L_BOOTS, &L_RIDERS, &L_PROT };
       int m, groups = 0;
+      static const char *const MODEL_NAME[4] = { "helmet", "boots", "rider", "protector" };
+
       for (m = 0; m < 4; m++) {
         const char *want = L->f[MODEL_F[m]];
         int none = m == 3 && _stricmp(want, "None") == 0;
@@ -1059,13 +1073,17 @@ static void applyLooks(void) {
         if (!want[0] || _stricmp(nm, none ? "" : want) == 0) continue;
         if (!none && modelIndex(base, *MODEL_L[m], want) < 0) { skipped++; continue; }
         setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1;
+        if (strlen(kinds) + 12 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, MODEL_NAME[m]); }
       }
       /* Protection paint: drawn when the protection is built, so a change also rebuilds. */
       {
         const char *want = L->f[10]; char prot[33];
         memcpy(prot, r + 0x210, 32); prot[32] = 0; memcpy(nm, r + 0x230, 32); nm[32] = 0;
         if (want[0] && prot[0] && _stricmp(nm, want) != 0) {
-          if (findPaint(base, P_PROT, L_PROT, prot, want, "%srider\\protections\\%s\\paints\\%s.pnt", a, sizeof a)) { setName(r + 0x230, want); rebuild = 1; }
+          if (findPaint(base, P_PROT, L_PROT, prot, want, "%srider\\protections\\%s\\paints\\%s.pnt", a, sizeof a)) {
+            setName(r + 0x230, want); rebuild = 1;
+            if (!strstr(kinds, "protector") && strlen(kinds) + 20 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, "protector paint"); }
+          }
           else skipped++;
         }
       }
@@ -1096,6 +1114,10 @@ static void applyLooks(void) {
           painted += repaintGroups(base, dispatch, r, groups);
         }
       }
+    }
+    if (r) {
+      LookStatus *st = lookStatus(L->num, L->bike);
+      if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
     }
     if (at + 160 < sizeof o)
       at += (size_t)sprintf(o + at, "%s{\"num\":%d,\"found\":%s,\"rebuild\":%s,\"repainted\":%d,\"notInstalled\":%d}", first ? "" : ",", L->num, r ? "true" : "false", rebuild ? "true" : "false", painted, skipped);
@@ -1403,23 +1425,23 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
   }
   if (!g_ovOpen) return;
   locked = ovRaceLocked();
-  cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
-  if (g_ovCard >= ncards) g_ovCard = 0;
+  cards = g_ovTab == 1 ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab == 2 ? 0 : g_ovTab == 1 ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+  if (g_ovCard >= ncards) g_ovCard = 0;   /* (Riders tab: no cards, g_ovCard stays 0) */
   ovMouse(&mx, &my);
 
   /* Input (hit areas are from the previous frame; the layout does not move between frames). */
-  if (tab) { g_ovTab = !g_ovTab; g_ovCard = 0; g_ovPicker = -1; }
-  cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+  if (tab) { g_ovTab = (g_ovTab + 1) % 3; g_ovCard = 0; g_ovPicker = -1; }
+  cards = g_ovTab == 1 ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab == 2 ? 0 : g_ovTab == 1 ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
   if (r && !locked) {
     if (g_ovPicker >= 0) {
       int c = g_ovCount[g_ovPicker];
       if (up && c) ovSetValue(base, r, g_ovPicker, (g_ovSel[g_ovPicker] + c - 1) % c);
       if (dn && c) ovSetValue(base, r, g_ovPicker, (g_ovSel[g_ovPicker] + 1) % c);
     } else {
-      if (up) g_ovCard = (g_ovCard + ncards - 1) % ncards;
-      if (dn) g_ovCard = (g_ovCard + 1) % ncards;
+      if (up && ncards) g_ovCard = (g_ovCard + ncards - 1) % ncards;
+      if (dn && ncards) g_ovCard = (g_ovCard + 1) % ncards;
     }
-    if (lt || rt) ovStep(base, r, cards[g_ovCard].row, rt ? 1 : -1);
+    if ((lt || rt) && ncards) ovStep(base, r, cards[g_ovCard].row, rt ? 1 : -1);
     if (en) ovSaveNow(r);
   }
   if (click) {
@@ -1440,7 +1462,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       }
       break;
     }
-    cards = g_ovTab ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
+    cards = g_ovTab == 1 ? OV_BIKE : OV_OUTFIT; ncards = g_ovTab == 2 ? 0 : g_ovTab == 1 ? 1 : (int)(sizeof OV_OUTFIT / sizeof OV_OUTFIT[0]);
   }
   if (g_ovPicker >= 0) {
     int c = g_ovCount[g_ovPicker], s = g_ovSel[g_ovPicker];
@@ -1457,22 +1479,52 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     char line[100];
     int k, groups = 0;
     for (k = 0; k < ncards; k++) if (cards[k].group) groups++;
+    if (g_ovTab == 2) { groups = 1; ncards = g_lookStatusN > 0 ? (g_lookStatusN < 8 ? g_lookStatusN : 8) : 1; }
     y1 = y + groups * 0.030f + ncards * 0.052f + 0.15f;
     ovQuad(x0, y0, x1, y1, 0xE6141418);
     ovBox(x0, y0, x1, y1, 0.0015f, 0x30FFFFFF);
     ovText("CoreMX", x0 + 0.014f, y0 + 0.016f, 0.018f, 0, OV_ACCENT);
     ovText("Rider", x0 + 0.014f, y0 + 0.040f, 0.034f, 0, 0xFFFFFFFF);
     /* Tabs (pills). */
-    for (k = 0; k < 2; k++) {
+    for (k = 0; k < 3; k++) {
       float tx0 = x0 + 0.014f + k * 0.075f, tx1 = tx0 + 0.068f, ty0 = y0 + 0.085f, ty1 = ty0 + 0.034f;
       ovQuad(tx0, ty0, tx1, ty1, k == g_ovTab ? 0xEBFFFFFF : 0x14FFFFFF);
-      ovText(k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFF100D0C : 0xFFD0D0D0);
+      ovText(k == 2 ? "Riders" : k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFF100D0C : 0xFFD0D0D0);
       ovHit(tx0, ty0, tx1, ty1, 1, k);
     }
     /* Close (x). */
     ovText("x", x1 - 0.016f, y0 + 0.014f, 0.022f, 2, 0xFFB0B0B0);
     ovHit(x1 - 0.03f, y0 + 0.008f, x1 - 0.004f, y0 + 0.04f, 5, 0);
-    if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.014f, y, 0.017f, 0, 0xFFB0B0B0);
+    if (g_ovTab == 2) {
+      /* Other CoreMX riders on this server (live looks): liveries and paints are applied at once; a
+       * different helmet, boots, rider or protector waits for the game's rebuild, which happens once
+       * you go to the pits and back to the track. Paints of a changed model wait with it. */
+      int shown = 0;
+      ovText("COREMX RIDERS ON THIS SERVER", x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.030f;
+      if (!g_lookStatusN) ovText("No other CoreMX riders here yet.", x0 + 0.020f, y + 0.010f, 0.016f, 0, 0xFFB0B0B0);
+      for (k = 0; k < g_lookStatusN && shown < 8; k++, shown++) {
+        LookStatus *st = &g_lookStatus[k];
+        unsigned char *vr = 0; int v, waiting;
+        for (v = 0; v < 50; v++) {
+          unsigned char *c = base + 0xF4EE20 + (size_t)v * 0x5B24; char b2[33];
+          if (*(const int *)c != 1 || *(const int *)(c + 0x0C) != st->num) continue;
+          memcpy(b2, c + 0x30, 32); b2[32] = 0;
+          if (_stricmp(b2, st->bike) == 0) { vr = c; break; }
+        }
+        waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
+        if (vr && st->models[0] && !waiting) st->models[0] = 0;   /* the game rebuilt them: done */
+        ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, waiting ? 0x40328CFF : 0x12FFFFFF);
+        sprintf(line, "#%d  %.40s", st->num, st->bike);
+        ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
+        if (!vr) sprintf(line, "Not on track right now");
+        else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
+        else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
+        else sprintf(line, "Up to date");
+        ovText(line, x0 + 0.020f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : 0xFF6CE07A);
+        y += 0.052f;
+      }
+    }
+    else if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.014f, y, 0.017f, 0, 0xFFB0B0B0);
     else for (k = 0; k < ncards; k++) {
       int row = cards[k].row, sel = g_ovSel[row], c = g_ovCount[row], on = k == g_ovCard;
       char cur[33];
@@ -1546,68 +1598,9 @@ static int ownRebuildOk(const unsigned char *base) {
   return ok;
 }
 
-/* ===================== Bike change on a server (test): F9 in the pits =====================
- * MX Bikes changes bike on a server through its own chooser: Join on the multiplayer pits page
- * (RVA 0xBA93E) checks the selected bike against the server's rules and, if it is not allowed,
- * opens `chat/home/bike_choose` with RVA 0xEC330(path, 5). The chooser lists the bikes the server
- * allows; picking one and joining sends the change to the server, which tells every rider (bike,
- * physics, sound). F9 opens that same chooser from the pits, the same way, so you can change bike
- * without your current one being refused. Online sessions only, not on track; checked against this
- * game build's bytes. Result: mxbm_bike_result.json. Notes: plugin/LIVE_GEAR_NOTES.md section 11. */
-static const unsigned char SIG_OPEN_PAGE[16] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x83, 0x3d, 0x6b, 0x36, 0x3e, 0x00, 0x01, 0x8b, 0xda, 0x7d };
-static void bikeChooserResult(const char *state) {
-  char o[200]; sprintf(o, "{\"v\":1,\"at\":%llu,\"state\":\"%s\"}", nowMs(), state); writeSmall("mxbm_bike_result.json", o);
-}
-static void openBikeChooser(void) {
-  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
-  if (!S.inEvent || !S.haveServer) { bikeChooserResult("not on a server"); return; }
-  if (S.onTrack) { bikeChooserResult("on track: go back to the pits"); return; }
-  if (memcmp(base + 0xEC330, SIG_OPEN_PAGE, sizeof SIG_OPEN_PAGE) != 0 || fnv(base + 0xBA9FB, 0xBAA0C - 0xBA9FB) != 0x8d3066d7u) { bikeChooserResult("game build differs"); return; }
-  g_gameCallThread = GetCurrentThreadId();
-  ((int (*)(const char *, int))(void *)(base + 0xEC330))((const char *)(base + 0x33E1A8), 5);  /* the game's own "chat/home/bike_choose" */
-  g_gameCallThread = 0;
-  bikeChooserResult("opened");
-}
-/* F10: send your current selection to the server, the way the pits page's Join does. Join (event 9
- * "control clicked" on the multiplayer pits page handler RVA 0xB98D0 with "ID_JOIN") checks the
- * selected bike against the server's rules (opening the chooser if it is not allowed), builds your
- * entry (name, race number, bike, livery, rider, helmet, paints, boots ... 0x2AC bytes) and hands it
- * to engine command 0x365, whose handler RVA 0x2A4640 sends network message 0x0F = CHANGEREQUEST.
- * The server answers (CHANGEANSWER) and tells everyone (CHANGEINFO / CHANGECOMPLETE). The pits page
- * shows Join only before you ride; F10 presses it for you after you change your selection with F9.
- * Online sessions only, in the pits; checked against this game build's bytes. */
-static const unsigned char SIG_PIT_HANDLER[16] = { 0x40, 0x53, 0x57, 0x41, 0x55, 0x41, 0x56, 0x48, 0x81, 0xec, 0x48, 0x09, 0x00, 0x00, 0x48, 0x8b };
-static void joinWithSelection(void) {
-  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
-  if (!S.inEvent || !S.haveServer) { bikeChooserResult("join: not on a server"); return; }
-  if (S.onTrack) { bikeChooserResult("join: on track, go back to the pits"); return; }
-  if (memcmp(base + 0xB98D0, SIG_PIT_HANDLER, sizeof SIG_PIT_HANDLER) != 0 || fnv(base + 0xBA866, 0xBA93E - 0xBA866) != 0x2fea694eu ||
-      fnv(base + 0xBA93E, 0xBAD4E - 0xBA93E) != 0x1af4c655u || fnv(base + 0x2A4640, 0x2A46E4 - 0x2A4640) != 0x7b5b3fbcu) { bikeChooserResult("join: game build differs"); return; }
-  g_gameCallThread = GetCurrentThreadId();
-  ((int (*)(int, int, int, const char *))(void *)(base + 0xB98D0))(0, 9, 0, (const char *)(base + 0x33D780));  /* the game's own "ID_JOIN" */
-  g_gameCallThread = 0;
-  bikeChooserResult("join: sent");
-}
-
-/* F9 / F10, read every 30 ms while the game window is in front (Draw() does not run in the pits). */
-static DWORD WINAPI keyThread(LPVOID unused) {
-  int was9 = 0, was10 = 0;
-  (void)unused;
-  while (!g_srvStop) {
-    int now9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0, now10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-    if (now9 && !was9 && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 16);
-    if (now10 && !was10 && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 32);
-    was9 = now9; was10 = now10;
-    Sleep(30);
-  }
-  return 0;
-}
-
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
-  if (work & 16) openBikeChooser();
-  if (work & 32) joinWithSelection();
   if (work & 1) runPaintTest();
   if (work & 2) applyLooks();
   if (work & 8) {
@@ -1664,12 +1657,11 @@ static void serverListStart(void) {
   if (memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0 && memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) != 0) return;
   g_srvStop = 0;
   g_srvThread = CreateThread(NULL, 0, serverListThread, NULL, 0, NULL);
-  g_keyThread = CreateThread(NULL, 0, keyThread, NULL, 0, NULL);
 }
 static void serverListStop(void) {
   InterlockedExchange(&g_srvStop, 1);
   if (g_srvThread) { WaitForSingleObject(g_srvThread, 2000); CloseHandle(g_srvThread); g_srvThread = 0; }
-  if (g_keyThread) { WaitForSingleObject(g_keyThread, 2000); CloseHandle(g_keyThread); g_keyThread = 0; }
+
 }
 
 static void hookStart(const char *dir) {
