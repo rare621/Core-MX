@@ -102,4 +102,18 @@ function findGameExe(installDir) {
   } catch { return null; }
 }
 
-module.exports = { steamRoot, detectGameUserDir, userDirScore, userDirCandidates, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };
+// MX Bikes can keep mods in another folder: global.ini [mods] folder=<path>. Returns that absolute
+// path, or '' when the game uses its default (mods next to the profiles).
+function modsFolderFromGlobalIni(text) {
+  let section = '';
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const head = line.match(/^\[(.+)\]$/);
+    if (head) { section = head[1].trim().toLowerCase(); continue; }
+    const m = section === 'mods' && line.match(/^folder\s*=\s*(.*)$/i);
+    if (m) { const value = m[1].trim().replace(/^"(.*)"$/, '$1'); return /^([a-z]:[\\/]|\\\\)/i.test(value) ? value : ''; }
+  }
+  return '';
+}
+
+module.exports = { modsFolderFromGlobalIni, steamRoot, detectGameUserDir, userDirScore, userDirCandidates, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };

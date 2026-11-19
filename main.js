@@ -239,8 +239,27 @@ function gameDataDir() {
   return dir;
 }
 function profUserDir() { return process.env.MXB_PROFILES_ROOT || gameDataDir(); }
-function modsDir() { return path.join(userDir(), 'mods'); }
-function disabledDir() { return path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
+// The mods folder MX Bikes really reads: its own global.ini [mods] folder= when set (and present),
+// else the mods folder next to the folder chosen in Settings. Installs, friend and server sync and
+// the library all use it, so CoreMX and the game can't look at two different folders.
+let gameModsCache = { key: '', dir: '' };
+function gameModsFolder() {
+  const data = gameDataDir();
+  const key = data + '|' + Math.floor(Date.now() / 15000);
+  if (gameModsCache.key === key) return gameModsCache.dir;
+  let dir = '';
+  if (!process.env.MXB_USER_DIR) {
+    try {
+      const folder = paths.modsFolderFromGlobalIni(fs.readFileSync(path.join(data, 'global.ini'), 'latin1'));
+      if (folder && fs.statSync(folder).isDirectory()) dir = folder;
+    } catch {}
+  }
+  gameModsCache = { key, dir };
+  return dir;
+}
+function modsDir() { return gameModsFolder() || path.join(userDir(), 'mods'); }
+// Disabled mods sit next to the mods folder (same drive, so moving them is a rename).
+function disabledDir() { const game = gameModsFolder(); return game ? path.join(path.dirname(game), 'mods_disabled (MX Bikes Manager)') : path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
 // Older CoreMX versions installed a FrostMod build for server addresses; the CoreMX plugin
 // does that now, so remove that build (only it, by checksum) once the game is closed.
 let frostCleanup = null;

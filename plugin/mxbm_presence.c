@@ -1084,6 +1084,7 @@ static void applyLooks(void) {
     const Look *L = &g_looksWork[i];
     unsigned char *r = 0; int s, rebuild = 0, painted = 0, skipped = 0;
     char kinds[64] = "";   /* models (and protector paint) waiting for the rebuild */
+    char missing[240] = "";   /* "helmetpaints: name; ..." for mxbm_looks_result.json */
     char nm[33];
     for (s = 0; s < 50; s++) {
       unsigned char *c = base + 0xF4EE20 + (size_t)s * 0x5B24;
@@ -1106,7 +1107,9 @@ static void applyLooks(void) {
         if (!want[0] || _stricmp(nm, none ? "" : want) == 0) continue;
         if (!none && modelIndex(base, *MODEL_L[m], want) < 0) {
           static const char *const LIST_KIND[4] = { "helmets", "boots", NULL, "protections" };   /* rider models are not reloaded */
-          wantReload(needReload, sizeof needReload, LIST_KIND[m], want); skipped++; continue;
+          wantReload(needReload, sizeof needReload, LIST_KIND[m], want); skipped++;
+          if (strlen(missing) + strlen(want) + 16 < sizeof missing) sprintf(missing + strlen(missing), "%s%s: %s", missing[0] ? "; " : "", LIST_KIND[m] ? LIST_KIND[m] : "riders", want);
+          continue;
         }
         setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1;
         if (strlen(kinds) + 12 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, MODEL_NAME[m]); }
@@ -1120,7 +1123,10 @@ static void applyLooks(void) {
             setName(r + 0x230, want); rebuild = 1;
             if (!strstr(kinds, "protector") && strlen(kinds) + 20 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, "protector paint"); }
           }
-          else { wantReload(needReload, sizeof needReload, "protectionpaints", want); skipped++; }
+          else {
+            wantReload(needReload, sizeof needReload, "protectionpaints", want); skipped++;
+            if (strlen(missing) + strlen(want) + 22 < sizeof missing) sprintf(missing + strlen(missing), "%sprotectionpaints: %s", missing[0] ? "; " : "", want);
+          }
         }
       }
       /* Paints: written only if installed for the (new) model; groups to repaint. */
@@ -1143,7 +1149,9 @@ static void applyLooks(void) {
           }
           if (!ok) {
             static const char *const PAINT_KIND[6] = { "bikepaints", "helmetpaints", "helmetpaints", "riderpaints", "riderpaints", "bootpaints" };
-            wantReload(needReload, sizeof needReload, PAINT_KIND[m], want); skipped++; continue;
+            wantReload(needReload, sizeof needReload, PAINT_KIND[m], want); skipped++;
+            if (strlen(missing) + strlen(want) + 16 < sizeof missing) sprintf(missing + strlen(missing), "%s%s: %s", missing[0] ? "; " : "", PAINT_KIND[m], want);
+            continue;
           }
           setName(r + P_OFF[m], want); groups |= P_GROUP[m];
         }
@@ -1161,7 +1169,10 @@ static void applyLooks(void) {
       if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
     }
     if (at + 160 < sizeof o)
-      at += (size_t)sprintf(o + at, "%s{\"num\":%d,\"found\":%s,\"rebuild\":%s,\"repainted\":%d,\"notInstalled\":%d}", first ? "" : ",", L->num, r ? "true" : "false", rebuild ? "true" : "false", painted, skipped);
+    {
+      at += (size_t)sprintf(o + at, "%s{\"num\":%d,\"found\":%s,\"rebuild\":%s,\"repainted\":%d,\"notInstalled\":%d,\"missing\":", first ? "" : ",", L->num, r ? "true" : "false", rebuild ? "true" : "false", painted, skipped);
+      at = jstr(o, at, missing, sizeof o - 64); o[at++] = '}';
+    }
     first = 0;
   }
   /* Lists to reload for names that were missing; the next pass (5 s) applies them. */
