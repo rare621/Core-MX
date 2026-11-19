@@ -6,6 +6,6 @@ $serverSource = Get-Content -LiteralPath (Join-Path $projectDir 'server\mxbm-ser
 $versionMatch = [regex]::Match($serverSource, 'const VERSION = (\d+);')
 if (-not $versionMatch.Success) { throw 'Could not read online service version' }
 $archiveName = "CoreMX-server-v$($versionMatch.Groups[1].Value).zip"
-$serverFiles = @('mxbm-server.js', 'cache-cleanup.js', 'coremx-website-proxy.js', 'start-server.cmd', 'open-firewall.cmd', 'README.md') | ForEach-Object { Join-Path $projectDir "server\$_" }
+$serverFiles = @('mxbm-server.js', 'cache-cleanup.js', 'r2.js', 'r2.example.json', 'coremx-website-proxy.js', 'start-server.cmd', 'open-firewall.cmd', 'README.md') | ForEach-Object { Join-Path $projectDir "server\$_" }
 Compress-Archive -LiteralPath $serverFiles -DestinationPath (Join-Path $outputDir $archiveName) -Force
 Write-Output 'Packaged the online service (source and launchers only; no accounts or shared files)'

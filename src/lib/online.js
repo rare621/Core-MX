@@ -137,6 +137,20 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   }
   // Paint files: raw bytes by SHA-256.
   async function upload(sha, buf) {
+    // Newer services hand out a link to upload straight to cloud storage (R2), so the file doesn't
+    // travel through the service PC's connection. Older services answer 404 here: upload as before.
+    const ask = await request(`/v1/files/${sha}/upload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) });
+    const grant = ask.ok ? await ask.json().catch(() => ({})) : null;
+    if (!ask.ok && ask.status !== 404) throw new Error(((await ask.json().catch(() => ({}))).error) || `Upload failed (${ask.status})`);
+    if (grant && grant.existed) return;
+    if (grant && grant.url) {
+      const put = await fetch(grant.url, { method: 'PUT', body: buf, signal: AbortSignal.timeout(300000) })
+        .catch((e) => { throw new Error(`Upload failed (${e.cause ? e.cause.code || e.cause.message : e.message})`); });
+      if (!put.ok) throw new Error(`Upload failed (${put.status})`);
+      const done = await request(`/v1/files/${sha}/uploaded`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120000) });
+      if (!done.ok) { const d = await done.json().catch(() => ({})); throw new Error(d.error || `Upload check failed (${done.status})`); }
+      return;
+    }
     const res = await request(`/v1/files/${sha}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buf, signal: AbortSignal.timeout(120000) });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Upload failed (${res.status})`); }
   }

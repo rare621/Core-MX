@@ -13,11 +13,29 @@ Powers **Live servers** (every server an app user rides on, with its track and r
 
 State is saved next to the script (`mxbm-data.json`, plus paint files in `mxbm-files\`), so it survives restarts.
 On first start, the server also creates `admin.key` next to `mxbm-data.json`. Keep it private and back it up; it is needed to unlock the Admin tab in the app. You can alternatively supply `MXBM_ADMIN_KEY` as a server environment variable.
-Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the paint storage cap (default 4096 MB).
+Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the synced file storage cap (default 4096 MB, or 102400 MB with R2).
 
 ## Update an existing server
 
-Stop the server window, then copy **mxbm-server.js** and **cache-cleanup.js** from the new release ZIP into your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json**, **admin.key** (if present), and **mxbm-files** where they are: those contain the accounts, admin credential, and shared files. No account reset or port-forwarding change is needed.
+Stop the server window, then copy **mxbm-server.js**, **cache-cleanup.js** and **r2.js** from the new release ZIP into your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json**, **admin.key** (if present), and **mxbm-files** where they are: those contain the accounts, admin credential, and shared files. No account reset or port-forwarding change is needed.
+
+## Store synced files in Cloudflare R2 (recommended)
+
+By default, every paint and gear model riders share is stored on this PC and downloaded from it, which uses this PC's upload speed for every download. With R2, files are uploaded and downloaded straight to and from Cloudflare R2 instead. This PC only hands out short-lived links and checks each upload. R2 doesn't charge for downloads, and the first 10 GB of storage each month is free.
+
+1. In the Cloudflare dashboard, open **Storage & databases → R2**, add the R2 subscription, and create a private bucket (for example `coremx-sync`). Leave public access off.
+2. Under **Manage API tokens**, create an **Account API token** with **Object Read & Write**, limited to that bucket. Copy the **Access Key ID**, **Secret Access Key** and your **Account ID** (shown with "Use the following credentials for S3 clients").
+3. Copy **r2.example.json** to **r2.json** next to `mxbm-data.json`, and fill in the four values. Keep this file private: it is in `.gitignore`, and never share or upload it.
+4. Restart **start-server.cmd**. The window says `files in R2 bucket coremx-sync`, and `/v1/health` lists `r2-files`.
+
+What happens then:
+
+- Files already stored on this PC are moved up to R2 one at a time, then deleted here.
+- New uploads go straight to R2. The service reads each upload back and checks that it matches its hash, belongs to the uploader's equipped loadout and is a real paint or model; anything else is deleted from R2.
+- Downloads get a link to R2 that works for 5 minutes. Older app versions follow it too.
+- A file in R2 that nobody has equipped for a day is deleted. Files someone has equipped are always kept; if a rider equips an old paint again, the app uploads it again by itself.
+- The storage safety cap (`--maxstore`) is 100 GB with R2 (4 GB without). Only equipped files count, so normal use stays far below it. The service window warns at 80% full. At most, 100 GB costs about $1.35 a month in R2.
+- Without `r2.json`, everything works as before. A broken `r2.json` stops the service with a clear error instead of quietly falling back.
 
 ## Announcements
 
