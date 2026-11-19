@@ -4,6 +4,7 @@ const online = require('../src/lib/online');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 function fixture(overrides = {}) {
   let config = { url: 'http://192.168.0.38:60000', token: 'fixture-token', id: 'fixture-account', paintSync: false };
@@ -24,6 +25,38 @@ test('presence heartbeat exposes the active manager count', async (t) => {
   const { client } = fixture();
   await client.refresh();
   assert.equal(client.status().service.activeUsers, 7);
+});
+
+test('Friends refresh notices new shared gear before automatic download and rechecks local files on demand', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-refresh-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const makeItem = (name, bytes) => ({ slot: 'suitPaint', label: name, value: name, rider: 'default_mx',
+    path: `rider/riders/default_mx/paints/${name}.pnt`, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), size: bytes.length, needs: [] });
+  const first = makeItem('First', Buffer.from('first paint'));
+  const next = makeItem('Next', Buffer.from('next paint'));
+  let items = [first], notices = 0, requests = 0;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    requests++;
+    assert.match(url, /\/v1\/loadouts$/);
+    return new Response(JSON.stringify({ loadouts: [{ id: 'friend', name: 'Friend', bike: 'Fixture', items, equipped: [], unavailable: [] }] }));
+  });
+  const cfg = { url: 'https://example.test', token: 'fixture-token', received: {} };
+  const { client } = fixture({
+    store: { get: (key) => key === 'online' ? cfg : key === 'friends' ? [{ code: 'friend' }] : undefined },
+    modsDir: () => root, haveMod: async () => true, onChange: () => { notices++; },
+  });
+  assert.equal((await client.refreshFriendGear())[0].items[0].state, 'ready');
+  await client.refreshFriendGear();
+  assert.equal(notices, 1, 'unchanged gear does not redraw the Friends cards');
+  items = [first, next];
+  assert.equal((await client.refreshFriendGear())[0].items.length, 2);
+  assert.equal(client.status().paintSync.friends[0].items[1].state, 'ready');
+  assert.equal(notices, 2);
+  await fs.mkdir(path.join(root, 'rider/riders/default_mx/paints'), { recursive: true });
+  await fs.writeFile(path.join(root, 'rider/riders/default_mx/paints/Next.pnt'), 'next paint');
+  assert.equal((await client.refreshFriendGear(true))[0].items[1].state, 'have');
+  assert.equal(notices, 3);
+  assert.equal(requests, 4);
 });
 
 test('moving to the public alias keeps the account without registering again', async (t) => {

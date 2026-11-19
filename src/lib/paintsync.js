@@ -13,7 +13,8 @@ const tyres = require('./tyres');
 const layout = require('./rider-layout');
 const { withLocalPreview } = require('./assetread');
 const PAID_MESSAGE = 'Paid mod — not installing.';
-const syncError = (e) => e.code === 'MXBM_ACCOUNT_BOUND' ? PAID_MESSAGE : e.message;
+const ACCOUNT_BOUND_MESSAGE = 'This file is tied to your account. Your friend needs their own copy.';
+const syncError = (e) => e.code === 'MXBM_ACCOUNT_BOUND' ? ACCOUNT_BOUND_MESSAGE : e.message;
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
 const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { return false; } };
@@ -102,10 +103,8 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
   return { bike, items, unavailable, equipped };
 }
 
-// Free MXB Mods posts the player installed, by file: an item that can't be copied to friends (too
-// large, or locked by its creator) is shared as "install it from this post" instead, with the
-// download that was used and the file's name, so the friend's CoreMX can install it the same way.
-// Shop installs never (their files are personal to the buyer).
+// Keep the MXB Mods page for a file that genuinely cannot be synced, so the
+// recipient can choose how to get it. Shop installs are personal to the buyer.
 function modSources(installs) {
   const idx = [];
   for (const r of Object.values(installs || {})) {
@@ -125,11 +124,15 @@ function modSources(installs) {
     return null;
   };
 }
-const SOURCE_MESSAGE = 'Can\'t be copied (locked by its creator or too large) - installs from MXB Mods';
+const SOURCE_MESSAGE = 'Could not sync this file. Open its MXB Mods page to install it manually.';
 
 async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, sourceFor = () => null, onProgress = () => {} }) {
   const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths, stockPkz);
-  outfit.unavailable = outfit.unavailable.map(({ files, ...u }) => { const source = sourceFor(files || []); return source ? { ...u, error: SOURCE_MESSAGE, source } : u; });
+  outfit.unavailable = outfit.unavailable.map(({ files, ...u }) => {
+    if (u.error === PAID_MESSAGE) return u;
+    const source = sourceFor(files || []);
+    return source ? { ...u, error: SOURCE_MESSAGE, source } : u;
+  });
   if (appearance) outfit.unavailable.push(appearance);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
@@ -196,9 +199,10 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
     const unavailable = [];
     for (const entry of lo.unavailable || []) {
       const paid = /paid|store-protected/i.test(entry.error || '');
+      const accountBound = /tied to your account|account-bound/i.test(entry.error || '');
       let installed = false;
       const name = current[entry.slot], rider = current.rider || 'default_mx';
-      if (paid && gear.validName(name)) {
+      if ((paid || accountBound) && gear.validName(name)) {
         if (['rider', 'helmet', 'boots', 'protection'].includes(entry.slot)) {
           installed = await gear.hasModel({ modsDir, rider }, { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' }[entry.slot], name);
         } else if (/Paint$/.test(entry.slot) && entry.slot !== 'bikePaint') {

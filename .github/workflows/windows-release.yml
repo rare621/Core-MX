@@ -35,7 +35,7 @@ jobs:
           path: |
             dist/CoreMX-Setup-*.exe
             dist/SHA256SUMS.txt
-            dist/mxbm-online-service.zip
+            dist/CoreMX-server-v*.zip
             dist/latest.yml
           if-no-files-found: error
           retention-days: 14
@@ -49,5 +49,8 @@ jobs:
           if ($LASTEXITCODE -eq 0) { Write-Output 'Release already exists; leaving its assets unchanged.'; exit 0 }
           $installers = @(Get-ChildItem dist/CoreMX-Setup-*.exe)
           if ($installers.Count -ne 1) { throw "Expected exactly one CoreMX installer; found $($installers.Count)" }
-          gh release create $env:GITHUB_REF_NAME $installers[0].FullName dist/mxbm-online-service.zip dist/SHA256SUMS.txt dist/latest.yml --verify-tag --title "CoreMX $env:GITHUB_REF_NAME" --notes-file build/release-notes.md
+          $serverVersion = [regex]::Match((Get-Content server/mxbm-server.js -Raw), 'const VERSION = (\d+);').Groups[1].Value
+          $serverArchive = "dist/CoreMX-server-v$serverVersion.zip"
+          if (-not (Test-Path $serverArchive)) { throw "Missing $serverArchive" }
+          gh release create $env:GITHUB_REF_NAME $installers[0].FullName $serverArchive dist/SHA256SUMS.txt dist/latest.yml --verify-tag --title "CoreMX $env:GITHUB_REF_NAME" --notes-file build/release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }

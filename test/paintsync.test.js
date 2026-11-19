@@ -47,6 +47,43 @@ test('equipped sync includes the helmet model and chosen paints, excludes unused
   assert.ok(outfit.items.every((it) => !it.label.includes('Unused')));
 });
 
+test('a free sealed helmet and its selected paint use normal friend sync even when the MXB Mods source is known', async (t) => {
+  const f = await fixture(t);
+  const freePackage = sealed(zip({
+    'Helmet/gfx.cfg': 'model = helmet.hrc',
+    'Helmet/helmet.edf': model('helmet'),
+    'Helmet/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}',
+    'Helmet/paints/Active.pnt': f.helmetPaint,
+    'Helmet/paints/Unused.pnt': paint('helmet', 240),
+  }), true);
+  await f.write(f.source, 'rider/helmets/Helmet.pkz', freePackage);
+  const uploaded = [];
+  const shared = await sync.share({
+    call: async (_method, _route, payload) => ({ missing: uploaded.length ? [] : payload.items.map((it) => it.sha256) }),
+    upload: async (hash, bytes) => uploaded.push({ hash, bytes }),
+    modsDir: f.source, prof: f.prof, bike: 'Fixture',
+    sourceFor: () => ({ postId: 123, link: 'https://mxb-mods.com/free-helmet/' }),
+  });
+  assert.deepEqual(shared.unavailable, []);
+  assert.ok(shared.items.some((it) => it.slot === 'helmet'));
+  assert.ok(shared.items.some((it) => it.slot === 'helmetPaint'));
+  assert.equal(uploaded.length, shared.items.length);
+  assert.deepEqual(uploaded.find((it) => it.hash === shared.items.find((x) => x.slot === 'helmetPaint').sha256).bytes, f.helmetPaint);
+});
+
+test('a protected helmet remains paid even if a free post claims its file', async (t) => {
+  const f = await fixture(t);
+  const shared = await sync.share({
+    call: async () => ({ missing: [] }), upload: async () => {},
+    modsDir: f.source, prof: f.prof, bike: 'Fixture',
+    protectedPaths: ['rider/helmets/Helmet.pkz'],
+    sourceFor: () => ({ postId: 123, link: 'https://mxb-mods.com/free-helmet/' }),
+  });
+  const helmet = shared.unavailable.find((it) => it.slot === 'helmet');
+  assert.equal(helmet.error, 'Paid mod — not installing.');
+  assert.equal(helmet.source, undefined);
+});
+
 test('store-protected equipped files are reported but never included in friend sync', async (t) => {
   const f = await fixture(t);
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture', ['rider/helmets/Helmet.pkz', 'bikes/Fixture/paints/Livery.pnt']);
@@ -54,15 +91,19 @@ test('store-protected equipped files are reported but never included in friend s
   assert.deepEqual(outfit.unavailable.filter((it) => /Paid mod/.test(it.error)).map((it) => it.slot).sort(), ['bikePaint', 'helmet']);
 });
 
-test('paid models are identified before decoding, and installed recipient models enable their free paints', async (t) => {
+test('account-bound models are identified before decoding, and installed recipient models enable their free paints', async (t) => {
   const f = await fixture(t);
   const bound = sealed(zip({ 'Helmet/helmet.edf': model('helmet') }), true, true);
   await f.write(f.source, 'rider/helmets/Helmet.pkz', bound);
   await f.write(f.source, 'rider/helmets/Helmet/paints/Active.pnt', f.helmetPaint);
   const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
-  assert.equal(outfit.unavailable.find((it) => it.slot === 'helmet').error, 'Paid mod — not installing.');
+  assert.equal(outfit.unavailable.find((it) => it.slot === 'helmet').error, 'This file is tied to your account. Your friend needs their own copy.');
   assert.ok(!outfit.items.some((it) => it.slot === 'helmet'));
   assert.ok(outfit.items.some((it) => it.slot === 'helmetPaint'));
+  const shared = await sync.share({ call: async () => ({ missing: [] }), upload: async () => {},
+    modsDir: f.source, prof: f.prof, bike: 'Fixture',
+    sourceFor: () => ({ postId: 123, link: 'https://mxb-mods.com/free-helmet/' }) });
+  assert.equal(shared.unavailable.find((it) => it.slot === 'helmet').source.postId, 123);
   const options = { call: async () => ({ loadouts: [{ id: 'friend', ...outfit }] }), modsDir: f.receiver,
     have: (n) => n.kind === 'helmet' ? gear.hasModel({ modsDir: f.receiver }, 'helmets', n.name) : true };
   let report = await sync.listFriends(options);
@@ -149,6 +190,12 @@ test('different existing paints are kept, and corrupt or unsafe downloads cannot
 
 test('two real clients exchange only mutual-friend equipped files through the online service', async (t) => {
   const f = await fixture(t);
+  await f.write(f.source, 'rider/helmets/Helmet.pkz', sealed(zip({
+    'Helmet/gfx.cfg': 'model = helmet.hrc',
+    'Helmet/helmet.edf': model('helmet'),
+    'Helmet/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}',
+    'Helmet/paints/Active.pnt': f.helmetPaint,
+  }), true));
   const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(f.root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {

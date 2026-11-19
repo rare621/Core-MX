@@ -28,7 +28,7 @@ function looksText(loadouts, reload, stamp) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null, installFromSource = async () => null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -418,6 +418,35 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const ids = (store.get('friends') || []).map((f) => f.code).filter(Boolean);
     return (await call('POST', '/v1/friends', { ids })).friends || [];
   }
+  // The Friends cards need the latest shared file list even between automatic
+  // downloads. Reinspect local files only when a friend's loadout changes, or
+  // when the player explicitly refreshes after installing something locally.
+  const gearKeys = new Map();
+  const gearKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.slot, it.path, it.sha256]), lo.equipped, lo.unavailable]);
+  async function refreshFriendGear(force = false) {
+    if (!cfg().token) return paint.report || [];
+    const { loadouts = [] } = await call('GET', '/v1/loadouts');
+    const previous = new Map((paint.report || []).map((lo) => [lo.id, lo]));
+    const next = [];
+    let changed = loadouts.length !== previous.size;
+    const seen = new Set();
+    for (const lo of loadouts) {
+      const key = gearKey(lo);
+      const previousKey = gearKeys.get(lo.id);
+      seen.add(lo.id);
+      if (!force && previousKey === key && previous.has(lo.id)) {
+        next.push(previous.get(lo.id));
+        continue;
+      }
+      const [checked] = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: [lo] });
+      next.push(checked);
+      gearKeys.set(lo.id, key);
+      if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
+    }
+    for (const id of gearKeys.keys()) if (!seen.has(id)) gearKeys.delete(id);
+    if (changed) { paint.report = next; onChange(status()); }
+    return changed ? next : paint.report || [];
+  }
   // Share your outfit's paints, then fetch mutual friends' paints you don't have.
   let paintRun = null;
   function syncPaints(friendId) {
@@ -425,11 +454,6 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (paintRun) return friendId ? paintRun.then(() => syncPaints(friendId)) : paintRun;
     paintRun = doSyncPaints(friendId).finally(() => { paintRun = null; });
     return paintRun;
-  }
-  // Gear a rider has from a free MXB Mods post that couldn't be copied: install it from that post.
-  function installSources(results) {
-    if (cfg().paintSync === false) return;
-    for (const lo of results || []) for (const u of lo.unavailable || []) if (u.source && u.state !== 'have') installFromSource(u.source).catch(() => {});
   }
   async function doSyncPaints(friendId) {
     const c = cfg();
@@ -449,7 +473,6 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
-      installSources(results);
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
@@ -463,6 +486,15 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!(store.get('friends') || []).some((f) => f.code === friendId)) throw new Error('Add this rider as a friend first');
     await syncFriends();
     const results = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, friendId });
+    if (results[0]) {
+      const old = (paint.report || []).find((lo) => lo.id === friendId);
+      const viewKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.sha256, it.state, it.needs, it.error]), lo.equipped, lo.unavailable]);
+      if (!old || viewKey(old) !== viewKey(results[0])) {
+        paint.report = [...(paint.report || []).filter((lo) => lo.id !== friendId), results[0]];
+        onChange(status());
+      }
+      gearKeys.delete(friendId);
+    }
     return results[0] || null;
   }
   async function setPaintSync(on) {
@@ -499,7 +531,6 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
-      installSources(results);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
       return results;
@@ -513,9 +544,6 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let looksRun = null, looksKey = '';
   function looksPath() { return path.join(userDir(), 'mxbm_looks.txt'); }
   function clearLooks() { looksKey = ''; fsp.rm(looksPath(), { force: true }).catch(() => {}); }
-  // Gear installed outside a sync (from MXB Mods for a rider): ask the game to reload every gear list.
-  let extraReload = false;
-  function reloadLooks() { extraReload = true; looksKey = ''; return syncLooks(); }
   function syncLooks() {
     if (looksRun) return looksRun;
     looksRun = doSyncLooks().catch((e) => { paint.looksError = e.message; }).finally(() => { looksRun = null; });
@@ -529,10 +557,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
-    installSources(results);
     setCfg({ received });
-    const reload = new Set(extraReload ? Object.values(RELOAD_FOR) : []);
-    extraReload = false;
+    const reload = new Set();
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
     if (reload.size) await onInstalled();
     const key = JSON.stringify(riders.map((r) => [r.num, r.bikeId, r.equipped])) + [...reload].join();
@@ -565,7 +591,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, reloadLooks, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),
