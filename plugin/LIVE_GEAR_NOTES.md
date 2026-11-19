@@ -262,3 +262,27 @@ models.)
 Second attempt (current): in the pits, 0x4E0D0 then 0x45020 called directly with flags 0 and the
 record's names; build state left at 0. **Confirmed in game (offline Testing): new helmet shown
 after a pits visit, both first-person cameras and the external view correct, no crash.**
+
+## 11. Changing bike on a server (research, 2026-11-18)
+
+The game has its own bike change on a server; it is not shown unless needed.
+
+- Network messages (names in a table for logging, RVA 0x3310F4 …): `CHANGE`, `CHANGEINFO`,
+  `CHANGEREQUEST`, `CHANGEANSWER`, `CHANGECOMPLETE`. Server settings include `allowed_bikes` and a
+  category (`CC_wrongcategory`, `cc_classmismatch`, `cc_missingclass`).
+- Pages (registered with engine command 0x104): `idd_multi_pit` → handler RVA 0xB98D0 (the
+  multiplayer pits page), `idd_bikechoose` / `idd_bikechoose2` → handler RVA 0x91570 (the bike
+  chooser). Pages are opened with RVA 0xEC330(path, mode), e.g. `chat/pit/settings`,
+  `chat/pit/setup` (ID_GARAGE), `chat/replay`, `mtrackm` (ID_TOTRACK).
+- **ID_JOIN on the multiplayer pits page** (around RVA 0xBA93E): finds your selected bike
+  (name at RVA 0xE55520, the local selection, same layout as a vehicle record from +0x30) in the
+  bike list and checks it with RVA 0x4730(bike index, 0xE62840, 0xE628A4) (the server's rules). If
+  it is not allowed, the game opens its own chooser: `0xEC330("chat/home/bike_choose", 5)`. If it
+  is, it copies the selection (0xE627E0 …) and joins, which sends the change to the server.
+- The chooser filters by the server's rules itself (FrostMod's notes describe its filtered list:
+  count 0x4C2F18), so allowed classes come for free.
+
+Plan to test: from the pits on a server, have the plugin open the game's own chooser
+(`0xEC330("chat/home/bike_choose", 5)`) on a key or from CoreMX, pick a bike there, then Join,
+and check that the bike (physics, sound) changes and that other riders see it. Risk: opening the
+chooser in a state the game does not expect.
