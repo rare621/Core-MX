@@ -13,7 +13,7 @@ Powers **Live servers** (every server an app user rides on, with its track and r
 
 State is saved next to the script (`mxbm-data.json`, plus paint files in `mxbm-files\`), so it survives restarts.
 On first start, the server also creates `admin.key` next to `mxbm-data.json`. Keep it private and back it up; it is needed to unlock the Admin tab in the app. You can alternatively supply `MXBM_ADMIN_KEY` as a server environment variable.
-Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the paint storage cap (default 4096 MB).
+Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the synced file storage cap (default 4096 MB, or 102400 MB with R2).
 
 ## Update an existing server
 
@@ -33,7 +33,8 @@ What happens then:
 - Files already stored on this PC are moved up to R2 one at a time, then deleted here.
 - New uploads go straight to R2. The service reads each upload back and checks that it matches its hash, belongs to the uploader's equipped loadout and is a real paint or model; anything else is deleted from R2.
 - Downloads get a link to R2 that works for 5 minutes. Older app versions follow it too.
-- A file in R2 that nobody has equipped for a day is deleted. The storage cap (`--maxstore`, default 4 GB) counts R2 files.
+- A file in R2 that nobody has equipped for a day is deleted. Files someone has equipped are always kept; if a rider equips an old paint again, the app uploads it again by itself.
+- The storage safety cap (`--maxstore`) is 100 GB with R2 (4 GB without). Only equipped files count, so normal use stays far below it. The service window warns at 80% full. At most, 100 GB costs about $1.35 a month in R2.
 - Without `r2.json`, everything works as before. A broken `r2.json` stops the service with a clear error instead of quietly falling back.
 
 ## Announcements
