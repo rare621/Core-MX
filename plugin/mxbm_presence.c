@@ -781,6 +781,49 @@ static void testValue(const char *req, const char *key, char *out, size_t cap) {
   }
 }
 
+/* Gear model rebuild test (other riders, your screen only). Vehicle build state at record +0x4EE8:
+ * 0 = built, 2 = remove and rebuild. The game's own loop (RVA 0x6E22F, which tests the state at
+ * RVA 0x6EC21) removes the old look with RVA 0x4E0D0 and builds again from the names in the record,
+ * swapping in defaults for anything not installed. Request keys: riders=1 (list), rebuild=<race
+ * number>, helmet=, helmet_paint=, boots=, boots_paint=. Never your own vehicle. */
+static const unsigned char SIG_REMOVE_LOOK[16] = { 0x40, 0x56, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x91, 0x54, 0x4c, 0x00, 0x00, 0x48, 0x8b, 0xf1, 0xb9 };
+static const unsigned char SIG_STATE_TEST[9] = { 0x41, 0x83, 0xbc, 0x24, 0x18, 0xb1, 0xff, 0xff, 0x00 };
+static void setName(unsigned char *field, const char *value) { size_t n = strlen(value); if (n > 31) n = 31; memset(field, 0, 32); memcpy(field, value, n); }
+static size_t rebuildTest(unsigned char *base, const char *req, int own, char *o, size_t at, size_t cap) {
+  char num[16], helmet[64], hpaint[132], boots[64], bpaint[132]; int target = -1, want, i, first = 1;
+  testValue(req, "rebuild", num, sizeof num); want = num[0] ? atoi(num) : -1;
+  memcpy(o + at, ",\"riders\":[", 11); at += 11;
+  for (i = 0; i < 50; i++) {
+    unsigned char *r = base + 0xF4EE20 + (size_t)i * 0x5B24; char nm[33];
+    if (*(const int *)r != 1) continue;
+    if (want >= 0 && *(const int *)(r + 0x0C) == want && i != own - 1 && target < 0) target = i;
+    if (at + 400 >= cap) continue;
+    at += (size_t)sprintf(o + at, "%s{\"slot\":%d,\"num\":%d,\"own\":%s,\"state\":%d", first ? "" : ",", i, *(const int *)(r + 0x0C), i == own - 1 ? "true" : "false", *(const int *)(r + 0x4EE8));
+    first = 0;
+#define FIELD(key, off) do { memcpy(nm, r + (off), 32); nm[32] = 0; memcpy(o + at, ",\"" key "\":", sizeof(key) + 3); at += sizeof(key) + 3; at = jstr(o, at, nm, cap - 64); } while (0)
+    FIELD("name", 0x10); FIELD("bike", 0x30); FIELD("rider", 0xD0); FIELD("helmet", 0xF0); FIELD("helmet_paint", 0x110); FIELD("boots", 0x1B0); FIELD("boots_paint", 0x1D0);
+#undef FIELD
+    o[at++] = '}';
+  }
+  o[at++] = ']';
+  if (want < 0) return at + (size_t)sprintf(o + at, ",\"reason\":\"listed riders\"}");
+  if (target < 0) return at + (size_t)sprintf(o + at, ",\"reason\":\"no other rider with that number\"}");
+  if (memcmp(base + 0x4E0D0, SIG_REMOVE_LOOK, sizeof SIG_REMOVE_LOOK) != 0 || memcmp(base + 0x6EC21, SIG_STATE_TEST, sizeof SIG_STATE_TEST) != 0)
+    return at + (size_t)sprintf(o + at, ",\"reason\":\"game build differs\"}");
+  testValue(req, "helmet", helmet, sizeof helmet); testValue(req, "helmet_paint", hpaint, sizeof hpaint);
+  testValue(req, "boots", boots, sizeof boots); testValue(req, "boots_paint", bpaint, sizeof bpaint);
+  if (helmet[0] && modelIndex(base, L_HELMETS, helmet) < 0) return at + (size_t)sprintf(o + at, ",\"reason\":\"that helmet is not installed\"}");
+  if (boots[0] && modelIndex(base, L_BOOTS, boots) < 0) return at + (size_t)sprintf(o + at, ",\"reason\":\"those boots are not installed\"}");
+  {
+    unsigned char *r = base + 0xF4EE20 + (size_t)target * 0x5B24;
+    int before = *(const int *)(r + 0x4EE8);
+    if (helmet[0]) { setName(r + 0xF0, helmet); setName(r + 0x110, hpaint); }
+    if (boots[0]) { setName(r + 0x1B0, boots); setName(r + 0x1D0, bpaint); }
+    *(volatile int *)(r + 0x4EE8) = 2;
+    return at + (size_t)sprintf(o + at, ",\"slot\":%d,\"stateBefore\":%d,\"reason\":\"rebuild requested\"}", target, before);
+  }
+}
+
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
@@ -799,6 +842,8 @@ void mxbm_run_pending(void) {
   if (memcmp(base + RVA_APPLY_LIVERY, SIG_APPLY_LIVERY, sizeof SIG_APPLY_LIVERY) != 0) FAIL("game build differs");
   if (!srvCopy(base + 0xE62710, &own, 4) || own < 1 || own > 64) FAIL("own vehicle not found");
   rec = base + 0xF4EE20 + (size_t)(own - 1) * 0x5B24;
+  testValue(req, "riders", want, sizeof want);
+  if (want[0] || strstr(req, "rebuild=")) { at = rebuildTest(base, req, own, o, at, sizeof o); writeSmall("mxbm_test_result.json", o); return; }
   if (!*(const int *)(rec + 0x274)) FAIL("no model right now");
 #define REC(off) (memcpy(name, rec + (off), 32), name[32] = 0, name)
 #define WANT(key, off) (testValue(req, key, want, sizeof want), want[0] ? want : REC(off))

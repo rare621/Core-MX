@@ -169,10 +169,70 @@ Suit, helmet and boots paths are formatted (`%srider\riders\%s\paints\%s.pnt`,
 `%srider\helmets\%s\paints\%s.pnt`, `%srider\boots\%s\paints\%s.pnt`); which object ids they go
 to is still to map. Plan: send 0x9E ourselves per part, once the ids are mapped.
 
+## 8. Gear model swaps (in progress)
+
+- RVA 0x4CE00 checks `[block + 0x1D0]`: 0 means the rider has no model yet, and it builds one
+  through RVA 0x3F070 (chunk 0x3F225), which sets `[block + 0x1D0] = 1` at the end. Non-zero means
+  the rider exists, and it only repaints (§6b).
+- Engine commands seen while building: 0x2C (open a `gfx.cfg`), 0x2D (load a model part), 0x51
+  (create the rider model, id written to block + 0x1D4), 0x52 / 0x53 / 0x55 (create further models,
+  ids written to the given slot, e.g. 0x53 → block + 0x1E0 helmet), 0x82 / 0x87 (bone setup),
+  0x2E / 0x30 (close the cfg).
+- 0x44950 / 0x44AA0 / 0x44C10 / 0x44D90 / 0x44EC0 / 0x4DE80 and 0x4DD80 send one command (0x5C,
+  0x5D, 0x5E, 0x5F, 0x60 with a value) to every model of a vehicle: visibility / state flags, not
+  deletion. 0x4E090 calls 0x4DE80 for both model sets.
+- Plugin exports are looked up at RVA 0x12A5DA (EventInit → plugin+0x20, EventDeinit +0x28,
+  RunDeinit +0x38, …); following the EventDeinit call should lead to the session-end teardown,
+  which removes every vehicle's models (FrostMod's changelog says it removes riders "the way the
+  game removes them at session end" — to be found and verified here independently).
+
+## 9. Engine commands, delete, and the game's own rebuild (found 2026-11-18)
+
+- The UI/engine pointer (RVA 0x566C48 → RVA 0x120CC0) is one switch over command ids 0..0x3CA;
+  jump table at RVA 0x1280B0 (int32 offsets from the image base). Command → handler, for example:
+  0x2C → 0x1569F0, 0x2D → 0x156EB0, 0x51 → 0x226910, 0x52 → 0x226860, 0x53 → 0x226C10,
+  0x55 → 0x2198F0, 0x5C → 0x219590, 0x9E → 0x2190D0, 0x3B0 → 0x12AA80 (calls every plugin's
+  EventDeinit). Plugins: array pointer RVA 0x565CC0, count RVA 0x565CB8, stride 0x118
+  (EventInit +0x20, EventDeinit +0x28).
+- **0x5C deletes a model.** The create handler 0x226860 (command 0x52) calls the 0x5C handler
+  0x219590 to clean up when creating fails; 0x219590 is the only user of the object manager's
+  remove helper 0x15C3F0 (object manager at RVA 0x584870).
+- **RVA 0x44950(block)** sends 0x5C to every model of one model set: bike parts (+0x00 … +0x70)
+  and rider parts (+0x1D4, +0x1D8, +0x1DC, +0x1E0, +0x1E4, +0x1F4, +0x1F8).
+- **RVA 0x4E0D0(block = record + 0x274)** removes a vehicle's whole look: extra models
+  (+0x4C54 … +0x4C70, 0x5C), the first-person set (block + 0x3C4) and the outside set (0x44950),
+  plus other resources (+0x780 … +0x78C). Ten callers, including session-end paths.
+- **The game rebuilds by itself.** Vehicle build state at record + 0x4EE8: 0 = built, 2 / 3 =
+  build pending (set by the vehicle setup 0x5E744 when a build is postponed, e.g. while riding).
+  RVA 0x6E22F walks all 50 slots (r12 = 0xF53D08 + i * 0x5B24 = &state): for a slot in use with
+  state ≠ 0 it builds; with state 2 it first calls 0x4E0D0(record + 0x274) and then the builder
+  0x4D8C0 with the names from the record (rider model, helmet, boots resolved through 0x1C000,
+  0x18220, 0x19FD0 with defaults for missing ones). 0x6E22F is reached from the page callback
+  dispatcher 0x275A0 (via 0x6E1D0), i.e. it runs for some game screen, likely the pits.
+
+**Rebuild plan (to test):** on the game's thread, while in the pits, write the new gear names into
+another rider's record (helmet +0xF0, boots +0x1B0, rider +0xD0 and their paints), set its
+state +0x4EE8 = 2, and let the game remove and rebuild it. Nothing is sent; it only changes what
+your game draws.
+
+## 9a. CONFIRMED: live gear model swap on another rider (2026-11-18, server "Balls", 42 riders)
+
+The plugin test wrote helmet `2021_6D_ATR-2_ARMEGA` / paint `6datr2 FXR whiteblue` into rider
+#526's record (+0xF0, +0x110) and set its state +0x4EE8 = 2 while we sat in the pits. The game
+picked it up within 3 seconds (state back to 0) and #526 was seen riding on track with a 6D
+helmet instead of their Alpinestars SM10. No crash. Their own goggles (+0x130) stayed.
+The paint looked white/grey rather than clearly white/blue: either that is the paint, or the game
+used the helmet's default paint; check when building the real feature (the resolver 0x18220 can
+clear the paints).
+
+So 0x6E22F runs while we are in the pits, and a rebuild does not need the rider to pit.
+
 ## Still to find
 
-- Object ids for suit, helmet and boots paints (finish §7).
-- How the game frees a vehicle's objects, for a full rebuild when a gear *model* changes.
+- Whether the rebuild also runs while *we* ride (FrostMod's notes say rider builds are postponed
+  while riding; the vehicle setup sets state 2/3 in that case).
+- Whether the own vehicle uses the same path (it is built with the first-person set via 0x45020).
+- The helmet paint question above.
 - A paint-only re-apply that works while riding (or how to rebuild safely).
 - What else holds list indexes that a reload would invalidate (menu choosers).
 - Where player names live when +0x10 is empty.
