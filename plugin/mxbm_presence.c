@@ -974,7 +974,7 @@ static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
 /* applied[f]: fnv of the look value CoreMX last applied for field f. The game record can already hold
  * the right name (sent over the network) while the rider was drawn with defaults because the files
  * arrived after he was built, so a matching name alone does not mean it is shown. */
-typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; unsigned applied[LOOK_FIELDS_N]; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
+typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; char firstMissing[64]; unsigned applied[LOOK_FIELDS_N]; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
 static LookStatus g_lookStatus[LOOK_MAX];
 static int g_lookStatusN = 0;
 static LookStatus *lookStatus(int num, const char *bike) {
@@ -1178,6 +1178,11 @@ static void applyLooks(void) {
     if (r) {
       if (st && L->name[0]) copy(st->name, L->name, sizeof st->name);
       if (st) st->missing = skipped;
+      if (st) { /* the first missing item, "name" from "helmets: name; ...", for the overlay */
+        const char *c = strchr(missing, ':'); size_t k = 0;
+        if (c) { c++; while (*c == ' ') c++; while (c[k] && c[k] != ';' && k < sizeof st->firstMissing - 1) k++; }
+        memcpy(st->firstMissing, c ? c : "", k); st->firstMissing[k] = 0;
+      }
       if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
     }
     if (at + 160 < sizeof o)
@@ -1597,6 +1602,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
+        else if (st->missing && st->firstMissing[0]) sprintf(line, "Needs %.40s%s (CoreMX gets free gear for you)", st->firstMissing, st->missing > 1 ? " and more" : "");
         else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
         else sprintf(line, "Up to date");

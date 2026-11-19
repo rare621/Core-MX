@@ -508,6 +508,19 @@ function paidModsSummary(items) {
   return `<div class="fr-paid-summary" role="status"><b>Rider has ${missing.length} paid mod${missing.length === 1 ? '' : 's'} — not installing.</b><div>If you own and have installed the matching gear, it is used automatically for this rider. Paid files are not transferred through Sync.</div></div>`;
 }
 
+// What a slot with nothing to sync means: a paint left at Default on a mod model comes with that
+// model; a mod model with no file yet is still being uploaded by the friend's CoreMX.
+function unsharedLabel(slot, equipped) {
+  const value = slot.value && slot.value !== 'Default' ? slot.value : '';
+  const owner = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection', suitPaint: 'rider', glovesPaint: 'rider' }[slot.slot];
+  if (owner && !value) {
+    const model = (equipped || []).find((e) => e.slot === owner)?.value || '';
+    const stock = !model || /^(default|default_mx|default_sm|full|neck|none)$/i.test(model);
+    return stock ? 'Included with the game' : `Comes with the ${owner === 'protection' ? 'protector' : owner === 'rider' ? 'rider model' : owner}`;
+  }
+  if (['helmet', 'boots', 'protection', 'rider'].includes(slot.slot) && value && !/^(default|default_mx|default_sm|full|neck|none)$/i.test(value)) return 'Not uploaded yet — still sharing';
+  return value && /Paint$/.test(slot.slot) ? 'Not uploaded yet — still sharing' : 'Included with the game';
+}
 // MX2OEM_2023_Kawasaki_KX250 -> 2023 Kawasaki KX250
 function prettyBikeId(id) { return String(id || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' '); }
 async function openFriendDetails(friend) {
@@ -552,9 +565,9 @@ async function openFriendDetails(friend) {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
       if (unavailable && unavailable.state !== 'have' && /paid|store-protected/i.test(unavailable.error || '')) return '';
-      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? 'Paid mod — already installed' : unavailable.error : 'Included with the game';
+      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? 'Paid mod — already installed' : unavailable.error : unsharedLabel(slot, outfit.equipped);
       const needs = item && item.needs || [];
-      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
+      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.source ? `<div class="sync-warning">${esc(unavailable.source.title)} <button class="btn btn-sm" data-friend-post="${esc(String(unavailable.source.postId))}">Open on MXB Mods</button></div>` : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
     $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'In a session — the server name appears once they ride out')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(prettyBikeId(outfit.bikeName || outfit.bike || ''))} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
     const list = $('.friend-gear-list', m);
@@ -592,6 +605,8 @@ async function openFriendDetails(friend) {
   $('.modal-body', m).addEventListener('click', (e) => {
     const find = e.target.closest('[data-friend-find]');
     if (find) { m.close(); findMod(find.dataset.friendFind); return; }
+    const post = e.target.closest('[data-friend-post]');
+    if (post) { const src = (outfit?.unavailable || []).find((u) => u.source && String(u.source.postId) === post.dataset.friendPost)?.source; if (src) { m.close(); openPost({ id: src.postId, title: src.title, link: src.link, image: src.image }); } return; }
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     if (e.target.closest('[data-friend-track]')) { m.close(); findFriendTrack(friend, l); }
     if (e.target.closest('[data-friend-modal-join]') && l) {

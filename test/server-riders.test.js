@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', raceNumber: 526, bikeId: 'MX2OEM_2023_Kawasaki_KX250', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 16);
+  assert.equal(health.version, 17);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -38,6 +38,14 @@ test('riders on the same server share gear by plugin report or Steam name match'
   const pr = loadouts.find((l) => l.name === 'PluginRider'), cd = loadouts.find((l) => l.name === 'CaptiveDuck');
   assert.equal(pr.num, 526); assert.equal(pr.bikeId, 'MX2OEM_2023_Kawasaki_KX250');
   assert.equal(cd.num, undefined);
+  // Gear that can't be copied keeps its free MXB Mods post, so the friend's CoreMX can install it from
+  // there; a source pointing anywhere but mxb-mods.com is dropped.
+  await plugin.c('POST', '/v1/loadout', { bike: 'Fixture', items: [], equipped: [], unavailable: [
+    { slot: 'helmet', label: '2024 Astars SM10 EKS', error: 'locked', source: { postId: 12345, title: 'SM10', link: 'https://mxb-mods.com/sm10/', download: 'https://www.mediafire.com/folder/abc/SM10', fileName: '2024 Astars SM10 EKS.pkz' } },
+    { slot: 'boots', label: 'x', error: 'locked', source: { postId: 5, title: 'x', link: 'https://evil.example/x' } }] });
+  const again = (await me.c('POST', '/v1/server-riders', { server: 'test server' })).loadouts.find((l) => l.name === 'PluginRider');
+  assert.deepEqual(again.unavailable[0].source, { postId: 12345, title: 'SM10', link: 'https://mxb-mods.com/sm10/', download: 'https://www.mediafire.com/folder/abc/SM10', fileName: '2024 Astars SM10 EKS.pkz' });
+  assert.equal(again.unavailable[1].source, undefined);
   // Your own gear is never offered back to you, and a server nobody is on returns nothing.
   assert.equal((await plugin.c('POST', '/v1/server-riders', { server: 'Test Server' })).loadouts.some((l) => l.name === 'PluginRider'), false);
   assert.equal((await me.c('POST', '/v1/server-riders', { server: 'Empty Server' })).loadouts.length, 0);
@@ -132,5 +140,5 @@ test('an upload cut off mid-way does not crash the service', async (t) => {
   });
   assert.equal(child.exitCode, null, 'the service is still running');
   const health = await (await fetch(url + '/v1/health')).json();
-  assert.equal(health.version, 16);
+  assert.equal(health.version, 17);
 });

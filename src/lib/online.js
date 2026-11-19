@@ -28,7 +28,7 @@ function looksText(loadouts, reload, stamp) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null, installFromSource = async () => null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -426,6 +426,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     paintRun = doSyncPaints(friendId).finally(() => { paintRun = null; });
     return paintRun;
   }
+  // Gear a rider has from a free MXB Mods post that couldn't be copied: install it from that post.
+  function installSources(results) {
+    if (cfg().paintSync === false) return;
+    for (const lo of results || []) for (const u of lo.unavailable || []) if (u.source && u.state !== 'have') installFromSource(u.source).catch(() => {});
+  }
   async function doSyncPaints(friendId) {
     const c = cfg();
     if (!c.token || c.paintSync === false && !friendId) return status();
@@ -439,11 +444,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // its "current bike" can be another one), so riders on your server can apply it.
       const o = await currentOutfit(current?.inEvent && current.bikeId ? current.bikeId : null);
       if (o) {
-        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, appearance: o.appearance, protectedPaths: o.protectedPaths || [], stockPkz: o.stockPkz || null, onProgress: progress });
+        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, appearance: o.appearance, protectedPaths: o.protectedPaths || [], stockPkz: o.stockPkz || null, sourceFor: o.sourceFor, onProgress: progress });
         paint.shared = shared.items; paint.unavailable = shared.unavailable;
       }
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
+      installSources(results);
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
@@ -493,6 +499,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
+      installSources(results);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
       return results;
@@ -506,6 +513,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let looksRun = null, looksKey = '';
   function looksPath() { return path.join(userDir(), 'mxbm_looks.txt'); }
   function clearLooks() { looksKey = ''; fsp.rm(looksPath(), { force: true }).catch(() => {}); }
+  // Gear installed outside a sync (from MXB Mods for a rider): ask the game to reload every gear list.
+  let extraReload = false;
+  function reloadLooks() { extraReload = true; looksKey = ''; return syncLooks(); }
   function syncLooks() {
     if (looksRun) return looksRun;
     looksRun = doSyncLooks().catch((e) => { paint.looksError = e.message; }).finally(() => { looksRun = null; });
@@ -519,8 +529,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
+    installSources(results);
     setCfg({ received });
-    const reload = new Set();
+    const reload = new Set(extraReload ? Object.values(RELOAD_FOR) : []);
+    extraReload = false;
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
     if (reload.size) await onInstalled();
     const key = JSON.stringify(riders.map((r) => [r.num, r.bikeId, r.equipped])) + [...reload].join();
@@ -553,7 +565,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, reloadLooks, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

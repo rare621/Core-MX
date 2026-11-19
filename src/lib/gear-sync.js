@@ -6,7 +6,7 @@ const path = require('path');
 const yauzl = require('yauzl');
 const { decodeBlob, assertShareableFile } = require('./assetread');
 
-const MAX_FILE = 128 * 1024 * 1024;
+const MAX_FILE = 512 * 1024 * 1024;   // R2 storage; the service refuses more than 100 MB when it has no R2
 const modelFile = (name, kind) => typeof name === 'string' && !/^[\\/]|[\\:\0]/.test(name) && !name.split('/').some((n) => !n || n === '.' || n === '..') && (/\.(edf|hrc|cfg|ini|anm|tga|dds|png|jpe?g|bmp)$/i.test(name) || kind === 'tyres' && /\.tyre$/i.test(name)) && !/(^|\/)(paints|goggles)\//i.test(name);
 
 function zip(files) {
@@ -23,7 +23,7 @@ function zip(files) {
   end.writeUInt32LE(0x06054b50); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
   end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
   const result = Buffer.concat([...local, directory, end]);
-  if (result.length > MAX_FILE) throw new Error('This equipped model exceeds the 128 MB sync limit');
+  if (result.length > MAX_FILE) throw new Error('This equipped model exceeds the 512 MB sync limit');
   return result;
 }
 

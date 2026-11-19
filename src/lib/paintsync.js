@@ -42,7 +42,7 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
       const buf = await modelBundle({ modsDir, rider, kind, name });
       if (!buf) throw new Error('Model files are missing or unreadable');
       items.push({ slot: kind, label: lo.slots.find((s) => s.id === kind).label + ': ' + name, value: name, rider, modelKind: kind, path: target, sha256: sha256(buf), size: buf.length, buf, needs: [] });
-    } catch (e) { unavailable.push({ slot: kind, label: name, error: syncError(e) }); }
+    } catch (e) { unavailable.push({ slot: kind, label: name, error: syncError(e), files: [kind === 'rider' ? 'rider/riders/' + name : 'rider/' + { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind] + '/' + name] }); }
   }
   for (const s of profile.SLOTS.filter((s) => /Paint$/.test(s.id))) {
     const name = c[s.id];
@@ -71,7 +71,14 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
       if (['suitPaint', 'glovesPaint'].includes(s.id) && !defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
       if (protectedItem(target)) unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: PAID_MESSAGE });
       else items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
-    } catch (e) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: syncError(e) }); }
+    } catch (e) {
+      // Where it lives: the paint file, then the model it belongs to (a paint inside a model package).
+      const mk = modelOf[s.id], folder = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[mk];
+      const files = s.id === 'bikePaint' ? [`bikes/${bike}/paints/${name}.pnt`]
+        : ['suitPaint', 'glovesPaint'].includes(s.id) ? [`${prefix}/${s.id === 'suitPaint' ? 'paints' : 'gloves'}/${name}.pnt`, `rider/${s.id === 'suitPaint' ? 'paints' : 'gloves'}/${name}.pnt`]
+        : folder ? [`rider/${folder}/${c[mk] || 'default'}/${s.id === 'gogglesPaint' ? 'goggles' : 'paints'}/${name}.pnt`, `rider/${folder}/${c[mk] || 'default'}`] : [];
+      unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: syncError(e), files });
+    }
   }
   const tyre = await tyres.selected(modsDir, prof, bike, bikeDir);
   for (const name of [...new Set([tyre.selected, tyre.base].filter(gear.validName))]) {
@@ -95,8 +102,34 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
   return { bike, items, unavailable, equipped };
 }
 
-async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, onProgress = () => {} }) {
+// Free MXB Mods posts the player installed, by file: an item that can't be copied to friends (too
+// large, or locked by its creator) is shared as "install it from this post" instead, with the
+// download that was used and the file's name, so the friend's CoreMX can install it the same way.
+// Shop installs never (their files are personal to the buyer).
+function modSources(installs) {
+  const idx = [];
+  for (const r of Object.values(installs || {})) {
+    if (!r || r.shopKey || !Number.isSafeInteger(Number(r.postId)) || Number(r.postId) <= 0 || !/^https:\/\/mxb-mods\.com\//i.test(String(r.link || ''))) continue;
+    const source = { postId: Number(r.postId), title: String(r.title || '').slice(0, 100), link: String(r.link).slice(0, 300),
+      ...(/^https:\/\//i.test(String(r.image || '')) ? { image: String(r.image).slice(0, 300) } : {}),
+      ...(/^https?:\/\//i.test(String(r.source || '')) && String(r.source).length <= 300 ? { download: String(r.source) } : {}) };
+    for (const file of r.files || []) idx.push([String(file).replace(/\\/g, '/').toLowerCase(), source, String(file).replace(/\\/g, '/')]);
+  }
+  return (paths = []) => {
+    for (const p of paths) {
+      const want = String(p).toLowerCase();
+      // A file itself, or a model as a package (name.pkz) or a folder (name/...).
+      const hit = idx.find(([f]) => f === want || f === want + '.pkz' || f.startsWith(want + '/'));
+      if (hit) return { ...hit[1], fileName: hit[2].split('/').pop().slice(0, 120) };
+    }
+    return null;
+  };
+}
+const SOURCE_MESSAGE = 'Can\'t be copied (locked by its creator or too large) - installs from MXB Mods';
+
+async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, sourceFor = () => null, onProgress = () => {} }) {
   const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths, stockPkz);
+  outfit.unavailable = outfit.unavailable.map(({ files, ...u }) => { const source = sourceFor(files || []); return source ? { ...u, error: SOURCE_MESSAGE, source } : u; });
   if (appearance) outfit.unavailable.push(appearance);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
@@ -231,4 +264,4 @@ async function removeReceived(modsDir, received) {
   }
   return n;
 }
-module.exports = { outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };
+module.exports = { modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };
