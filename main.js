@@ -2020,11 +2020,13 @@ app.whenReady().then(async () => {
     modsDir: () => modsDir(),
     ...onlineConfig(),
     // The outfit you're riding: your profile's current bike (what the game will put you on).
-    currentOutfit: async () => {
+    // ridingBike: the bike the game says you are riding in a session (your profile keeps gear per
+    // bike; its "current bike" may be another one). Otherwise the profile's current bike.
+    currentOutfit: async (ridingBike) => {
       const list = await profile.listProfiles(profUserDir());
       if (!list.last) return null;
       const saved = await profile.readProfile(profUserDir(), list.last);
-      const bike = profile.currentBike(saved);
+      const bike = ridingBike && gearAssets.validName(ridingBike) ? ridingBike : profile.currentBike(saved);
       // Changes queued while the game runs (Rider tab or the in-game overlay) are shared with
       // other riders straight away, not only once the game has closed and they are written.
       const pending = bike && (store.get('pendingApply') || {})[`${list.last}|${bike}`];
