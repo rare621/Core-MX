@@ -16,7 +16,7 @@ const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return
 const PORT = Number(arg('port', 60000));
 const DATA = path.resolve(arg('data', path.join(__dirname, 'mxbm-data.json')));
 const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-files')));
-const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
+const MAX_FILE = 512 * 1024 * 1024;             // one equipped paint/model package (R2; Cloudflare caps direct uploads at 100 MB)
 fs.mkdirSync(FILES, { recursive: true });
 // Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
 const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
@@ -31,7 +31,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 16;
+const VERSION = 17;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -417,7 +417,16 @@ const routes = {
       size: Number(it && it.size) || 0, needs: (Array.isArray(it && it.needs) ? it.needs : []).slice(0, 4).map((n) => ({ kind: str(n && n.kind, 20), name: str(n && n.name, 100), rider: str(n && n.rider, 100) })),
     })).filter((it) => /^[a-f0-9]{64}$/.test(it.sha256) && safeRel(it.path) && it.size > 0 && it.size <= MAX_FILE && !!it.modelKind === /\.pkz$/i.test(it.path));
     const equipped = (Array.isArray(body.equipped) ? body.equipped : []).slice(0, 24).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), value: str(it && it.value, 100), state: str(it && it.state, 20) }));
-    const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 24).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200) }));
+    const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 24).map((it) => {
+      const u = { slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200) };
+      // A free MXB Mods post the item can be installed from (it can't be copied: too large or locked).
+      const src = it && it.source;
+      if (src && Number.isSafeInteger(src.postId) && src.postId > 0 && /^https:\/\/mxb-mods\.com\/[^\s"<>]*$/i.test(String(src.link || '')) && String(src.link).length <= 300)
+        u.source = { postId: src.postId, title: str(src.title, 100), link: String(src.link), ...(/^https:\/\/[^\s"<>]+$/i.test(String(src.image || '')) && String(src.image).length <= 300 ? { image: String(src.image) } : {}),
+          ...(/^https?:\/\/[^\s"<>]+$/i.test(String(src.download || '')) && String(src.download).length <= 300 ? { download: String(src.download) } : {}),
+          ...(src.fileName ? { fileName: str(src.fileName, 120) } : {}) };
+      return u;
+    });
     me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };
     save();
     return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256)).map((it) => it.sha256) }];

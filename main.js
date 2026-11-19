@@ -41,6 +41,8 @@ const bike3d = require('./src/lib/bike3d');
 const imageMatch = require('./src/lib/image-match');
 const { filesMatch } = require('./src/lib/file-verify');
 const onlineSvc = require('./src/lib/online');
+const sourceInstall = require('./src/lib/source-install');
+const paintsync = require('./src/lib/paintsync');
 const gearAssets = require('./src/lib/gear-assets');
 const riderPaints = require('./src/lib/rider-paints');
 const installSummary = require('./src/lib/install-summary');
@@ -543,6 +545,28 @@ function newJob(fields) {
   return j;
 }
 
+// Friend or server-rider gear that couldn't be copied but came from a free MXB Mods post (see
+// src/lib/source-install.js): installed in the background like Get Mods. Once per post and file
+// per app run; skipped when that post's file is already installed or a download for it is running.
+const sourceTried = new Set();
+async function installFromSource(source) {
+  const postId = Number(source && source.postId);
+  if (!Number.isSafeInteger(postId) || postId <= 0 || !/^https:\/\/mxb-mods\.com\//i.test(String(source.link || ''))) return null;
+  const want = sourceInstall.baseName(source.fileName || '');
+  const key = `${postId}|${want}`;
+  if (sourceTried.has(key)) return null;
+  const rec = store.get('installs')[postId];
+  if (rec && (!want || (rec.files || []).some((f) => sourceInstall.baseName(path.basename(f)) === want))) return null;
+  if ([...jobs.values()].some((j) => j.postId === postId && !['done', 'error'].includes(j.status))) return null;
+  sourceTried.add(key);
+  const post = await site.post(postId);
+  const target = await sourceInstall.resolveDownload(source, post, { fetchJson: async (url) => (await fetch(url, { signal: AbortSignal.timeout(15000) })).json() });
+  if (!target) return null;
+  const j = newJob({ title: post.title, postId, url: target.url, image: post.image, link: post.link, modified: post.modified, categories: post.categories, categoryNames: post.categoryNames, dependencies: [], requireReview: false, fromFriend: true });
+  runDownload(j);
+  return j.id;
+}
+
 async function runDownload(j) {
   j.completedAt = null;
   j.status = 'downloading'; emitJob(j);
@@ -663,6 +687,8 @@ async function doInstall(j, opts) {
     emitJob(j);
     cleanupStage(j);
     send('library:changed', {});
+    // A friend's gear installed in the background: the running game reloads its gear lists.
+    if (j.fromFriend && online) online.reloadLooks();
   } catch (e) { fail(j, e); }
 }
 
@@ -2042,6 +2068,7 @@ app.whenReady().then(async () => {
     // The outfit you're riding: your profile's current bike (what the game will put you on).
     // ridingBike: the bike the game says you are riding in a session (your profile keeps gear per
     // bike; its "current bike" may be another one). Otherwise the profile's current bike.
+    installFromSource,
     currentOutfit: async (ridingBike) => {
       const list = await profile.listProfiles(profUserDir());
       if (!list.last) return null;
@@ -2057,7 +2084,7 @@ app.whenReady().then(async () => {
       const protectedPaths = Object.values(store.get('installs'))
         .filter((r) => r.shopKey || /mxbikes-shop|mxb-hub/i.test(String(r.link || '')))
         .flatMap((r) => r.files || []);
-      return bike ? { prof, bike, bikeName: bike, protectedPaths, stockPkz: stockRiderPkz(), appearance: bikeSwaps.shared(bike) } : null;
+      return bike ? { prof, bike, bikeName: bike, protectedPaths, stockPkz: stockRiderPkz(), appearance: bikeSwaps.shared(bike), sourceFor: paintsync.modSources(store.get('installs')) } : null;
     },
     resolveServerAddress: async (name) => {
       const matches = [...((await knownServerAddresses()).get(serverNameKey(name)) || [])];
