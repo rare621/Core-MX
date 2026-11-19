@@ -260,4 +260,5 @@ name +0x10, flags. (0x66A27 resolves rider, helmet, boots and +0x250 through 0x1
 models.)
 
 Second attempt (current): in the pits, 0x4E0D0 then 0x45020 called directly with flags 0 and the
-record's names; build state left at 0.
+record's names; build state left at 0. **Confirmed in game (offline Testing): new helmet shown
+after a pits visit, both first-person cameras and the external view correct, no crash.**
