@@ -969,7 +969,7 @@ static FILETIME g_looksMtime;
 static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
 /* What live looks did per rider, for the overlay's Riders tab: models waiting for the game's
  * rebuild (shown once you go to the pits and back to the track) and paints already applied. */
-typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; } LookStatus;
+typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
 static LookStatus g_lookStatus[LOOK_MAX];
 static int g_lookStatusN = 0;
 static LookStatus *lookStatus(int num, const char *bike) {
@@ -1138,6 +1138,7 @@ static void applyLooks(void) {
     if (r) {
       LookStatus *st = lookStatus(L->num, L->bike);
       if (st && L->name[0]) copy(st->name, L->name, sizeof st->name);
+      if (st) st->missing = skipped;
       if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
     }
     if (at + 160 < sizeof o)
@@ -1549,9 +1550,10 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
+        else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
         else sprintf(line, "Up to date");
-        ovText(line, x0 + 0.020f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : 0xFF6CE07A);
+        ovText(line, x0 + 0.020f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : vr && st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
         y += 0.052f;
       }
     }
