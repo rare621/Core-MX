@@ -17,9 +17,21 @@ const PORT = Number(arg('port', 60000));
 const DATA = path.resolve(arg('data', path.join(__dirname, 'mxbm-data.json')));
 const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-files')));
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
-const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 15;
+// Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
+const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
+const R2 = (() => { const c = require('./r2').loadConfig(R2_FILE); return c ? require('./r2').createR2(c) : null; })();
+const R2_GRACE = 24 * 60 * 60 * 1000; // an R2 file nobody wears is deleted after a day
+// All synced files together (MB). Only files someone has equipped are kept, so this is a safety net,
+// not a quota: on this PC's disk 4 GB, in R2 100 GB (1.5 US cents per GB-month past the free 10 GB).
+const MAX_STORE = Number(arg('maxstore', R2 ? 100 * 1024 : 4 * 1024)) * 1024 * 1024;
+let storeWarnedAt = 0;
+function warnStore(size) {
+  if (size < MAX_STORE * 0.8 || Date.now() - storeWarnedAt < 3600e3) return;
+  storeWarnedAt = Date.now();
+  console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
+}
+const VERSION = 16;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -37,11 +49,11 @@ const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {}, announcements: [] }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [], r2: {} }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, announcements: [], ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], r2: {}, ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha) });
@@ -91,7 +103,14 @@ function nameOnList(steamName, riderNames) {
 }
 // A path inside a mods folder that a paint file may be written to: relative, no "..", ends in .pnt.
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => x === '..' || x === '' || x === '.') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+(?:\/(helmets|boots|protections)\/[^/]+)?|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
-function storeSize() { let n = 0; for (const f of fs.readdirSync(FILES)) { try { n += fs.statSync(path.join(FILES, f)).size; } catch {} } return n; }
+function storeSize() {
+  let n = 0;
+  for (const f of fs.readdirSync(FILES)) { try { n += fs.statSync(path.join(FILES, f)).size; } catch {} }
+  for (const sha of Object.keys(db.r2 || {})) if (!fs.existsSync(path.join(FILES, sha))) n += db.r2[sha].size || 0;
+  return n;
+}
+// A synced file is available when it's on this PC or (checked) in R2.
+const haveFile = (sha) => !!(db.r2 && db.r2[sha]) || fs.existsSync(path.join(FILES, sha));
 
 // Only real HTTP status numbers; a connection that is already gone or answered is left alone
 // (an upload cut off mid-way used to pass "ECONNRESET" here and crash the service).
@@ -162,7 +181,7 @@ function presenceView(id) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address'], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // First run of an app: claim a Steam ID and get a token. A claimed ID can't be re-claimed.
   'POST /v1/register': async (req, body) => {
@@ -401,7 +420,7 @@ const routes = {
     const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 24).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200) }));
     me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };
     save();
-    return [200, { ok: true, missing: items.filter((it) => !fs.existsSync(path.join(FILES, it.sha256))).map((it) => it.sha256) }];
+    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256)).map((it) => it.sha256) }];
   },
   // Outfits of mutual friends.
   'GET /v1/loadouts': async (req, body, me) => {
@@ -410,7 +429,7 @@ const routes = {
     for (const id of me.user.friends || []) {
       const u = db.users[id];
       if (!u || !(u.friends || []).includes(me.id) || !u.loadout || u.sharePaints === false) continue;
-      out.push({ id, name: u.name, ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
+      out.push({ id, name: u.name, ...u.loadout, items: u.loadout.items.filter((it) => haveFile(it.sha256)) });
     }
     return [200, { loadouts: out }];
   },
@@ -431,7 +450,7 @@ const routes = {
       const here = !!(p && now - p.at < ONLINE_TTL && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
       const byName = !here && nameOnList(u.name, riderNames);
       if (!here && !byName) continue;
-      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
+      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: u.loadout.items.filter((it) => haveFile(it.sha256)) });
       if (out.length >= 32) break;
     }
     return [200, { loadouts: out }];
@@ -466,6 +485,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const fm = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})$/);
   if (fm) return fileRoute(req, res, fm[1]);
+  const fu = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})\/(upload|uploaded)$/);
+  if (fu && req.method === 'POST') { req.resume(); return (fu[2] === 'upload' ? uploadGrant : uploadCheck)(req, res, fu[1]); }
   const route = routes[`${req.method} ${url.pathname}`];
   if (!route) return send(res, 404, { error: 'not found' });
   try {
@@ -483,6 +504,11 @@ async function fileRoute(req, res, sha) {
   const file = path.join(FILES, sha);
   if (req.method === 'GET' || req.method === 'HEAD') {
     if (!auth(req)) return send(res, 401, { error: 'not signed in' });
+    if (R2 && db.r2[sha]) {
+      // A link that works for 5 minutes. The app's fetch drops its sign-in header when it follows this.
+      res.writeHead(302, { location: R2.getUrl(sha, 300), 'cache-control': 'no-store', 'content-length': 0 });
+      return res.end();
+    }
     if (!fs.existsSync(file)) return send(res, 404, { error: 'no such file' });
     const st = fs.statSync(file);
     res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': st.size, 'cache-control': 'private, max-age=31536000, immutable' });
@@ -496,7 +522,7 @@ async function fileRoute(req, res, sha) {
   }
   if (req.method !== 'PUT') return send(res, 405, { error: 'method not allowed' });
   if (!auth(req)) return send(res, 401, { error: 'not signed in' });
-  if (fs.existsSync(file)) { req.resume(); return send(res, 200, { ok: true, existed: true }); }
+  if (haveFile(sha)) { req.resume(); return send(res, 200, { ok: true, existed: true }); }
   const chunks = []; let n = 0;
   try {
     await new Promise((resolve, reject) => {
@@ -506,16 +532,83 @@ async function fileRoute(req, res, sha) {
   } catch (e) { return send(res, Number.isInteger(e.code) ? e.code : 400, { error: e.message }); }
   const buf = Buffer.concat(chunks);
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha) return send(res, 400, { error: 'file does not match its hash' });
-  const owned = Object.values((auth(req).user.loadout || {}).items || []).find((it) => it.sha256 === sha);
-  if (!owned || owned.size !== buf.length) return send(res, 400, { error: 'file is not in your equipped loadout' });
-  const plainPaint = buf.length >= 108 && buf.toString('latin1', 0, 4) === 'PNT\0' && buf.readUInt32LE(104) <= 256;
-  const sealedPaint = buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL' && buf.readUInt32LE(buf.length - 6) === buf.length - 62;
-  const model = buf.length >= 22 && buf.readUInt32LE(0) === 0x04034b50;
-  if (owned.modelKind ? !model : !plainPaint && !sealedPaint) return send(res, 400, { error: 'not a supported equipped paint or model file' });
-  if (storeSize() + buf.length > MAX_STORE) return send(res, 507, { error: 'the online service is out of paint storage' });
+  const bad = checkFile(auth(req), sha, buf);
+  if (bad) return send(res, bad[0], { error: bad[1] });
+  const size = storeSize(); warnStore(size + buf.length);
+  if (size + buf.length > MAX_STORE) { console.warn('Synced file storage is FULL: uploads are being refused. Raise --maxstore in start-server.cmd.'); return send(res, 507, { error: 'the online service is out of paint storage' }); }
   fs.writeFileSync(file + '.tmp', buf); fs.renameSync(file + '.tmp', file);
   return send(res, 200, { ok: true });
 }
+const ownedItem = (me, sha) => Object.values((me && me.user.loadout || {}).items || []).find((it) => it.sha256 === sha);
+// The bytes must hash to their name, be in the uploader's equipped loadout at that size, and look like an
+// MX Bikes paint (or a model package for model slots). Returns [status, error] or null when fine.
+function checkFile(me, sha, buf) {
+  if (crypto.createHash('sha256').update(buf).digest('hex') !== sha) return [400, 'file does not match its hash'];
+  const owned = ownedItem(me, sha);
+  if (!owned || owned.size !== buf.length) return [400, 'file is not in your equipped loadout'];
+  const plainPaint = buf.length >= 108 && buf.toString('latin1', 0, 4) === 'PNT\0' && buf.readUInt32LE(104) <= 256;
+  const sealedPaint = buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL' && buf.readUInt32LE(buf.length - 6) === buf.length - 62;
+  const model = buf.length >= 22 && buf.readUInt32LE(0) === 0x04034b50;
+  if (owned.modelKind ? !model : !plainPaint && !sealedPaint) return [400, 'not a supported equipped paint or model file'];
+  return null;
+}
+
+// ---------- R2 uploads (app 1.0.42+) ----------
+// Step 1: the app asks for an upload link. { direct: true } = no R2 here, upload to /v1/files as before.
+async function uploadGrant(req, res, sha) {
+  const me = auth(req); if (!me) return send(res, 401, { error: 'not signed in' });
+  if (haveFile(sha)) return send(res, 200, { existed: true });
+  if (!R2) return send(res, 200, { direct: true });
+  const owned = ownedItem(me, sha);
+  if (!owned) return send(res, 400, { error: 'file is not in your equipped loadout' });
+  const size = storeSize(); warnStore(size + owned.size);
+  if (size + owned.size > MAX_STORE) { console.warn('Synced file storage is FULL: uploads are being refused. Raise --maxstore in start-server.cmd.'); return send(res, 507, { error: 'the online service is out of paint storage' }); }
+  return send(res, 200, { url: R2.putUrl(sha, 900), method: 'PUT' });
+}
+// Step 2: after uploading, the app asks the service to check it. Anything that fails is deleted from R2.
+async function uploadCheck(req, res, sha) {
+  const me = auth(req); if (!me) return send(res, 401, { error: 'not signed in' });
+  if (!R2) return send(res, 404, { error: 'not found' });
+  if (db.r2[sha]) return send(res, 200, { ok: true, existed: true });
+  let buf;
+  try { buf = await R2.read(sha, MAX_FILE); } catch (e) { return send(res, 502, { error: e.message }); }
+  if (!buf) return send(res, 404, { error: 'upload not found' });
+  const bad = checkFile(me, sha, buf);
+  if (bad) { R2.remove(sha).catch(() => {}); return send(res, bad[0], { error: bad[1] }); }
+  db.r2[sha] = { size: buf.length, at: Date.now() }; save();
+  return send(res, 200, { ok: true });
+}
+
+// ---------- R2 upkeep ----------
+// Moves files already on this PC up to R2 (one at a time), and deletes R2 files nobody wears for a day.
+let r2Busy = false;
+async function r2Upkeep() {
+  if (!R2 || r2Busy || !cacheCleanupSafe) return;
+  r2Busy = true;
+  try {
+    const live = new Set();
+    for (const u of Object.values(db.users)) if (u.sharePaints !== false) for (const it of (u.loadout && u.loadout.items) || []) live.add(it.sha256);
+    const local = fs.readdirSync(FILES).find((f) => /^[a-f0-9]{64}$/.test(f) && !db.r2[f] && !cacheReaders.has(f) && live.has(f));
+    if (local) {
+      const file = path.join(FILES, local), buf = fs.readFileSync(file);
+      if (crypto.createHash('sha256').update(buf).digest('hex') === local) {
+        await R2.put(local, buf);
+        db.r2[local] = { size: buf.length, at: Date.now() }; save();
+        if (!cacheReaders.has(local)) { try { fs.unlinkSync(file); } catch {} }
+        console.log(`R2: moved ${local.slice(0, 12)}… (${(buf.length / 1048576).toFixed(1)} MB)`);
+      }
+    }
+    for (const [sha, rec] of Object.entries(db.r2)) {
+      if (live.has(sha)) { if (rec.unusedSince) { delete rec.unusedSince; save(); } continue; }
+      if (!rec.unusedSince) { rec.unusedSince = Date.now(); save(); continue; }
+      if (Date.now() - rec.unusedSince < R2_GRACE) continue;
+      await R2.remove(sha); delete db.r2[sha]; save();
+      console.log(`R2: removed unused ${sha.slice(0, 12)}…`);
+    }
+  } catch (e) { console.warn('R2 upkeep:', e.message); }
+  finally { r2Busy = false; }
+}
+if (R2) { setTimeout(r2Upkeep, 5000).unref(); setInterval(r2Upkeep, 30000).unref(); }
 
 server.requestTimeout = 60000;
-server.listen(PORT, () => console.log(`CoreMX online service on port ${server.address().port} (data: ${DATA})`));
+server.listen(PORT, () => console.log(`CoreMX online service on port ${server.address().port} (data: ${DATA})${R2 ? ` · files in R2 bucket ${R2.bucket}` : ''}`));
