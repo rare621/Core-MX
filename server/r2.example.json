@@ -1,0 +1,6 @@
+{
+  "accountId": "paste your 32-character Cloudflare account ID here",
+  "accessKeyId": "paste the R2 Access Key ID here",
+  "secretAccessKey": "paste the R2 Secret Access Key here",
+  "bucket": "coremx-sync"
+}
