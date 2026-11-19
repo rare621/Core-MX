@@ -1,6 +1,7 @@
-CoreMX 1.0.40
+CoreMX 1.0.41
 
-- CoreMX now reads the mods folder MX Bikes is configured to use in `global.ini`, so installs, the library, and shared gear use the same location as the game.
-- The game plugin records the names of missing shared models and paints in its live-looks result file to help diagnose gear that has not appeared yet.
+- When you host a World, CoreMX can ask a compatible router to forward the game's UDP port while hosting, then remove the mapping when you stop. Settings → Plugins shows the status and lets you turn this off. Router support is required.
+- Live looks can apply shared gear that arrived after the game first drew a rider with its default items.
+- The game plugin now marks a shared paint as applied only after it is drawn, so a later retry remains possible.
 
 The online service remains version 15. Its ZIP is included for convenience; servers already running v15 do not need to replace it.
