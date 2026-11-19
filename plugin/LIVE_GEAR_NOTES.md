@@ -302,3 +302,14 @@ chooser in a state the game does not expect.
 - Test: F9 (pick bike/gear, Start), then F10 presses Join through the handler (event 9, the game's
   own "ID_JOIN" string). FrostMod's notes say an accepted change builds the new bike in a free
   vehicle record and leaves the old one on the pit stand; to check.
+
+### 11b. Result: a rider already in a session cannot re-join with another bike
+
+Test on server "Balls": F9 → Bike Selection (picked Husqvarna FC 250, Start; the local selection
+at 0xE55520 changed), then F10 → the pits Join through the handler (logged "join: sent", twice).
+The vehicle stayed the Suzuki RM-Z250 and no new vehicle record appeared. "Exit from race" (Back on
+the pits page) disconnects to the main menu. The connection screen (0x950E0) lists the server's
+refusal reasons (Bike Unknown to Server, CC_wrongcategory, CC_racestarted, CC_pitlanefull,
+CC_wrongrating, CC_notwhitelisted, CC_blacklisted, CC_banned, CC_licenseinuse) and a spectator
+join. Conclusion: MX Bikes chooses the bike when you connect; a mid-session change means
+reconnecting with the new selection (restart-and-join, or the game's own connect, command 0x385).
