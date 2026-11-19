@@ -209,7 +209,8 @@ EXPORT void EventInit(void *_pData, int _iDataSize) {
   unlock();
 }
 
-EXPORT void EventDeinit(void) { lock(); memset(&S, 0, sizeof S); writeState(); unlock(); }
+static int g_lookStatusN;   /* live looks status, below */
+EXPORT void EventDeinit(void) { lock(); memset(&S, 0, sizeof S); writeState(); unlock(); g_lookStatusN = 0; /* a new server builds riders afresh */ }
 
 EXPORT void RaceEvent(void *_pData, int _iDataSize) {
   const RaceEventData *e = (const RaceEventData *)_pData;
@@ -960,6 +961,7 @@ static void liveryTestPoll(void) {
  * address used is checked first against fingerprints of this build. Result: mxbm_looks_result.json.
  * Research notes: plugin/LIVE_GEAR_NOTES.md. */
 #define LOOK_MAX 50
+#define LOOK_FIELDS_N 11
 typedef struct { int num; char bike[64]; char f[11][64]; char name[48]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint protection protectionPaint; name = CoreMX name */
 static Look g_looks[LOOK_MAX], g_looksWork[LOOK_MAX];
 static int g_lookCount = 0;
@@ -969,7 +971,10 @@ static FILETIME g_looksMtime;
 static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
 /* What live looks did per rider, for the overlay's Riders tab: models waiting for the game's
  * rebuild (shown once you go to the pits and back to the track) and paints already applied. */
-typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
+/* applied[f]: fnv of the look value CoreMX last applied for field f. The game record can already hold
+ * the right name (sent over the network) while the rider was drawn with defaults because the files
+ * arrived after he was built, so a matching name alone does not mean it is shown. */
+typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; unsigned applied[LOOK_FIELDS_N]; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
 static LookStatus g_lookStatus[LOOK_MAX];
 static int g_lookStatusN = 0;
 static LookStatus *lookStatus(int num, const char *bike) {
@@ -1092,6 +1097,9 @@ static void applyLooks(void) {
       memcpy(nm, c + 0x30, 32); nm[32] = 0;
       if (_stricmp(nm, L->bike) == 0) { r = c; break; }
     }
+    LookStatus *st = r ? lookStatus(L->num, L->bike) : 0;
+#define LOOK_DONE(fi, want) (st && st->applied[fi] == fnv((const unsigned char *)(want), strlen(want)))
+#define LOOK_MARK(fi, want) do { if (st) st->applied[fi] = fnv((const unsigned char *)(want), strlen(want)); } while (0)
     if (r) {
       /* Models: helmet, boots, rider, protection ("None" = no protection). Written only if
        * installed; a change means a rebuild. */
@@ -1104,23 +1112,23 @@ static void applyLooks(void) {
         const char *want = L->f[MODEL_F[m]];
         int none = m == 3 && _stricmp(want, "None") == 0;
         memcpy(nm, r + MODEL_OFF[m], 32); nm[32] = 0;
-        if (!want[0] || _stricmp(nm, none ? "" : want) == 0) continue;
+        if (!want[0] || (_stricmp(nm, none ? "" : want) == 0 && (none || LOOK_DONE(MODEL_F[m], want)))) continue;
         if (!none && modelIndex(base, *MODEL_L[m], want) < 0) {
           static const char *const LIST_KIND[4] = { "helmets", "boots", NULL, "protections" };   /* rider models are not reloaded */
           wantReload(needReload, sizeof needReload, LIST_KIND[m], want); skipped++;
           if (strlen(missing) + strlen(want) + 16 < sizeof missing) sprintf(missing + strlen(missing), "%s%s: %s", missing[0] ? "; " : "", LIST_KIND[m] ? LIST_KIND[m] : "riders", want);
           continue;
         }
-        setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1;
+        setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1; LOOK_MARK(MODEL_F[m], want);
         if (strlen(kinds) + 12 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, MODEL_NAME[m]); }
       }
       /* Protection paint: drawn when the protection is built, so a change also rebuilds. */
       {
         const char *want = L->f[10]; char prot[33];
         memcpy(prot, r + 0x210, 32); prot[32] = 0; memcpy(nm, r + 0x230, 32); nm[32] = 0;
-        if (want[0] && prot[0] && _stricmp(nm, want) != 0) {
+        if (want[0] && prot[0] && (_stricmp(nm, want) != 0 || !LOOK_DONE(10, want))) {
           if (findPaint(base, P_PROT, L_PROT, prot, want, "%srider\\protections\\%s\\paints\\%s.pnt", a, sizeof a)) {
-            setName(r + 0x230, want); rebuild = 1;
+            setName(r + 0x230, want); rebuild = 1; LOOK_MARK(10, want);
             if (!strstr(kinds, "protector") && strlen(kinds) + 20 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, "protector paint"); }
           }
           else {
@@ -1138,7 +1146,7 @@ static void applyLooks(void) {
         for (m = 0; m < 6; m++) {
           const char *want = L->f[P_F[m]]; int ok;
           memcpy(nm, r + P_OFF[m], 32); nm[32] = 0;
-          if (!want[0] || _stricmp(nm, want) == 0) continue;
+          if (!want[0] || (_stricmp(nm, want) == 0 && LOOK_DONE(P_F[m], want))) continue;
           switch (m) {
             case 0: ok = findPaint(base, P_BIKE, L_BIKES, bike, want, "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a); break;
             case 1: ok = findPaint(base, P_HELMET, L_HELMETS, helmet, want, "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a); break;
@@ -1153,7 +1161,7 @@ static void applyLooks(void) {
             if (strlen(missing) + strlen(want) + 16 < sizeof missing) sprintf(missing + strlen(missing), "%s%s: %s", missing[0] ? "; " : "", PAINT_KIND[m], want);
             continue;
           }
-          setName(r + P_OFF[m], want); groups |= P_GROUP[m];
+          setName(r + P_OFF[m], want); groups |= P_GROUP[m]; LOOK_MARK(P_F[m], want);
         }
         if (rebuild) {
           if (*(const int *)(r + 0x4EE8) == 0) *(volatile int *)(r + 0x4EE8) = 2;
@@ -1162,8 +1170,9 @@ static void applyLooks(void) {
         }
       }
     }
+#undef LOOK_DONE
+#undef LOOK_MARK
     if (r) {
-      LookStatus *st = lookStatus(L->num, L->bike);
       if (st && L->name[0]) copy(st->name, L->name, sizeof st->name);
       if (st) st->missing = skipped;
       if (st) { if (rebuild && kinds[0]) copy(st->models, kinds, sizeof st->models); st->paints += painted; }
