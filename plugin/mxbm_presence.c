@@ -671,6 +671,8 @@ static void bookWrite(unsigned long long now) {
 static void liveryTestPoll(void);
 static void looksPoll(void);
 static void ownRebuildPoll(void);
+static DWORD WINAPI keyThread(LPVOID unused);
+static HANDLE g_keyThread = 0;
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -1538,9 +1540,45 @@ static int ownRebuildOk(const unsigned char *base) {
   return ok;
 }
 
+/* ===================== Bike change on a server (test): F9 in the pits =====================
+ * MX Bikes changes bike on a server through its own chooser: Join on the multiplayer pits page
+ * (RVA 0xBA93E) checks the selected bike against the server's rules and, if it is not allowed,
+ * opens `chat/home/bike_choose` with RVA 0xEC330(path, 5). The chooser lists the bikes the server
+ * allows; picking one and joining sends the change to the server, which tells every rider (bike,
+ * physics, sound). F9 opens that same chooser from the pits, the same way, so you can change bike
+ * without your current one being refused. Online sessions only, not on track; checked against this
+ * game build's bytes. Result: mxbm_bike_result.json. Notes: plugin/LIVE_GEAR_NOTES.md section 11. */
+static const unsigned char SIG_OPEN_PAGE[16] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x83, 0x3d, 0x6b, 0x36, 0x3e, 0x00, 0x01, 0x8b, 0xda, 0x7d };
+static void bikeChooserResult(const char *state) {
+  char o[200]; sprintf(o, "{\"v\":1,\"at\":%llu,\"state\":\"%s\"}", nowMs(), state); writeSmall("mxbm_bike_result.json", o);
+}
+static void openBikeChooser(void) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  if (!S.inEvent || !S.haveServer) { bikeChooserResult("not on a server"); return; }
+  if (S.onTrack) { bikeChooserResult("on track: go back to the pits"); return; }
+  if (memcmp(base + 0xEC330, SIG_OPEN_PAGE, sizeof SIG_OPEN_PAGE) != 0 || fnv(base + 0xBA9FB, 0xBAA0C - 0xBA9FB) != 0x8d3066d7u) { bikeChooserResult("game build differs"); return; }
+  g_gameCallThread = GetCurrentThreadId();
+  ((int (*)(const char *, int))(void *)(base + 0xEC330))((const char *)(base + 0x33E1A8), 5);  /* the game's own "chat/home/bike_choose" */
+  g_gameCallThread = 0;
+  bikeChooserResult("opened");
+}
+/* F9, read every 30 ms while the game window is in front (Draw() does not run in the pits). */
+static DWORD WINAPI keyThread(LPVOID unused) {
+  int was = 0;
+  (void)unused;
+  while (!g_srvStop) {
+    int now = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+    if (now && !was && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 16);
+    was = now;
+    Sleep(30);
+  }
+  return 0;
+}
+
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
+  if (work & 16) openBikeChooser();
   if (work & 1) runPaintTest();
   if (work & 2) applyLooks();
   if (work & 8) {
@@ -1597,10 +1635,12 @@ static void serverListStart(void) {
   if (memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0 && memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) != 0) return;
   g_srvStop = 0;
   g_srvThread = CreateThread(NULL, 0, serverListThread, NULL, 0, NULL);
+  g_keyThread = CreateThread(NULL, 0, keyThread, NULL, 0, NULL);
 }
 static void serverListStop(void) {
   InterlockedExchange(&g_srvStop, 1);
   if (g_srvThread) { WaitForSingleObject(g_srvThread, 2000); CloseHandle(g_srvThread); g_srvThread = 0; }
+  if (g_keyThread) { WaitForSingleObject(g_keyThread, 2000); CloseHandle(g_keyThread); g_keyThread = 0; }
 }
 
 static void hookStart(const char *dir) {
