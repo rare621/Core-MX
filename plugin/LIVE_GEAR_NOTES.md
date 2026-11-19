@@ -286,3 +286,19 @@ Plan to test: from the pits on a server, have the plugin open the game's own cho
 (`0xEC330("chat/home/bike_choose", 5)`) on a key or from CoreMX, pick a bike there, then Join,
 and check that the bike (physics, sound) changes and that other riders see it. Risk: opening the
 chooser in a state the game does not expect.
+
+### 11a. Join sends CHANGEREQUEST with your whole setup
+
+- Network message numbers (name table at RVA 0x3926A0, `GETINFO` = 0): 15 `CHANGEREQUEST`,
+  16 `CHANGEANSWER`, 17 `CHECKENTERING`, 18 `CHANGECOMPLETE`, 19 `CHANGEINFO`, 33 `CHANGE`.
+- The pits page handler RVA 0xB98D0(page, event, value, control name) switches on the event through
+  the table at 0xBAE60; **event 9 = control clicked**. `ID_JOIN` (0xBA93E): bike check (chooser if
+  not allowed), then a 0x2AC-byte entry is filled from the local selection (0xE54A40 …: name, race
+  number at 0xE552B0, bike 0xE55520, livery, rider, helmet, paints, boots …), engine commands 0x387
+  and 0x388, then **0x365(entry, 0x2AC)**. Its handler RVA 0x2A4640 writes message byte 0x0F
+  (`CHANGEREQUEST`), the size and the entry, and sends it (0x2A9120, connection at 0x598768).
+- The pits page shows Join only before you ride; Back exits the race. Bike Selection's Start (F9)
+  only edits the local selection.
+- Test: F9 (pick bike/gear, Start), then F10 presses Join through the handler (event 9, the game's
+  own "ID_JOIN" string). FrostMod's notes say an accepted change builds the new bike in a free
+  vehicle record and leaves the old one on the pit stand; to check.
