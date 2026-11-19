@@ -17,12 +17,20 @@ const PORT = Number(arg('port', 60000));
 const DATA = path.resolve(arg('data', path.join(__dirname, 'mxbm-data.json')));
 const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-files')));
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
-const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
 // Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
 const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
 const R2 = (() => { const c = require('./r2').loadConfig(R2_FILE); return c ? require('./r2').createR2(c) : null; })();
 const R2_GRACE = 24 * 60 * 60 * 1000; // an R2 file nobody wears is deleted after a day
+// All synced files together (MB). Only files someone has equipped are kept, so this is a safety net,
+// not a quota: on this PC's disk 4 GB, in R2 100 GB (1.5 US cents per GB-month past the free 10 GB).
+const MAX_STORE = Number(arg('maxstore', R2 ? 100 * 1024 : 4 * 1024)) * 1024 * 1024;
+let storeWarnedAt = 0;
+function warnStore(size) {
+  if (size < MAX_STORE * 0.8 || Date.now() - storeWarnedAt < 3600e3) return;
+  storeWarnedAt = Date.now();
+  console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
+}
 const VERSION = 16;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
@@ -526,7 +534,8 @@ async function fileRoute(req, res, sha) {
   if (crypto.createHash('sha256').update(buf).digest('hex') !== sha) return send(res, 400, { error: 'file does not match its hash' });
   const bad = checkFile(auth(req), sha, buf);
   if (bad) return send(res, bad[0], { error: bad[1] });
-  if (storeSize() + buf.length > MAX_STORE) return send(res, 507, { error: 'the online service is out of paint storage' });
+  const size = storeSize(); warnStore(size + buf.length);
+  if (size + buf.length > MAX_STORE) { console.warn('Synced file storage is FULL: uploads are being refused. Raise --maxstore in start-server.cmd.'); return send(res, 507, { error: 'the online service is out of paint storage' }); }
   fs.writeFileSync(file + '.tmp', buf); fs.renameSync(file + '.tmp', file);
   return send(res, 200, { ok: true });
 }
@@ -552,7 +561,8 @@ async function uploadGrant(req, res, sha) {
   if (!R2) return send(res, 200, { direct: true });
   const owned = ownedItem(me, sha);
   if (!owned) return send(res, 400, { error: 'file is not in your equipped loadout' });
-  if (storeSize() + owned.size > MAX_STORE) return send(res, 507, { error: 'the online service is out of paint storage' });
+  const size = storeSize(); warnStore(size + owned.size);
+  if (size + owned.size > MAX_STORE) { console.warn('Synced file storage is FULL: uploads are being refused. Raise --maxstore in start-server.cmd.'); return send(res, 507, { error: 'the online service is out of paint storage' }); }
   return send(res, 200, { url: R2.putUrl(sha, 900), method: 'PUT' });
 }
 // Step 2: after uploading, the app asks the service to check it. Anything that fails is deleted from R2.
