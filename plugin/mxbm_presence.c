@@ -1052,11 +1052,24 @@ static int repaintGroups(const unsigned char *base, dispatch_t dispatch, const u
   return painted;
 }
 
+/* A rider's model or paint that is not in the game's lists may simply be newer than the lists: the
+ * game loads them once at start, and a file can arrive any time (live looks, friend sync, a manual
+ * install). Ask for that list to be reloaded, once per name, and apply it on the next pass. */
+static char g_triedReload[64][80]; static int g_triedReloadN = 0;
+static void wantReload(char *kinds, size_t cap, const char *kind, const char *name) {
+  char key[80]; int i;
+  if (!kind) return;
+  sprintf(key, "%.15s|%.60s", kind, name);
+  for (i = 0; i < g_triedReloadN; i++) if (_stricmp(g_triedReload[i], key) == 0) return;
+  if (g_triedReloadN < 64) copy(g_triedReload[g_triedReloadN++], key, sizeof g_triedReload[0]);
+  if (!strstr(kinds, kind) && strlen(kinds) + strlen(kind) + 2 < cap) { if (kinds[0]) strcat(kinds, ","); strcat(kinds, kind); }
+}
+
 static void applyLooks(void) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
   static char o[16384], a[MAX_PATH * 2];
   dispatch_t dispatch = (dispatch_t)mxbm_orig_ui;
-  char reload[160]; unsigned long long stamp; int n, i, own = 0, first = 1;
+  char reload[160], needReload[160] = ""; unsigned long long stamp; int n, i, own = 0, first = 1;
   size_t at;
   if (!S.inEvent || !dispatch || !looksBuildOk(base)) return;
   lock(); n = g_lookCount; memcpy(g_looksWork, g_looks, sizeof(Look) * (size_t)n); stamp = g_looksStamp; copy(reload, g_reload, sizeof reload); unlock();
@@ -1091,7 +1104,10 @@ static void applyLooks(void) {
         int none = m == 3 && _stricmp(want, "None") == 0;
         memcpy(nm, r + MODEL_OFF[m], 32); nm[32] = 0;
         if (!want[0] || _stricmp(nm, none ? "" : want) == 0) continue;
-        if (!none && modelIndex(base, *MODEL_L[m], want) < 0) { skipped++; continue; }
+        if (!none && modelIndex(base, *MODEL_L[m], want) < 0) {
+          static const char *const LIST_KIND[4] = { "helmets", "boots", NULL, "protections" };   /* rider models are not reloaded */
+          wantReload(needReload, sizeof needReload, LIST_KIND[m], want); skipped++; continue;
+        }
         setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1;
         if (strlen(kinds) + 12 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, MODEL_NAME[m]); }
       }
@@ -1104,7 +1120,7 @@ static void applyLooks(void) {
             setName(r + 0x230, want); rebuild = 1;
             if (!strstr(kinds, "protector") && strlen(kinds) + 20 < sizeof kinds) { if (kinds[0]) strcat(kinds, ", "); strcat(kinds, "protector paint"); }
           }
-          else skipped++;
+          else { wantReload(needReload, sizeof needReload, "protectionpaints", want); skipped++; }
         }
       }
       /* Paints: written only if installed for the (new) model; groups to repaint. */
@@ -1125,7 +1141,10 @@ static void applyLooks(void) {
             case 4: ok = findPaint(base, P_GLOVES, L_RIDERS, rider, want, "%srider\\riders\\%s\\gloves\\%s.pnt", a, sizeof a); break;
             default: ok = findPaint(base, P_BOOTS, L_BOOTS, boots, want, "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a); break;
           }
-          if (!ok) { skipped++; continue; }
+          if (!ok) {
+            static const char *const PAINT_KIND[6] = { "bikepaints", "helmetpaints", "helmetpaints", "riderpaints", "riderpaints", "bootpaints" };
+            wantReload(needReload, sizeof needReload, PAINT_KIND[m], want); skipped++; continue;
+          }
           setName(r + P_OFF[m], want); groups |= P_GROUP[m];
         }
         if (rebuild) {
@@ -1145,8 +1164,13 @@ static void applyLooks(void) {
       at += (size_t)sprintf(o + at, "%s{\"num\":%d,\"found\":%s,\"rebuild\":%s,\"repainted\":%d,\"notInstalled\":%d}", first ? "" : ",", L->num, r ? "true" : "false", rebuild ? "true" : "false", painted, skipped);
     first = 0;
   }
+  /* Lists to reload for names that were missing; the next pass (5 s) applies them. */
+  if (needReload[0]) reloadLists(base, needReload);
   g_gameCallThread = 0;
-  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
+  o[at++] = ']';
+  at += (size_t)sprintf(o + at, ",\"reloadedForMissing\":");
+  at = jstr(o, at, needReload, sizeof o - 8);
+  o[at++] = '}'; o[at] = 0;
   writeSmall("mxbm_looks_result.json", o);
 }
 
