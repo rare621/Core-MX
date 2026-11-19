@@ -236,3 +236,28 @@ So 0x6E22F runs while we are in the pits, and a rebuild does not need the rider 
 - A paint-only re-apply that works while riding (or how to rebuild safely).
 - What else holds list indexes that a reload would invalidate (menu choosers).
 - Where player names live when +0x10 is empty.
+
+## 10. Your own rider: rebuild with the first-person set (2026-11-18)
+
+First attempt: remove the look (0x4E0D0) and set build state 3. The game's loop then calls the full
+builder RVA 0x45020 with **flags 4** (stack argument at caller rsp+0xA0; `test bl,4` at 0x45412
+skips the first-person build and the `+0x3BC = 1` flag at 0x45529). Result: new helmet visible in
+third person, but first person broken (outside helmet shell and protector chain in view, second
+first-person camera behind the neck): the per-frame camera code (around RVA 0x5934D) only hides the
+outside set (0x44D90 → command 0x5E per part) and poses the first-person set when +0x3BC is set.
+
+Flags per caller of 0x45020: network setup 0x5CC5B / 0x5E744, rebuild loop 0x6E22F, 0xBC076 → 4;
+0x1FD74, 0x2016E, 0xE4BD9 → 5; replay/menu 0xE87B1 → 0x2D; **your own vehicle's setup 0x66A27
+(call at 0x66F74) → 0**.
+
+0x45020 arguments (rcx, edx, r8d, r9, then stack +0x20 … +0xA0): block (record + 0x274), bike
+index, tyre index (record +0x70 name in the tyre list: pointer 0xF48618, stride 0x608, count
+0x109DECC), bike paint +0x90, +0xB0, rider +0xD0, helmet +0xF0, helmet paint +0x110, goggles +0x130,
+helmet cam +0x150, suit +0x170, suit font +0x190, boots +0x1B0, boots paint +0x1D0, gloves +0x1F0,
+protection +0x210, protection paint +0x230, +0x250 (resolved by 0x1B650), race number as text,
+name +0x10, flags. (0x66A27 resolves rider, helmet, boots and +0x250 through 0x1C000, 0x18220,
+0x19FD0, 0x1B650 first, which swap in defaults for missing ones; the overlay only offers installed
+models.)
+
+Second attempt (current): in the pits, 0x4E0D0 then 0x45020 called directly with flags 0 and the
+record's names; build state left at 0.

@@ -1528,6 +1528,16 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
   if (_piNumString && _ppString) { *_piNumString = g_ns; *_ppString = g_strings; }
 }
 
+/* The full builder's first bytes, the own-vehicle setup's call to it and the rebuild loop's tyre
+ * lookup must match this game build before your rider is rebuilt. */
+static const unsigned char SIG_BUILD_FULL[16] = { 0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };
+static int ownRebuildOk(const unsigned char *base) {
+  static int ok = -1;
+  if (ok < 0) ok = looksBuildOk(base) && memcmp(base + 0x45020, SIG_BUILD_FULL, sizeof SIG_BUILD_FULL) == 0 &&
+                   fnv(base + 0x66E80, 0x66F79 - 0x66E80) == 0xcad4fd30u && fnv(base + 0x6EC90, 0x6ECC1 - 0x6EC90) == 0x655fa390u;
+  return ok;
+}
+
 /* Runs on the game's main thread, from the UI stub. */
 void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
@@ -1535,15 +1545,35 @@ void mxbm_run_pending(void) {
   if (work & 2) applyLooks();
   if (work & 8) {
     /* Your own rider with a new helmet, boots or protector, once you are back in the pits: remove
-     * the old look (RVA 0x4E0D0) and let the game's loop build it again with the full builder
-     * (state 3 -> RVA 0x45020, outside and first-person models) from the names in the record. */
+     * the old look (RVA 0x4E0D0), then build it again the way your own vehicle's setup does
+     * (RVA 0x66A27 at 0x66F74): the full builder RVA 0x45020 with flags 0, which builds the
+     * outside and the first-person ("cockpit/") models and marks the first-person set (+0x3BC).
+     * (The game's rebuild loop passes flags 4, no first-person set: right for other riders, but
+     * for you it left the outside helmet and protector in the first-person view.) The tyre
+     * argument is the index of the record's tyre name (+0x70) in the tyre list, as the loop
+     * computes it. Checked against this game build's bytes first. */
     unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r = ownRecord(base);
-    if (r && g_ownRebuild && !S.onTrack && *(const int *)(r + 0x4EE8) == 0) {
+    if (r && g_ownRebuild && !S.onTrack && *(const int *)(r + 0x4EE8) == 0 && ownRebuildOk(base)) {
+      static const GameList L_TYRES = { 0x109DECC, 0xF48618, 0x608 };
+      char bike[33], tyres[33], num[16];
+      int bikeIndex, tyreIndex;
+      memcpy(bike, r + 0x30, 32); bike[32] = 0; memcpy(tyres, r + 0x70, 32); tyres[32] = 0;
+      bikeIndex = modelIndex(base, L_BIKES, bike); tyreIndex = modelIndex(base, L_TYRES, tyres);
       InterlockedExchange(&g_ownRebuild, 0);
-      g_gameCallThread = GetCurrentThreadId();
-      ((int (*)(unsigned char *))(void *)(base + 0x4E0D0))(r + 0x274);
-      *(volatile int *)(r + 0x4EE8) = 3;
-      g_gameCallThread = 0;
+      if (bikeIndex >= 0 && tyreIndex >= 0) {
+        typedef int (*build_full_t)(unsigned char *block, int bike, int tyre, const char *bikePaint, const char *b0, const char *rider,
+                                    const char *helmet, const char *helmetPaint, const char *goggles, const char *helmetCam, const char *suit,
+                                    const char *suitFont, const char *boots, const char *bootsPaint, const char *gloves, const char *prot,
+                                    const char *protPaint, const char *f250, const char *raceNumber, const char *name, int flags);
+        const char *R = (const char *)r;
+        sprintf(num, "%d", *(const int *)(r + 0x0C));
+        g_gameCallThread = GetCurrentThreadId();
+        ((int (*)(unsigned char *))(void *)(base + 0x4E0D0))(r + 0x274);
+        ((build_full_t)(void *)(base + 0x45020))(r + 0x274, bikeIndex, tyreIndex, R + 0x90, R + 0xB0, R + 0xD0, R + 0xF0, R + 0x110, R + 0x130,
+                                                 R + 0x150, R + 0x170, R + 0x190, R + 0x1B0, R + 0x1D0, R + 0x1F0, R + 0x210, R + 0x230, R + 0x250,
+                                                 num, R + 0x10, 0);
+        g_gameCallThread = 0;
+      }
     }
   }
   if (work & 4) {
