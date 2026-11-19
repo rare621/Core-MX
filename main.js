@@ -157,8 +157,19 @@ function watchPluginFiles() {
   fs.watchFile(missing, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onMissingTrackFile(missing); });
   fs.watchFile(hook, { interval: 3000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onHookStateFile(hook); });
   if (fs.existsSync(hook)) onHookStateFile(hook);
+  writeOverlayKey();
   const overlay = path.join(dir, 'mxbm_overlay_save.json');
   fs.watchFile(overlay, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onOverlaySave(overlay).catch((e) => console.warn('Overlay save:', e.message)); });
+}
+// The in-game overlay's key (Settings > Plugins; F8 by default). The plugin reads it from
+// mxbm_overlay_key.txt and picks up a change within a second, even while the game runs.
+const OVERLAY_KEYS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11'];
+function overlayKey() { const k = store.get('settings').overlayKey; return OVERLAY_KEYS.includes(k) ? k : 'F8'; }
+function writeOverlayKey() {
+  const dir = gameDataDir(); if (!dir) return;
+  const file = path.join(dir, 'mxbm_overlay_key.txt');
+  try { if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8').trim() !== overlayKey()) fs.writeFileSync(file, overlayKey()); }
+  catch (e) { console.warn('Overlay key:', e.message); }
 }
 // The in-game overlay (F8) saves your paints: queue them like Apply does while the game runs, so
 // they are written to the profile when MX Bikes closes and shared with other riders right away.
@@ -910,7 +921,9 @@ function registerIpc() {
     store.flush(); updates?.install();
   });
   handle('settings:set', (patch) => {
+    if (Object.hasOwn(patch || {}, 'overlayKey') && !OVERLAY_KEYS.includes(patch.overlayKey)) throw new Error('Pick a key from F1 to F11');
     store.update('settings', (s) => ({ ...s, ...patch }));
+    if (Object.hasOwn(patch || {}, 'overlayKey')) writeOverlayKey();
     return environment();
   });
   handle('settings:pickFolder', async (which) => {
