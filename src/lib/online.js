@@ -12,8 +12,8 @@ const REPORT_EVERY = 30 * 1000;
 const PAINT_EVERY = 60 * 1000;
 
 // Live looks file for the plugin (see doSyncLooks below and plugin/mxbm_presence.c).
-const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint'];
-const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints' };
+const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint'];
+const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
 function looksText(loadouts, reload, stamp) {
   const clean = (v) => String(v || '').replace(/[\t\r\n]/g, ' ').trim().slice(0, 63);
   const lines = [`coremx-looks 1 ${stamp}`, `reload\t${reload.join(',')}`];

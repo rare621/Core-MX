@@ -162,7 +162,7 @@ function watchPluginFiles() {
 }
 // The in-game overlay (F8) saves your paints: queue them like Apply does while the game runs, so
 // they are written to the profile when MX Bikes closes and shared with other riders right away.
-const OVERLAY_SLOTS = ['bikePaint', 'suitPaint', 'glovesPaint', 'bootsPaint', 'helmetPaint', 'gogglesPaint'];
+const OVERLAY_SLOTS = ['bikePaint', 'suitPaint', 'glovesPaint', 'bootsPaint', 'helmetPaint', 'gogglesPaint', 'helmet', 'boots', 'protection', 'protectionPaint'];
 let queueRiderApply = null, lastOverlaySave = 0;
 async function onOverlaySave(file) {
   const saved = JSON.parse(await fsp.readFile(file, 'utf8'));
