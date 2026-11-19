@@ -72,12 +72,19 @@ S.allSrv = { q: '' };
 async function renderPluginSettings(c) {
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings" id="pluginSettings"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div>`;
   try {
-    const online = await api.invoke('online:status');
+    const [online, plugins] = await Promise.all([api.invoke('online:status'), api.invoke('plugins:scan').catch(() => [])]);
     const box = $('#pluginSettings', c); if (!box) return;
     const row = (id, name, text, installed, version, update = false) => `<div class="set-card"><h3>${name}</h3><p>${text}</p><div class="path-row"><span class="${installed ? 'ok' : 'muted'}">${installed ? 'Installed' : 'Not installed'}${version ? ` · ${esc(version)}` : ''}</span><span class="grow"></span>${update || !installed ? `<button class="btn btn-primary" data-plugin-install="${id}">${icon('download')}${update ? 'Update' : 'Install'}</button>` : ''}${installed ? `<button class="btn" data-plugin-remove="${id}">${icon('trash')}Remove</button>` : ''}</div></div>`;
     box.innerHTML = `<p class="muted">Close MX Bikes before installing or removing plugins. Plugins load when the game starts.</p>
       ${row('presence', 'CoreMX presence', 'Reports your track, bike, server, riders and session stage to the manager and your friends.', online.plugin.installed, '', online.plugin.needsUpdate)}
-      <p class="muted">The CoreMX plugin also saves server addresses from MX Bikes' Multiplayer list, so live servers and friends get a Join button.</p>`;
+      <p class="muted">The CoreMX plugin also saves server addresses from MX Bikes' Multiplayer list, so live servers and friends get a Join button.</p>
+      <div class="set-card"><h3>In-game overlay key</h3><p>Opens the CoreMX overlay on track, to change your outfit and bike livery. Changes apply within a second, even while MX Bikes is running.</p>
+        <div class="path-row"><select id="overlayKey">${['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11'].map((k) => `<option ${k === overlayKeyName() ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
+        ${overlayKeyName() === 'F8' && plugins.some((p) => /^mxb_ragdoll\.dlo$/i.test(p.name) && p.enabled) ? `<div class="notice warn" style="margin-top:10px">${icon('alert')}<div>MX Bikes Ragdoll opens its own menu with F8 too. Pick another key so both don't open together.</div></div>` : ''}</div>`;
+    $('#overlayKey', box)?.addEventListener('change', async (e) => {
+      try { S.env = await api.invoke('settings:set', { overlayKey: e.target.value }); toast(`Overlay key set to <b>${esc(e.target.value)}</b>`, 'ok', 2200); await renderPluginSettings(c); }
+      catch (err) { toast(esc(cleanErr(err)), 'err'); }
+    });
     box.addEventListener('click', async (event) => {
       const button = event.target.closest('[data-plugin-install], [data-plugin-remove]'); if (!button || button.disabled) return;
       const remove = !!button.dataset.pluginRemove, kind = button.dataset.pluginRemove || button.dataset.pluginInstall;

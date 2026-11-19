@@ -2073,8 +2073,9 @@ function prettyValue(slot, v) {
   return v.replace(/_/g, ' ');
 }
 
-// The plugin's in-game overlay (F8) changes the same outfit and bike livery on track.
-const f8HintHtml = () => `<span class="f8-hint" title="Needs the CoreMX game plugin (Settings → Plugins). Paints change at once; a new helmet, boots or protector shows when you go back to the pits. Locked during races."><kbd>F8</kbd>in game to change your outfit and bike on track</span>`;
+// The plugin's in-game overlay (F8 by default; Settings → Plugins) changes the same outfit and bike livery on track.
+const overlayKeyName = () => (/^F([1-9]|1[01])$/.test(S.env?.settings?.overlayKey || '') ? S.env.settings.overlayKey : 'F8');
+const f8HintHtml = () => `<span class="f8-hint" title="Needs the CoreMX game plugin (Settings → Plugins, where you can change the key). Paints change at once; a new helmet, boots or protector shows when you go back to the pits. Locked during races."><kbd>${overlayKeyName()}</kbd>in game to change your outfit and bike on track</span>`;
 async function renderRider(c) {
   const R = S.rider;
   const request = R.renderRequest = (R.renderRequest || 0) + 1;

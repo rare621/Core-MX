@@ -671,6 +671,7 @@ static void bookWrite(unsigned long long now) {
 static void liveryTestPoll(void);
 static void looksPoll(void);
 static void ownRebuildPoll(void);
+static void overlayKeyPoll(void);
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -685,6 +686,7 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
     liveryTestPoll();
     looksPoll();
     ownRebuildPoll();
+    overlayKeyPoll();
     if (srvCopy(base + RVA_SRV_LIST, (void *)&list, sizeof list) && srvCopy(base + RVA_SRV_COUNT, &count, sizeof count) &&
         list && count > 0 && count <= SRV_MAX_ROWS && srvCopy(list, rows, (size_t)count * SRV_STRIDE)) {
       for (i = 0; i < count; i++) {
@@ -1170,7 +1172,8 @@ static void looksPoll(void) {
 
 /* ===================== In-game overlay (F8) =====================
  * A small Rider panel drawn through the plugin interface's Draw() (which the game calls only with
- * the 3D world on screen: on track, spectating or in a replay). F8 opens and closes it; Up/Down
+ * the 3D world on screen: on track, spectating or in a replay). F8 (or the key chosen in CoreMX:
+ * Settings > Plugins, written to mxbm_overlay_key.txt) opens and closes it; Up/Down
  * picks a row, Left/Right changes the paint (shown at once on your rider and bike, first person
  * included); Enter saves: the plugin writes mxbm_overlay_save.json and CoreMX queues the change
  * like Apply does while the game runs (written to the profile when MX Bikes closes, shared with
@@ -1202,6 +1205,8 @@ static const int OV_PARENT[OV_ROWS] = { -1, -1, -1, R_BOOTS, R_HELMET, R_HELMET,
 static char g_ovOpt[OV_ROWS][OV_MAXOPT][64];
 static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovOpen = 0, g_ovFont = 0;
 static volatile LONG g_ovDirty = 0;
+/* The overlay key (F1..F11), from mxbm_overlay_key.txt ("F7") written by CoreMX; F8 by default. */
+static volatile int g_ovKey = VK_F8;
 static volatile LONG g_ownRebuild = 0;  /* a model change waits for the pits */
 static int g_ovModelChanged[OV_ROWS];   /* model rows changed since the overlay opened */
 static int g_ovEdited[OV_ROWS];         /* rows you changed (Save sends only these) */
@@ -1415,7 +1420,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
   if (_piNumQuads) *_piNumQuads = 0;
   if (_piNumString) *_piNumString = 0;
   if (!gameInFront()) return;
-  f8 = keyPressed(VK_F8); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT);
+  f8 = keyPressed(g_ovKey); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT);
   en = keyPressed(VK_RETURN); tab = keyPressed(VK_TAB); click = keyPressed(VK_LBUTTON);
   r = S.inEvent ? ownRecord(base) : 0;
   if (f8) {
@@ -1551,7 +1556,8 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     }
     if (locked) ovText("Locked during the race. Change gear in practice, warm-up or testing.", x0 + 0.014f, y + 0.012f, 0.0145f, 0, 0xFF6CB4FF);
     else if (g_ovMsgUntil > nowMs()) ovText(g_ovMsg, x0 + 0.014f, y + 0.052f, 0.0125f, 0, 0xFF6CE07A);
-    ovText("Click or Up/Down, Left/Right   Tab switch   Enter save   F8 close", x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
+    sprintf(line, "Click or Up/Down, Left/Right   Tab switch   Enter save   F%d close", g_ovKey - VK_F1 + 1);
+    ovText(line, x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
 
     /* Picker beside the panel. */
     if (r && !locked && g_ovPicker >= 0) {
@@ -1692,4 +1698,18 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) { (void)h; (void)reason
 /* Polled from the server-list thread: a waiting model change runs once you are in the pits. */
 static void ownRebuildPoll(void) {
   if (g_ownRebuild && mxbm_orig_ui && S.inEvent && !S.onTrack) InterlockedOr(&mxbm_pending, 8);
+}
+
+/* Polled from the server-list thread: the overlay key CoreMX's Settings chose. */
+static void overlayKeyPoll(void) {
+  static FILETIME seen;
+  char path[MAX_PATH * 2 + 40], buf[16] = {0}; WIN32_FILE_ATTRIBUTE_DATA fa; FILE *f; int n;
+  sprintf(path, "%smxbm_overlay_key.txt", g_dir);
+  if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) { g_ovKey = VK_F8; return; }
+  if (CompareFileTime(&fa.ftLastWriteTime, &seen) == 0) return;
+  seen = fa.ftLastWriteTime;
+  f = fopen(path, "rb"); if (!f) return;
+  fread(buf, 1, sizeof buf - 1, f); fclose(f);
+  n = (buf[0] == 'F' || buf[0] == 'f') ? atoi(buf + 1) : 0;
+  g_ovKey = n >= 1 && n <= 11 ? VK_F1 + n - 1 : VK_F8;
 }
