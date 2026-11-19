@@ -185,7 +185,7 @@ async function joinLiveServer(s) {
   const fmt = (n) => (typeof fmtSize === 'function' ? fmtSize(n) : `${Math.round(n / 1024)} KB`);
   const row = (r, i) => {
     const ready = r.items.filter((it) => it.state === 'ready');
-    const paid = (r.unavailable || []).filter((u) => /paid|store-protected|account-bound/i.test(u.error || '')).length;
+    const paid = (r.unavailable || []).filter((u) => /paid|store-protected/i.test(u.error || '')).length;
     const needs = [...new Map(r.items.flatMap((it) => it.needs || []).map((n) => [`${n.kind}|${n.name}`, n])).values()];
     return `<label class="sr-row"><input type="checkbox" data-sr="${i}" checked><span class="fr-av">${esc((r.name || '?').slice(0, 1).toUpperCase())}</span>
       <span class="sr-txt"><b>${esc(r.name)}</b><small>${ready.length} file${ready.length === 1 ? '' : 's'} · ${fmt(sizeOf(r))}${r.bikeName || r.bike ? ` · ${esc(prettyBikeId(r.bikeName || r.bike))}` : ''}</small>

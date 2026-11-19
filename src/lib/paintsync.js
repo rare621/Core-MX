@@ -61,7 +61,7 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = []) {
         data = await gear.paintSource({ modsDir, rider }, s.id, c);
         target = data && (['suitPaint', 'glovesPaint'].includes(s.id) ? prefix : 'rider') + '/' + data.relative;
       }
-      if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing, damaged, or account-bound');
+      if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing or unreadable (it may be locked by its creator)');
       const needs = [];
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
       if (modelOf[s.id] && c[modelOf[s.id]] && !defaults(modelOf[s.id], c[modelOf[s.id]])) needs.push({ kind: modelOf[s.id], name: c[modelOf[s.id]], rider });
@@ -159,7 +159,7 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
     const current = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     const unavailable = [];
     for (const entry of lo.unavailable || []) {
-      const paid = /paid|store-protected|account-bound/i.test(entry.error || '');
+      const paid = /paid|store-protected/i.test(entry.error || '');
       let installed = false;
       const name = current[entry.slot], rider = current.rider || 'default_mx';
       if (paid && gear.validName(name)) {
