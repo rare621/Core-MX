@@ -163,7 +163,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     }
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     const enteredServer = next?.inEvent && next.server && (!current?.inEvent || current.server !== next.server);
+    const bikeChanged = next?.inEvent && next.bikeId && current?.bikeId && next.bikeId !== current.bikeId;
     current = next;
+    if (enteredServer || bikeChanged) syncPaints().catch(() => {});   // share the gear for this bike now
     if (enteredServer) setTimeout(() => syncLooks(), 15000);
     else if (!next?.inEvent && looksKey) clearLooks();
     if (changed) onChange(status());
@@ -386,7 +388,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       const health = await call('GET', '/v1/health');
       if (health.version < 5) throw new Error('Update the online server using the new mxbm-online-service.zip (version 5) to enable accurate live-server status, gear and tyre sync');
       await syncFriends();
-      const o = await currentOutfit();
+      // In a session, share the gear for the bike you are riding (your profile keeps gear per bike;
+      // its "current bike" can be another one), so riders on your server can apply it.
+      const o = await currentOutfit(current?.inEvent && current.bikeId ? current.bikeId : null);
       if (o) {
         const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, appearance: o.appearance, protectedPaths: o.protectedPaths || [], stockPkz: o.stockPkz || null, onProgress: progress });
         paint.shared = shared.items; paint.unavailable = shared.unavailable;
