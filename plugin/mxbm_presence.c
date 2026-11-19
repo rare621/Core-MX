@@ -1568,14 +1568,36 @@ static void openBikeChooser(void) {
   g_gameCallThread = 0;
   bikeChooserResult("opened");
 }
-/* F9, read every 30 ms while the game window is in front (Draw() does not run in the pits). */
+/* F10: send your current selection to the server, the way the pits page's Join does. Join (event 9
+ * "control clicked" on the multiplayer pits page handler RVA 0xB98D0 with "ID_JOIN") checks the
+ * selected bike against the server's rules (opening the chooser if it is not allowed), builds your
+ * entry (name, race number, bike, livery, rider, helmet, paints, boots ... 0x2AC bytes) and hands it
+ * to engine command 0x365, whose handler RVA 0x2A4640 sends network message 0x0F = CHANGEREQUEST.
+ * The server answers (CHANGEANSWER) and tells everyone (CHANGEINFO / CHANGECOMPLETE). The pits page
+ * shows Join only before you ride; F10 presses it for you after you change your selection with F9.
+ * Online sessions only, in the pits; checked against this game build's bytes. */
+static const unsigned char SIG_PIT_HANDLER[16] = { 0x40, 0x53, 0x57, 0x41, 0x55, 0x41, 0x56, 0x48, 0x81, 0xec, 0x48, 0x09, 0x00, 0x00, 0x48, 0x8b };
+static void joinWithSelection(void) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  if (!S.inEvent || !S.haveServer) { bikeChooserResult("join: not on a server"); return; }
+  if (S.onTrack) { bikeChooserResult("join: on track, go back to the pits"); return; }
+  if (memcmp(base + 0xB98D0, SIG_PIT_HANDLER, sizeof SIG_PIT_HANDLER) != 0 || fnv(base + 0xBA866, 0xBA93E - 0xBA866) != 0x2fea694eu ||
+      fnv(base + 0xBA93E, 0xBAD4E - 0xBA93E) != 0x1af4c655u || fnv(base + 0x2A4640, 0x2A46E4 - 0x2A4640) != 0x7b5b3fbcu) { bikeChooserResult("join: game build differs"); return; }
+  g_gameCallThread = GetCurrentThreadId();
+  ((int (*)(int, int, int, const char *))(void *)(base + 0xB98D0))(0, 9, 0, (const char *)(base + 0x33D780));  /* the game's own "ID_JOIN" */
+  g_gameCallThread = 0;
+  bikeChooserResult("join: sent");
+}
+
+/* F9 / F10, read every 30 ms while the game window is in front (Draw() does not run in the pits). */
 static DWORD WINAPI keyThread(LPVOID unused) {
-  int was = 0;
+  int was9 = 0, was10 = 0;
   (void)unused;
   while (!g_srvStop) {
-    int now = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
-    if (now && !was && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 16);
-    was = now;
+    int now9 = (GetAsyncKeyState(VK_F9) & 0x8000) != 0, now10 = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+    if (now9 && !was9 && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 16);
+    if (now10 && !was10 && gameInFront() && mxbm_orig_ui) InterlockedOr(&mxbm_pending, 32);
+    was9 = now9; was10 = now10;
     Sleep(30);
   }
   return 0;
@@ -1585,6 +1607,7 @@ static DWORD WINAPI keyThread(LPVOID unused) {
 void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
   if (work & 16) openBikeChooser();
+  if (work & 32) joinWithSelection();
   if (work & 1) runPaintTest();
   if (work & 2) applyLooks();
   if (work & 8) {
