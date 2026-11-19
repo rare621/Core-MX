@@ -92,6 +92,40 @@ test('damage plugin archives go to game plugins even when tagged as graphics', a
   assert.equal(plan.confident, false);
 });
 
+test('a plugin archive with an Auto Install setup installs only its plugins folder, keeps settings and copies the game fonts it needs', async (t) => {
+  const root = await folder(t);
+  // MX Bikes Ragdoll: "Auto Install/MXB-Ragdoll-Setup.exe" next to a "plugins" folder, plus fonts
+  // its instructions say to copy out of the game's own misc.pkz / ui folder.
+  const src = path.join(root, 'src'); await fs.mkdir(src, { recursive: true });
+  const file = async (name, body) => { const p = path.join(src, name); await fs.writeFile(p, body); return p; };
+  const files = [
+    { rel: 'MX Bikes Ragdoll/Auto Install/MXB-Ragdoll-Setup.exe', abs: await file('setup.exe', 'setup'), size: 5 },
+    { rel: 'MX Bikes Ragdoll/plugins/mxb_ragdoll.dlo', abs: await file('r.dlo', 'plugin'), size: 6 },
+    { rel: 'MX Bikes Ragdoll/plugins/mxb_ragdoll.ini', abs: await file('r.ini', 'new defaults'), size: 12 },
+    { rel: 'MX Bikes Ragdoll/plugins/mxb_ragdoll_sfx/hit1.wav', abs: await file('hit1.wav', 'wav'), size: 3 },
+    { rel: 'MX Bikes Ragdoll/MANUAL INSTALL.txt', abs: await file('manual.txt', 'text'), size: 4 },
+  ];
+  const game = path.join(root, 'game');
+  await fs.mkdir(path.join(game, 'plugins'), { recursive: true });
+  await fs.mkdir(path.join(game, 'ui'), { recursive: true });
+  await fs.writeFile(path.join(game, 'plugins', 'mxb_ragdoll.ini'), 'my settings');
+  await fs.writeFile(path.join(game, 'ui', 'main.fnt'), 'title font');
+  const plan = installer.plan(files, { modsDir: path.join(root, 'mods'), installDir: game, categories: [], title: 'MX Bikes Ragdoll' }, {});
+  assert.equal(plan.kind, 'plugin');
+  const dest = Object.fromEntries(plan.entries.map((e) => [e.rel, e.dest]));
+  assert.equal(dest['MX Bikes Ragdoll/Auto Install/MXB-Ragdoll-Setup.exe'], null, 'the setup program is not copied');
+  assert.equal(dest['MX Bikes Ragdoll/MANUAL INSTALL.txt'], null);
+  assert.equal(dest['MX Bikes Ragdoll/plugins/mxb_ragdoll.dlo'], 'plugins/mxb_ragdoll.dlo');
+  assert.equal(dest['MX Bikes Ragdoll/plugins/mxb_ragdoll_sfx/hit1.wav'], 'plugins/mxb_ragdoll_sfx/hit1.wav');
+  assert.equal(dest['MX Bikes Ragdoll/plugins/mxb_ragdoll.ini'], null, 'existing settings are kept on update');
+  assert.deepEqual(plan.entries.filter((e) => e.fromGame).map((e) => e.dest).sort(),
+    ['plugins/mxb_ragdoll.fnt', 'plugins/mxb_ragdoll_lcd.fnt', 'plugins/mxb_ragdoll_title.fnt']);
+  // Apply: the loose ui/main.fnt is copied; misc.pkz is missing here, so the install stops and rolls back.
+  await assert.rejects(installer.apply(plan, game), /misc\.pkz was not found/);
+  assert.equal(await fs.readFile(path.join(game, 'plugins', 'mxb_ragdoll.ini'), 'utf8'), 'my settings');
+  await assert.rejects(fs.stat(path.join(game, 'plugins', 'mxb_ragdoll.dlo')), 'rolled back');
+});
+
 test('mixed gear archives route body, gloves and boot paints from their own paths', () => {
   const files = [
     { rel: 'Royal - Polar/Gear/Royal Black.pnt', abs: 'a', size: 1 },

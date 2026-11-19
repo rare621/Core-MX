@@ -208,7 +208,21 @@ function plan(files, ctx, opts = {}) {
   const SERVER_DIR = /^(?:servers?|dedicated|dedi|server[ _-]?(?:files?|version|only|side))$/i;
   const isServerCopy = (rel) => rel.split('/').slice(0, -1).some((s) => SERVER_DIR.test(s));
   const riderNames = new Set(files.filter((f) => !isServerCopy(f.rel)).map((f) => f.rel.split('/').pop().toLowerCase()));
+  // A plugin archive that has a "plugins" folder (often next to an "Auto Install" setup program)
+  // installs what is inside that folder only, so the setup is never copied. (A program inside a
+  // plugin's own folder, like MXB Damage's updater, belongs to the plugin and is kept.) A plugin's
+  // existing settings (.ini / .cfg) are kept when it is updated.
+  const pluginsAt = (rel) => rel.split('/').findIndex((seg, i, all) => i < all.length - 1 && seg.toLowerCase() === 'plugins');
+  const hasPluginsFolder = kind === 'plugin' && files.some((f) => pluginsAt(f.rel) >= 0);
   for (const f of files) {
+    if (hasPluginsFolder) {
+      const at = pluginsAt(f.rel), segs = f.rel.split('/');
+      const dest = at < 0 ? null : ['plugins', ...segs.slice(at + 1)].join('/');
+      const exists = dest && ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest));
+      const keep = exists && /\.(ini|cfg)$/i.test(dest);
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: keep ? null : dest, status: !dest || keep ? 'skip' : exists ? 'overwrite' : 'new', how: keep ? 'keep-settings' : 'game' });
+      continue;
+    }
     if (!gameRoot && isServerCopy(f.rel) && riderNames.has(f.rel.split('/').pop().toLowerCase())) {
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'server-copy' });
       continue;
@@ -388,6 +402,18 @@ function plan(files, ctx, opts = {}) {
   }
   const requiredModels = [...required.values()];
   for (const m of requiredModels.filter((m) => m.kind !== 'bike' && !m.installed && !m.included)) warnings.push(`These paints need the ${m.name} model. Install that model too before equipping the paints.`);
+  // Some plugins draw text with the game's own fonts, copied next to them under their own names;
+  // their instructions ask players to copy these out of the game's .pkz files by hand. CoreMX
+  // copies them (local copies of the player's own game files) as part of the install, so they are
+  // also removed with it.
+  for (const need of PLUGIN_GAME_FILES) {
+    if (kind !== 'plugin' || !entries.some((e) => e.dest && e.dest.toLowerCase() === need.when)) continue;
+    for (const c of need.copies) {
+      if (entries.some((e) => e.dest && e.dest.toLowerCase() === c.dest.toLowerCase())) continue;
+      const exists = ctx.installDir && fs.existsSync(path.join(ctx.installDir, c.dest));
+      entries.push({ rel: `(game) ${c.loose || c.pkz + '/' + c.inner}`, abs: null, size: 0, fromGame: c, dest: c.dest, status: exists ? 'overwrite' : 'new', how: 'game-file' });
+    }
+  }
   if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : kind === 'animationGame' ? 'animations' : 'graphics mods'} go there.`);
   if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : kind === 'animationGame' ? 'The creator requires these .anm files in MX Bikes/rider/animations/mx. Close the game before installing or changing them.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
   else if (/^tools|^plugins|reshade/i.test(ctx.categoryNames ? ctx.categoryNames.join(' ') : '')) warnings.push('Tools, plugins and ReShade presets usually go in the game install folder, not mods/. Check the mod description.');
@@ -412,6 +438,26 @@ function plan(files, ctx, opts = {}) {
   };
 }
 
+// Game files some plugins need copied next to them (see plan()).
+const PLUGIN_GAME_FILES = [
+  { when: 'plugins/mxb_ragdoll.dlo', copies: [
+    { pkz: 'misc.pkz', inner: 'misc/misc.fnt', dest: 'plugins/mxb_ragdoll.fnt' },
+    { loose: 'ui/main.fnt', pkz: 'ui.pkz', inner: 'ui/main.fnt', dest: 'plugins/mxb_ragdoll_title.fnt' },
+    { pkz: 'misc.pkz', inner: 'misc/hud/LCD.fnt', dest: 'plugins/mxb_ragdoll_lcd.fnt' },
+  ] },
+];
+// Reads one of the game's own files: loose in the install folder, else from a plain .pkz there.
+async function readGameFile(gameDir, c) {
+  if (c.loose) { const loose = path.join(gameDir, ...c.loose.split('/')); if (fs.existsSync(loose)) return fsp.readFile(loose); }
+  const pkz = path.join(gameDir, c.pkz);
+  if (!fs.existsSync(pkz)) throw new Error(`The game file ${c.pkz} was not found`);
+  return require('./zipread').withZip(pkz, async (entries, read) => {
+    const entry = entries.find((e) => e.fileName.replace(/\\/g, '/').toLowerCase() === c.inner.toLowerCase());
+    if (!entry) throw new Error(`${c.inner} was not found in the game's ${c.pkz}`);
+    return read(entry, 8 * 1024 * 1024);
+  });
+}
+
 async function apply(p, rootDir, { signal, rollbackDir } = {}) {
   if (p.bikeCompatibility?.blocked) throw new Error(p.bikeCompatibility.messages.join(' '));
   const written = [], journal = [];
@@ -433,7 +479,8 @@ async function apply(p, rootDir, { signal, rollbackDir } = {}) {
     journal.push({ to, previous, createdBackup });
     // In the game folder, keep the original file before replacing it
     if (p.root === 'game' && fs.existsSync(to) && !fs.existsSync(to + '.mxbm-bak')) await fsp.copyFile(to, to + '.mxbm-bak');
-    await fsp.copyFile(e.abs, to);
+    if (e.fromGame) await fsp.writeFile(to, await readGameFile(rootDir, e.fromGame));
+    else await fsp.copyFile(e.abs, to);
     check();
     const now = new Date();
     await fsp.utimes(to, now, now).catch(() => {}); // Windows copy keeps the archive's old dates
