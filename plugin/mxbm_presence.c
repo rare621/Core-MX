@@ -64,6 +64,7 @@ static int g_lockReady;
 
 static struct {
   int inEvent, type, serverType, session, haveServer;
+  int onTrack; /* between RunInit (left the pits) and RunDeinit (back in the pits) */
   char rider[100], bikeId[100], bikeName[100], category[100], trackId[100], trackName[100], server[64], guid[100], eventName[100];
   Rider riders[MAX_RIDERS];
 } S;
@@ -223,6 +224,10 @@ EXPORT void RaceEvent(void *_pData, int _iDataSize) {
   writeState();
   unlock();
 }
+
+/* Leaving the pits onto the track, and back. */
+EXPORT void RunInit(void *_pData, int _iDataSize) { (void)_pData; (void)_iDataSize; S.onTrack = 1; }
+EXPORT void RunDeinit(void) { S.onTrack = 0; }
 
 EXPORT void RaceDeinit(void) { lock(); memset(&S, 0, sizeof S); writeState(); unlock(); }
 
@@ -665,6 +670,7 @@ static void bookWrite(unsigned long long now) {
 
 static void liveryTestPoll(void);
 static void looksPoll(void);
+static void ownRebuildPoll(void);
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -678,6 +684,7 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
     Sleep(500);
     liveryTestPoll();
     looksPoll();
+    ownRebuildPoll();
     if (srvCopy(base + RVA_SRV_LIST, (void *)&list, sizeof list) && srvCopy(base + RVA_SRV_COUNT, &count, sizeof count) &&
         list && count > 0 && count <= SRV_MAX_ROWS && srvCopy(list, rows, (size_t)count * SRV_STRIDE)) {
       for (i = 0; i < count; i++) {
@@ -728,10 +735,12 @@ static const unsigned char SIG_APPLY_LIVERY[14] = { 0x4c, 0x8b, 0xdc, 0x55, 0x56
 typedef void *(*dispatch_t)(int cmd, int id, const char *a, const char *b);
 typedef struct { unsigned count, ptr, stride; } GameList;
 static const GameList L_BIKES = { 0xF48218, 0xF4EDE8, 0x4334 }, L_RIDERS = { 0xF3DC60, 0xF3DC68, 0x1224 },
-  L_BOOTS = { 0xF3DB58, 0xF4EDB0, 0x208 }, L_HELMETS = { 0xF3DC64, 0xF3DC70, 0x268 };
+  L_BOOTS = { 0xF3DB58, 0xF4EDB0, 0x208 }, L_HELMETS = { 0xF3DC64, 0xF3DC70, 0x268 },
+  L_PROT = { 0x106BB28, 0xF432A8, 0x1EC };
 static const GameList P_BIKE = { 0x109DE88, 0xF4EDF8, 0x18C }, P_SUIT = { 0xF3DB50, 0xF3DC90, 0x18C },
   P_GLOVES = { 0xF3DC58, 0xF48208, 0x18C }, P_BOOTS = { 0xF48660, 0xF432A0, 0x18C },
-  P_HELMET = { 0xF48620, 0x109E090, 0x18C }, P_GOGGLES = { 0x10A30F4, 0xF3DC28, 0x18C };
+  P_HELMET = { 0xF48620, 0x109E090, 0x18C }, P_GOGGLES = { 0x10A30F4, 0xF3DC28, 0x18C },
+  P_PROT = { 0xF432C0, 0xF4EDD0, 0x18C };
 static const int BIKE_PARTS[6] = { 0x00, 0x10, 0x14, 0x50, 0x60, 0x70 };
 static const int BOOT_PARTS[2] = { 0x1D8, 0x1DC };
 static const int BODY_PART[1] = { 0x1D4 }, HELMET_PART[1] = { 0x1E0 };
@@ -931,7 +940,7 @@ static void liveryTestPoll(void) {
  * address used is checked first against fingerprints of this build. Result: mxbm_looks_result.json.
  * Research notes: plugin/LIVE_GEAR_NOTES.md. */
 #define LOOK_MAX 50
-typedef struct { int num; char bike[64]; char f[10][64]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint (9 used) */
+typedef struct { int num; char bike[64]; char f[11][64]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint protection protectionPaint */
 static Look g_looks[LOOK_MAX], g_looksWork[LOOK_MAX];
 static int g_lookCount = 0;
 static unsigned long long g_looksStamp = 0, g_looksDone = 0;
@@ -970,7 +979,10 @@ static void reloadLists(unsigned char *base, const char *kinds) {
     reloadList(base, 0x19330, 0xF3DB50, 0x109DEA8, 0xF3DC90);                        /* suits */
     reloadList(base, 0x1A770, 0xF3DC58, 0xF432B4, 0xF48208);                         /* gloves */
   }
-  /* ("boots" does not occur inside "bootpaints", nor "helmets" inside "helmetpaints".) */
+  /* ("boots" does not occur inside "bootpaints", "helmets" inside "helmetpaints", nor "protections"
+   * inside "protectionpaints".) */
+  if (strstr(kinds, "protections")) reloadList(base, 0x1C140, 0x106BB28, 0x109DEB0, 0xF432A8);
+  if (strstr(kinds, "protections") || strstr(kinds, "protectionpaints")) reloadList(base, 0x1C450, 0xF432C0, 0xF48608, 0xF4EDD0);
   if (strstr(kinds, "boots")) ((void (*)(void))(void *)(base + 0x19DA0))();         /* resets its own list */
   if (strstr(kinds, "boots") || strstr(kinds, "bootpaints"))
     reloadList(base, 0x1A110, 0xF48660, 0xF4EDE0, 0xF432A0);                         /* boots paints */
@@ -1033,16 +1045,27 @@ static void applyLooks(void) {
       if (_stricmp(nm, L->bike) == 0) { r = c; break; }
     }
     if (r) {
-      /* Models: helmet, boots, rider. Written only if installed; a change means a rebuild. */
-      static const int MODEL_OFF[3] = { 0xF0, 0x1B0, 0xD0 }, MODEL_F[3] = { 2, 7, 1 };
-      const GameList *MODEL_L[3] = { &L_HELMETS, &L_BOOTS, &L_RIDERS };
+      /* Models: helmet, boots, rider, protection ("None" = no protection). Written only if
+       * installed; a change means a rebuild. */
+      static const int MODEL_OFF[4] = { 0xF0, 0x1B0, 0xD0, 0x210 }, MODEL_F[4] = { 2, 7, 1, 9 };
+      const GameList *MODEL_L[4] = { &L_HELMETS, &L_BOOTS, &L_RIDERS, &L_PROT };
       int m, groups = 0;
-      for (m = 0; m < 3; m++) {
+      for (m = 0; m < 4; m++) {
         const char *want = L->f[MODEL_F[m]];
+        int none = m == 3 && _stricmp(want, "None") == 0;
         memcpy(nm, r + MODEL_OFF[m], 32); nm[32] = 0;
-        if (!want[0] || _stricmp(nm, want) == 0) continue;
-        if (modelIndex(base, *MODEL_L[m], want) < 0) { skipped++; continue; }
-        setName(r + MODEL_OFF[m], want); rebuild = 1;
+        if (!want[0] || _stricmp(nm, none ? "" : want) == 0) continue;
+        if (!none && modelIndex(base, *MODEL_L[m], want) < 0) { skipped++; continue; }
+        setName(r + MODEL_OFF[m], none ? "" : want); rebuild = 1;
+      }
+      /* Protection paint: drawn when the protection is built, so a change also rebuilds. */
+      {
+        const char *want = L->f[10]; char prot[33];
+        memcpy(prot, r + 0x210, 32); prot[32] = 0; memcpy(nm, r + 0x230, 32); nm[32] = 0;
+        if (want[0] && prot[0] && _stricmp(nm, want) != 0) {
+          if (findPaint(base, P_PROT, L_PROT, prot, want, "%srider\\protections\\%s\\paints\\%s.pnt", a, sizeof a)) { setName(r + 0x230, want); rebuild = 1; }
+          else skipped++;
+        }
       }
       /* Paints: written only if installed for the (new) model; groups to repaint. */
       {
@@ -1102,16 +1125,16 @@ static void looksPoll(void) {
     g_looksMtime = fa.ftLastWriteTime;
     stamp = _strtoui64(buf + 15, NULL, 10);
     for (line = buf; line && *line; line = next) {
-      char *cols[13]; int c = 0;
+      char *cols[16]; int c = 0;
       next = strchr(line, '\n'); if (next) *next++ = 0;
       { size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0; }
       cols[c++] = line;
-      while (c < 13) { char *t = strchr(cols[c - 1], '\t'); if (!t) break; *t = 0; cols[c++] = t + 1; }
+      while (c < 16) { char *t = strchr(cols[c - 1], '\t'); if (!t) break; *t = 0; cols[c++] = t + 1; }
       if (strcmp(cols[0], "reload") == 0 && c > 1) copy(reload, cols[1], sizeof reload);
       else if (strcmp(cols[0], "look") == 0 && c >= 12 && count < LOOK_MAX) {
         int k; Look *L = &tmp[count]; memset(L, 0, sizeof *L);
         L->num = atoi(cols[1]); copy(L->bike, cols[2], sizeof L->bike);
-        for (k = 0; k < 9; k++) copy(L->f[k], cols[3 + k], sizeof L->f[k]);
+        for (k = 0; k < 11 && 3 + k < c; k++) copy(L->f[k], cols[3 + k], sizeof L->f[k]);
         if (L->num > 0 && L->bike[0]) count++;
       }
     }
@@ -1134,15 +1157,99 @@ static void looksPoll(void) {
  * the game still sees them too. */
 typedef struct { float m_aafPos[4][2]; int m_iSprite; unsigned long m_ulColor; } SPluginQuad_t;
 typedef struct { char m_szString[100]; float m_afPos[2]; int m_iFont; float m_fSize; int m_iJustify; unsigned long m_ulColor; } SPluginString_t;
-#define OV_ROWS 6
-#define OV_MAXOPT 160
-static const char *const OV_LABEL[OV_ROWS] = { "Bike livery", "Suit", "Gloves", "Boots paint", "Helmet paint", "Goggles" };
-static const char *const OV_SLOT[OV_ROWS] = { "bikePaint", "suitPaint", "glovesPaint", "bootsPaint", "helmetPaint", "gogglesPaint" };
-static const int OV_OFF[OV_ROWS] = { 0x90, 0x170, 0x1F0, 0x1D0, 0x110, 0x130 }, OV_GROUP[OV_ROWS] = { 1, 2, 2, 4, 8, 8 };
+/* Rows. Paint rows list the paints installed for the model named in the record (MOFF); model
+ * rows (helmet, boots, chest protector/neck brace) list every installed model of that kind.
+ * A model change needs your rider rebuilt, which the plugin does when you are back in the pits
+ * (the game cannot rebuild your own rider safely while you ride): the old look is removed with
+ * the game's RVA 0x4E0D0 and the build state set to 3, which makes the game's loop build it with
+ * its full builder RVA 0x45020 (outside and first-person models), as for a postponed first build.
+ * Until then, paints of a changed model are not previewed (they would land on the old model). */
+#define OV_ROWS 10
+#define OV_MAXOPT 400
+enum { R_BIKEPAINT, R_SUIT, R_GLOVES, R_BOOTSPAINT, R_HELMETPAINT, R_GOGGLES, R_HELMET, R_BOOTS, R_PROT, R_PROTPAINT };
+static const char *const OV_LABEL[OV_ROWS] = { "Bike livery", "Suit", "Gloves", "Boots paint", "Helmet paint", "Goggles", "Helmet", "Boots", "Chest protector / neck brace", "Protector paint" };
+static const char *const OV_SLOT[OV_ROWS] = { "bikePaint", "suitPaint", "glovesPaint", "bootsPaint", "helmetPaint", "gogglesPaint", "helmet", "boots", "protection", "protectionPaint" };
+static const int OV_OFF[OV_ROWS] = { 0x90, 0x170, 0x1F0, 0x1D0, 0x110, 0x130, 0xF0, 0x1B0, 0x210, 0x230 };
+/* Repaint group of a paint row (0 = model row, 16 = needs a rebuild). */
+static const int OV_GROUP[OV_ROWS] = { 1, 2, 2, 4, 8, 8, 0, 0, 0, 16 };
+/* For paint rows: the model whose paints they list (record offset) and the model row it belongs to. */
+static const int OV_MOFF[OV_ROWS] = { 0x30, 0xD0, 0xD0, 0x1B0, 0xF0, 0xF0, 0, 0, 0, 0x210 };
+static const int OV_PARENT[OV_ROWS] = { -1, -1, -1, R_BOOTS, R_HELMET, R_HELMET, -1, -1, -1, R_PROT };
 static char g_ovOpt[OV_ROWS][OV_MAXOPT][64];
 static int g_ovCount[OV_ROWS], g_ovSel[OV_ROWS], g_ovOpen = 0, g_ovFont = 0;
 static volatile LONG g_ovDirty = 0;
+static volatile LONG g_ownRebuild = 0;  /* a model change waits for the pits */
+static int g_ovModelChanged[OV_ROWS];   /* model rows changed since the overlay opened */
 static unsigned long long g_ovMsgUntil = 0;
+
+static const GameList *ovPaintList(int row) {
+  static const GameList *const PL[OV_ROWS] = { &P_BIKE, &P_SUIT, &P_GLOVES, &P_BOOTS, &P_HELMET, &P_GOGGLES, 0, 0, 0, &P_PROT };
+  return PL[row];
+}
+static const GameList *ovModelList(int row) {
+  switch (row) {
+    case R_BIKEPAINT: return &L_BIKES;
+    case R_SUIT: case R_GLOVES: return &L_RIDERS;
+    case R_BOOTSPAINT: case R_BOOTS: return &L_BOOTS;
+    case R_HELMETPAINT: case R_GOGGLES: case R_HELMET: return &L_HELMETS;
+    default: return &L_PROT;
+  }
+}
+
+/* Fills one row's options from the game's lists and finds the selected one. */
+static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
+  static unsigned char e[0x18C];
+  char cur[33]; int n = 0, i; const unsigned char *p = 0;
+  memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
+  g_ovCount[row] = 0; g_ovSel[row] = -1;
+  if (OV_GROUP[row] == 0) {
+    const GameList *l = ovModelList(row);
+    if (row == R_PROT) { copy(g_ovOpt[row][0], "None", 64); if (!cur[0]) g_ovSel[row] = 0; g_ovCount[row] = 1; }
+    if (!srvCopy(base + l->count, &n, 4) || !srvCopy(base + l->ptr, (void *)&p, sizeof p) || n <= 0 || n > 20000 || !p) return;
+    for (i = 0; i < n && g_ovCount[row] < OV_MAXOPT; i++) {
+      char *o = g_ovOpt[row][g_ovCount[row]];
+      if (!srvCopy(p + (size_t)i * l->stride, o, 63)) break;
+      o[63] = 0;
+      if (!o[0]) continue;
+      if (_stricmp(o, cur) == 0) g_ovSel[row] = g_ovCount[row];
+      g_ovCount[row]++;
+    }
+    return;
+  }
+  {
+    const GameList *pl = ovPaintList(row); char model[33]; int owner;
+    memcpy(model, r + OV_MOFF[row], 32); model[32] = 0;
+    owner = modelIndex(base, *ovModelList(row), model);
+    if (owner < 0 || !srvCopy(base + pl->count, &n, 4) || !srvCopy(base + pl->ptr, (void *)&p, sizeof p) || n <= 0 || n > 100000 || !p) return;
+    for (i = 0; i < n && g_ovCount[row] < OV_MAXOPT; i++) {
+      if (!srvCopy(p + (size_t)i * 0x18C, e, sizeof e) || *(int *)e != owner) continue;
+      memcpy(g_ovOpt[row][g_ovCount[row]], e + 4, 63); g_ovOpt[row][g_ovCount[row]][63] = 0;
+      if (_stricmp(g_ovOpt[row][g_ovCount[row]], cur) == 0) g_ovSel[row] = g_ovCount[row];
+      g_ovCount[row]++;
+    }
+  }
+}
+static void ovLoadOptions(unsigned char *base, unsigned char *r) {
+  int row;
+  for (row = 0; row < OV_ROWS; row++) { ovLoadRow(base, r, row); g_ovModelChanged[row] = 0; }
+}
+
+static void ovSave(unsigned char *r) {
+  char o[2048], v[33]; size_t at; int row;
+  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"bike\":", nowMs());
+  memcpy(v, r + 0x30, 32); v[32] = 0; at = jstr(o, at, v, sizeof o - 80);
+  memcpy(o + at, ",\"changes\":{", 12); at += 12;
+  for (row = 0; row < OV_ROWS; row++) {
+    memcpy(v, r + OV_OFF[row], 32); v[32] = 0;
+    if (row == R_PROT && !v[0]) copy(v, "None", sizeof v);
+    at += (size_t)sprintf(o + at, "%s\"%s\":", row ? "," : "", OV_SLOT[row]);
+    at = jstr(o, at, v, sizeof o - 80);
+  }
+  o[at++] = '}'; o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_overlay_save.json", o);
+}
+
+
 static char g_ovMsg[100], g_fontName[64];
 static SPluginQuad_t g_quads[96];
 static SPluginString_t g_strings[64];
@@ -1194,42 +1301,6 @@ static unsigned char *ownRecord(unsigned char *base) {
   return *(const int *)r == 1 && *(const int *)(r + 0x274) > 0 ? r : 0;
 }
 
-/* Fills each row with the installed paints for your current models and finds the selected one. */
-static void ovLoadOptions(unsigned char *base, unsigned char *r) {
-  static const GameList *const PL[OV_ROWS] = { &P_BIKE, &P_SUIT, &P_GLOVES, &P_BOOTS, &P_HELMET, &P_GOGGLES };
-  static const GameList *const ML[OV_ROWS] = { &L_BIKES, &L_RIDERS, &L_RIDERS, &L_BOOTS, &L_HELMETS, &L_HELMETS };
-  static const int MOFF[OV_ROWS] = { 0x30, 0xD0, 0xD0, 0x1B0, 0xF0, 0xF0 };
-  static unsigned char e[0x18C];
-  int row;
-  for (row = 0; row < OV_ROWS; row++) {
-    char model[33], cur[33]; int owner, n = 0, i; const unsigned char *p = 0;
-    memcpy(model, r + MOFF[row], 32); model[32] = 0; memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
-    g_ovCount[row] = 0; g_ovSel[row] = -1;
-    owner = modelIndex(base, *ML[row], model);
-    if (owner < 0 || !srvCopy(base + PL[row]->count, &n, 4) || !srvCopy(base + PL[row]->ptr, (void *)&p, sizeof p) || n <= 0 || n > 100000 || !p) continue;
-    for (i = 0; i < n && g_ovCount[row] < OV_MAXOPT; i++) {
-      if (!srvCopy(p + (size_t)i * 0x18C, e, sizeof e) || *(int *)e != owner) continue;
-      memcpy(g_ovOpt[row][g_ovCount[row]], e + 4, 63); g_ovOpt[row][g_ovCount[row]][63] = 0;
-      if (_stricmp(g_ovOpt[row][g_ovCount[row]], cur) == 0) g_ovSel[row] = g_ovCount[row];
-      g_ovCount[row]++;
-    }
-  }
-}
-
-static void ovSave(unsigned char *r) {
-  char o[1024], v[33]; size_t at; int row;
-  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"bike\":", nowMs());
-  memcpy(v, r + 0x30, 32); v[32] = 0; at = jstr(o, at, v, sizeof o - 80);
-  memcpy(o + at, ",\"changes\":{", 12); at += 12;
-  for (row = 0; row < OV_ROWS; row++) {
-    memcpy(v, r + OV_OFF[row], 32); v[32] = 0;
-    at += (size_t)sprintf(o + at, "%s\"%s\":", row ? "," : "", OV_SLOT[row]);
-    at = jstr(o, at, v, sizeof o - 80);
-  }
-  o[at++] = '}'; o[at++] = '}'; o[at] = 0;
-  writeSmall("mxbm_overlay_save.json", o);
-}
-
 static int keyPressed(int vk) {
   static unsigned char down[256];
   int now = (GetAsyncKeyState(vk) & 0x8000) != 0, was = down[vk & 0xFF];
@@ -1245,7 +1316,8 @@ static int gameInFront(void) { DWORD pid = 0; HWND w = GetForegroundWindow(); if
  * and reads left clicks while it is open (the game sees the clicks too). Keyboard: Up/Down card,
  * Left/Right change, Tab switch tab, Enter save, F8 close. Locked during Race 1 and Race 2. */
 typedef struct { const char *group; int row; } OvCard;
-static const OvCard OV_OUTFIT[] = { { "HEAD", 4 }, { NULL, 5 }, { "BODY", 1 }, { "HANDS & FEET", 2 }, { NULL, 3 } };
+static const OvCard OV_OUTFIT[] = { { "HEAD", R_HELMET }, { NULL, R_HELMETPAINT }, { NULL, R_GOGGLES }, { "BODY", R_SUIT }, { NULL, R_PROT }, { NULL, R_PROTPAINT },
+  { "HANDS & FEET", R_GLOVES }, { NULL, R_BOOTS }, { NULL, R_BOOTSPAINT } };
 static const OvCard OV_BIKE[] = { { "BIKE", 0 } };
 static int g_ovTab = 0, g_ovCard = 0, g_ovPicker = -1, g_ovScroll = 0;
 typedef struct { float x0, y0, x1, y1; int kind, value; } OvHit; /* kind: 1 tab, 2 card, 3 option, 4 save, 5 close, 6 scroll */
@@ -1276,16 +1348,31 @@ static int ovMouse(float *mx, float *my) {
   return 1;
 }
 static int ovRaceLocked(void) { return S.type == 2 && (S.session == 6 || S.session == 7); }
-static void ovSetValue(unsigned char *r, int row, int sel) {
+static void ovSetValue(unsigned char *base, unsigned char *r, int row, int sel) {
+  int k;
   g_ovSel[row] = sel;
-  setName(r + OV_OFF[row], g_ovOpt[row][sel]);
-  InterlockedOr(&g_ovDirty, OV_GROUP[row]);
-  InterlockedOr(&mxbm_pending, 4);
+  setName(r + OV_OFF[row], row == R_PROT && sel == 0 ? "" : g_ovOpt[row][sel]);
+  if (OV_GROUP[row] == 0) {
+    /* A different model: its paint lists change. Keep each paint if the new model has it, else
+     * take its first one, so a paint never belongs to another model. Rebuild in the pits. */
+    g_ovModelChanged[row] = 1;
+    for (k = 0; k < OV_ROWS; k++) {
+      if (OV_PARENT[k] != row) continue;
+      ovLoadRow(base, r, k);
+      if (g_ovSel[k] < 0) { setName(r + OV_OFF[k], g_ovCount[k] ? g_ovOpt[k][0] : ""); g_ovSel[k] = g_ovCount[k] ? 0 : -1; }
+    }
+    InterlockedExchange(&g_ownRebuild, 1);
+  } else if (OV_GROUP[row] == 16 || (OV_PARENT[row] >= 0 && g_ovModelChanged[OV_PARENT[row]])) {
+    InterlockedExchange(&g_ownRebuild, 1);   /* drawn by the rebuild, not previewed on the old model */
+  } else {
+    InterlockedOr(&g_ovDirty, OV_GROUP[row]);
+    InterlockedOr(&mxbm_pending, 4);
+  }
 }
-static void ovStep(unsigned char *r, int row, int dir) {
+static void ovStep(unsigned char *base, unsigned char *r, int row, int dir) {
   int c = g_ovCount[row], s = g_ovSel[row];
   if (c <= 0) return;
-  ovSetValue(r, row, s < 0 ? 0 : (s + (dir > 0 ? 1 : c - 1)) % c);
+  ovSetValue(base, r, row, s < 0 ? 0 : (s + (dir > 0 ? 1 : c - 1)) % c);
 }
 static void ovSaveNow(unsigned char *r) { ovSave(r); copy(g_ovMsg, OV_SAVED_MSG, sizeof g_ovMsg); g_ovMsgUntil = nowMs() + 5000; }
 
@@ -1318,13 +1405,13 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
   if (r && !locked) {
     if (g_ovPicker >= 0) {
       int c = g_ovCount[g_ovPicker];
-      if (up && c) ovSetValue(r, g_ovPicker, (g_ovSel[g_ovPicker] + c - 1) % c);
-      if (dn && c) ovSetValue(r, g_ovPicker, (g_ovSel[g_ovPicker] + 1) % c);
+      if (up && c) ovSetValue(base, r, g_ovPicker, (g_ovSel[g_ovPicker] + c - 1) % c);
+      if (dn && c) ovSetValue(base, r, g_ovPicker, (g_ovSel[g_ovPicker] + 1) % c);
     } else {
       if (up) g_ovCard = (g_ovCard + ncards - 1) % ncards;
       if (dn) g_ovCard = (g_ovCard + 1) % ncards;
     }
-    if (lt || rt) ovStep(r, cards[g_ovCard].row, rt ? 1 : -1);
+    if (lt || rt) ovStep(base, r, cards[g_ovCard].row, rt ? 1 : -1);
     if (en) ovSaveNow(r);
   }
   if (click) {
@@ -1339,7 +1426,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
           g_ovCard = h->value; g_ovPicker = g_ovPicker == row ? -1 : row;
           g_ovScroll = g_ovSel[row] > OV_PICKER_ROWS / 2 ? g_ovSel[row] - OV_PICKER_ROWS / 2 : 0;
         }
-        else if (h->kind == 3 && g_ovPicker >= 0) ovSetValue(r, g_ovPicker, h->value);
+        else if (h->kind == 3 && g_ovPicker >= 0) ovSetValue(base, r, g_ovPicker, h->value);
         else if (h->kind == 6 && g_ovPicker >= 0) g_ovScroll += h->value * (OV_PICKER_ROWS - 1);
         else if (h->kind == 4) ovSaveNow(r);
       }
@@ -1362,7 +1449,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     char line[100];
     int k, groups = 0;
     for (k = 0; k < ncards; k++) if (cards[k].group) groups++;
-    y1 = y + groups * 0.032f + ncards * 0.062f + 0.13f;
+    y1 = y + groups * 0.030f + ncards * 0.052f + 0.15f;
     ovQuad(x0, y0, x1, y1, 0xE6141418);
     ovBox(x0, y0, x1, y1, 0.0015f, 0x30FFFFFF);
     ovText("CoreMX", x0 + 0.014f, y0 + 0.016f, 0.018f, 0, OV_ACCENT);
@@ -1381,19 +1468,22 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     else for (k = 0; k < ncards; k++) {
       int row = cards[k].row, sel = g_ovSel[row], c = g_ovCount[row], on = k == g_ovCard;
       char cur[33];
-      if (cards[k].group) { ovText(cards[k].group, x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.032f; }
-      ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, row == g_ovPicker ? 0x40328CFF : on ? 0x24FFFFFF : 0x12FFFFFF);
-      if (on || row == g_ovPicker) ovBox(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, 0.0018f, row == g_ovPicker ? OV_ACCENT : 0x50FFFFFF);
-      ovText(OV_LABEL[row], x0 + 0.020f, y + 0.007f, 0.0145f, 0, 0xFF9A9A9A);
+      if (cards[k].group) { ovText(cards[k].group, x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.030f; }
+      ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, row == g_ovPicker ? 0x40328CFF : on ? 0x24FFFFFF : 0x12FFFFFF);
+      if (on || row == g_ovPicker) ovBox(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 0.0018f, row == g_ovPicker ? OV_ACCENT : 0x50FFFFFF);
+      ovText(OV_LABEL[row], x0 + 0.020f, y + 0.005f, 0.0135f, 0, 0xFF9A9A9A);
       memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
       sprintf(line, "%.42s", sel >= 0 ? g_ovOpt[row][sel] : cur[0] ? cur : c ? "Default" : "None installed");
-      ovText(line, x0 + 0.020f, y + 0.026f, 0.019f, 0, 0xFFFFFFFF);
-      if (c > 1) ovText("<  >", x1 - 0.022f, y + 0.018f, 0.018f, 2, 0xFFB0B0B0);
-      ovHit(x0 + 0.010f, y, x1 - 0.010f, y + 0.054f, 2, k);
-      y += 0.062f;
+      ovText(line, x0 + 0.020f, y + 0.021f, 0.017f, 0, 0xFFFFFFFF);
+      if (c > 1) ovText("<  >", x1 - 0.022f, y + 0.015f, 0.017f, 2, 0xFFB0B0B0);
+      ovHit(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 2, k);
+      y += 0.052f;
     }
     /* Save button and status. */
     y = y1 - 0.105f;
+    if (r && !locked && g_ownRebuild)
+      ovText(S.onTrack ? "Helmet, boots and protector changes show when you go back to the pits." : "Applying your new helmet, boots or protector...",
+             x0 + 0.014f, y - 0.030f, 0.0135f, 0, 0xFF6CB4FF);
     if (r && !locked) {
       ovQuad(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, OV_ACCENT);
       ovText("Save", (x0 + x1) / 2, y + 0.011f, 0.019f, 1, 0xFFFFFFFF);
@@ -1443,6 +1533,19 @@ void mxbm_run_pending(void) {
   LONG work = InterlockedExchange(&mxbm_pending, 0);
   if (work & 1) runPaintTest();
   if (work & 2) applyLooks();
+  if (work & 8) {
+    /* Your own rider with a new helmet, boots or protector, once you are back in the pits: remove
+     * the old look (RVA 0x4E0D0) and let the game's loop build it again with the full builder
+     * (state 3 -> RVA 0x45020, outside and first-person models) from the names in the record. */
+    unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r = ownRecord(base);
+    if (r && g_ownRebuild && !S.onTrack && *(const int *)(r + 0x4EE8) == 0) {
+      InterlockedExchange(&g_ownRebuild, 0);
+      g_gameCallThread = GetCurrentThreadId();
+      ((int (*)(unsigned char *))(void *)(base + 0x4E0D0))(r + 0x274);
+      *(volatile int *)(r + 0x4EE8) = 3;
+      g_gameCallThread = 0;
+    }
+  }
   if (work & 4) {
     unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r = ownRecord(base);
     LONG groups = InterlockedExchange(&g_ovDirty, 0);
@@ -1494,3 +1597,8 @@ static void hookStop(void) {
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) { (void)h; (void)reason; (void)r; return TRUE; }
+
+/* Polled from the server-list thread: a waiting model change runs once you are in the pits. */
+static void ownRebuildPoll(void) {
+  if (g_ownRebuild && mxbm_orig_ui && S.inEvent && !S.onTrack) InterlockedOr(&mxbm_pending, 8);
+}

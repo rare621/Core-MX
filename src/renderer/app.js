@@ -2073,6 +2073,8 @@ function prettyValue(slot, v) {
   return v.replace(/_/g, ' ');
 }
 
+// The plugin's in-game overlay (F8) changes the same outfit and bike livery on track.
+const f8HintHtml = () => `<span class="f8-hint" title="Needs the CoreMX game plugin (Settings → Plugins). Paints change at once; a new helmet, boots or protector shows when you go back to the pits. Locked during races."><kbd>F8</kbd>in game to change your outfit and bike on track</span>`;
 async function renderRider(c) {
   const R = S.rider;
   const request = R.renderRequest = (R.renderRequest || 0) + 1;
@@ -2113,7 +2115,7 @@ async function renderRider(c) {
 function drawBike(c) {
   const R = S.rider, lo = R.lo;
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('bike')}</div>${profileControlsHtml()}</div>
+    <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('bike')}${f8HintHtml()}</div>${profileControlsHtml()}</div>
     <div class="scroller"><div class="bike-preview-layout">
       <div><div class="rider-stage bike-stage" id="bikeStage"><div class="stage-status" id="bikeStatus"><div class="spinner"></div></div><div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div></div><div class="stage-note muted" id="bikeNote"></div></div>
       <div class="rider-wrap bike-details"><div class="bike-detail-heading"><div><div class="slot-l">Selected bike</div><h2>${esc(bikeTitle(R.bike))}</h2>${lo.selectedInGame && !riderDirty() ? `<span class="bike-current">${icon('check')}Current bike in game</span>` : ''}</div><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
@@ -2154,7 +2156,7 @@ function drawRider(c) {
       ${blocked ? '' : `<span class="slot-n">${n} ${icon('chevron')}</span>`}</button>`;
   };
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('outfit')}</div>${profileControlsHtml()}
+    <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('outfit')}${f8HintHtml()}</div>${profileControlsHtml()}
       <span class="sub">Preview your setup, then Apply to save it to the game</span>
       <button class="btn" data-act="rider-copy-all">${icon('copy')}Use this outfit on all bikes</button></div>
     <div class="scroller"><div class="rider-layout">
