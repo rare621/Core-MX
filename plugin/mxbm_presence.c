@@ -52,6 +52,7 @@ typedef struct { int used, num; char name[100], bike[100], category[100]; } Ride
 static void hookStart(const char *dir);
 static void hookStop(void);
 static int connectedServer(char *name, size_t ncap, char *addr, size_t acap);
+static int ownRaceNumber(void);
 static void stunStart(unsigned char *base);
 static void stunStop(void);
 static void stunUnhook(void);
@@ -103,6 +104,7 @@ static void writeState(void) {
     PUTI("type", S.type);
     PUTI("session", S.session);
     PUTS("rider", S.rider);
+    { int num = ownRaceNumber(); if (num > 0) PUTI("raceNumber", num); }
     PUTS("bikeId", S.bikeId);
     PUTS("bikeName", S.bikeName);
     PUTS("category", S.category);
@@ -303,7 +305,7 @@ extern void mxbm_ui_stub(void);
 
 /* Work queued for the game's own thread (see the livery test below). The game calls the UI
  * pointer from its main thread; the stub runs queued work there, before passing the call on. */
-volatile int mxbm_pending = 0;
+volatile LONG mxbm_pending = 0; /* bit 1: paint test, bit 2: live looks */
 void mxbm_run_pending(void);
 
 __asm__(
@@ -427,6 +429,19 @@ static int connectedServer(char *name, size_t ncap, char *addr, size_t acap) {
   if (!port) return 0;
   sprintf(addr, "%u.%u.%u.%u:%u", cb[1], cb[2], cb[3], cb[4], port);
   return 1;
+}
+
+/* Your own race number from your vehicle record (own index + 1 at RVA 0xE62710, number at +0x0C),
+ * so other CoreMX users can find you in their game. This build only; 0 if not known. */
+static int ownRaceNumber(void) {
+  const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
+  int own = 0, used = 0, num = 0; const unsigned char *rec;
+  if (!g_buildOk || !base) return 0;
+  if (!ReadProcessMemory(GetCurrentProcess(), base + 0xE62710, &own, 4, NULL) || own < 1 || own > 50) return 0;
+  rec = base + 0xF4EE20 + (size_t)(own - 1) * 0x5B24;
+  if (!ReadProcessMemory(GetCurrentProcess(), rec, &used, 4, NULL) || used != 1) return 0;
+  if (!ReadProcessMemory(GetCurrentProcess(), rec + 0x0C, &num, 4, NULL)) return 0;
+  return num > 0 && num < 100000 ? num : 0;
 }
 
 static int disabledForThisBuild(void) {
@@ -649,6 +664,7 @@ static void bookWrite(unsigned long long now) {
 }
 
 static void liveryTestPoll(void);
+static void looksPoll(void);
 static DWORD WINAPI serverListThread(LPVOID unused) {
   const unsigned char *base = (const unsigned char *)GetModuleHandleA(NULL);
   unsigned char *rows = (unsigned char *)malloc((size_t)SRV_MAX_ROWS * SRV_STRIDE);
@@ -661,6 +677,7 @@ static DWORD WINAPI serverListThread(LPVOID unused) {
     const unsigned char *list = 0; int count = 0, i;
     Sleep(500);
     liveryTestPoll();
+    looksPoll();
     if (srvCopy(base + RVA_SRV_LIST, (void *)&list, sizeof list) && srvCopy(base + RVA_SRV_COUNT, &count, sizeof count) &&
         list && count > 0 && count <= SRV_MAX_ROWS && srvCopy(list, rows, (size_t)count * SRV_STRIDE)) {
       for (i = 0; i < count; i++) {
@@ -825,14 +842,13 @@ static size_t rebuildTest(unsigned char *base, const char *req, int own, char *o
 }
 
 /* Runs on the game's main thread, from the UI stub. */
-void mxbm_run_pending(void) {
+static void runPaintTest(void) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
   static char o[32768], a[MAX_PATH * 2], b[MAX_PATH * 2], two[MAX_PATH * 4 + 2];
   char req[1024], want[132], name[33], owner[33];
   const unsigned char *rec; int own = 0, idx, i, found, applied = 0;
   size_t at;
   dispatch_t dispatch = (dispatch_t)mxbm_orig_ui;
-  mxbm_pending = 0;
   copy(req, g_testRequest, sizeof req);
   if (req[0] && !strchr(req, '=')) { char tmp[1024]; sprintf(tmp, "bike=%.1000s", req); copy(req, tmp, sizeof req); }
   at = (size_t)sprintf(o, "{\"v\":2,\"at\":%llu,\"request\":", nowMs());
@@ -888,7 +904,7 @@ void mxbm_run_pending(void) {
 /* Polled from the server-list thread: a request file queues the test for the game's thread. */
 static void liveryTestPoll(void) {
   char path[MAX_PATH * 2 + 40], buf[1024] = {0}; FILE *f; size_t n;
-  if (!mxbm_orig_ui || mxbm_pending) return; /* needs the UI hook to reach the game's thread */
+  if (!mxbm_orig_ui || (mxbm_pending & 1)) return; /* needs the UI hook to reach the game's thread */
   sprintf(path, "%smxbm_test_livery.txt", g_dir);
   f = fopen(path, "rb"); if (!f) return;
   n = fread(buf, 1, sizeof buf - 1, f); fclose(f);
@@ -896,7 +912,210 @@ static void liveryTestPoll(void) {
   while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == ' ')) buf[--n] = 0;
   buf[n] = 0;
   copy(g_testRequest, buf, sizeof g_testRequest);
-  mxbm_pending = 1;
+  InterlockedOr(&mxbm_pending, 1);
+}
+
+/* ===================== Live looks: other CoreMX riders on your screen =====================
+ * CoreMX writes mxbm_looks.txt (tab-separated) after downloading the free gear of other CoreMX
+ * users on your server:
+ *   coremx-looks 1 <stamp>
+ *   reload <TAB> bikepaints,helmets,helmetpaints,boots,bootpaints,riderpaints
+ *   look <TAB> race number <TAB> bike id <TAB> bike paint <TAB> rider <TAB> helmet <TAB> helmet paint
+ *        <TAB> goggles <TAB> suit <TAB> gloves <TAB> boots <TAB> boots paint      (empty = keep)
+ * On the game's thread, the plugin re-runs the game's own content loaders for the listed kinds (as
+ * MX Bikes does at start-up, only while in a session), then finds each rider by race number and
+ * bike in the vehicle records. Paint changes are painted straight away (engine command 0x9E, as the
+ * game's paint step does); a different helmet, boots or rider model is written into the record and
+ * the record's build state set to 2, so the game removes and rebuilds that rider itself. Names that
+ * are not installed are skipped. Only what your game draws changes; nothing is sent. Every game
+ * address used is checked first against fingerprints of this build. Result: mxbm_looks_result.json.
+ * Research notes: plugin/LIVE_GEAR_NOTES.md. */
+#define LOOK_MAX 50
+typedef struct { int num; char bike[64]; char f[10][64]; } Look; /* f: bikePaint rider helmet helmetPaint goggles suit gloves boots bootsPaint (9 used) */
+static Look g_looks[LOOK_MAX], g_looksWork[LOOK_MAX];
+static int g_lookCount = 0;
+static unsigned long long g_looksStamp = 0, g_looksDone = 0;
+static char g_reload[160];
+static FILETIME g_looksMtime;
+static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
+
+static unsigned fnv(const unsigned char *p, size_t n) { unsigned h = 0x811c9dc5u; while (n--) { h ^= *p++; h *= 0x01000193u; } return h; }
+static int looksBuildOk(const unsigned char *base) {
+  if (g_looksOk < 0)
+    g_looksOk = memcmp(base + RVA_APPLY_LIVERY, SIG_APPLY_LIVERY, sizeof SIG_APPLY_LIVERY) == 0 &&
+                memcmp(base + 0x4E0D0, SIG_REMOVE_LOOK, sizeof SIG_REMOVE_LOOK) == 0 &&
+                memcmp(base + 0x6EC21, SIG_STATE_TEST, sizeof SIG_STATE_TEST) == 0 &&
+                fnv(base + 0xEF6EF, 0xEF913 - 0xEF6EF) == 0xde7530d6u &&   /* start-up loader blocks */
+                fnv(base + 0x17F80, 0x58) == 0xb4b4d3f3u &&                 /* helmets loader */
+                fnv(base + 0x19DA0, 0x58) == 0x8f351eceu;                   /* boots loader */
+  return g_looksOk;
+}
+
+/* One start-up block: the caller zeroes two counts and the list pointer, then runs the loader
+ * for the game folder ("" at RVA 0x3333EB) and, if set, the mods folder (string at RVA 0xE54B44). */
+typedef void (*loader_t)(const char *root);
+static void reloadList(unsigned char *base, unsigned loader, unsigned c1, unsigned c2, unsigned ptr) {
+  *(int *)(base + c1) = 0; *(int *)(base + c2) = 0; *(void **)(base + ptr) = 0;
+  ((loader_t)(void *)(base + loader))((const char *)(base + 0x3333EB));
+  if (base[0xE54B44]) ((loader_t)(void *)(base + loader))((const char *)(base + 0xE54B44));
+}
+static void reloadLists(unsigned char *base, const char *kinds) {
+  if (strstr(kinds, "bikepaints")) reloadList(base, 0x17320, 0x109DE88, 0xF3DC40, 0xF4EDF8);
+  if (strstr(kinds, "helmets")) ((void (*)(void))(void *)(base + 0x17F80))();       /* resets its own list */
+  if (strstr(kinds, "helmets") || strstr(kinds, "helmetpaints")) {
+    reloadList(base, 0x18360, 0xF48620, 0xF3DB64, 0x109E090);                        /* helmet paints */
+    reloadList(base, 0x189C0, 0x10A30F4, 0xF4EDDC, 0xF3DC28);                        /* goggles */
+  }
+  if (strstr(kinds, "riderpaints")) {
+    reloadList(base, 0x19330, 0xF3DB50, 0x109DEA8, 0xF3DC90);                        /* suits */
+    reloadList(base, 0x1A770, 0xF3DC58, 0xF432B4, 0xF48208);                         /* gloves */
+  }
+  /* ("boots" does not occur inside "bootpaints", nor "helmets" inside "helmetpaints".) */
+  if (strstr(kinds, "boots")) ((void (*)(void))(void *)(base + 0x19DA0))();         /* resets its own list */
+  if (strstr(kinds, "boots") || strstr(kinds, "bootpaints"))
+    reloadList(base, 0x1A110, 0xF48660, 0xF4EDE0, 0xF432A0);                         /* boots paints */
+}
+
+/* Paint path for `name` of model `owner` (or 0). */
+static int findPaint(const unsigned char *base, GameList l, GameList models, const char *model, const char *name, const char *fmt, char *out, size_t cap) {
+  char opts[8] = "["; size_t oat = 1;
+  if (!name[0]) { out[0] = 0; return 0; }
+  return paintPath(base, l, modelIndex(base, models, model), model, name, fmt, out, cap, opts, &oat, 2);
+}
+
+static void applyLooks(void) {
+  unsigned char *base = (unsigned char *)GetModuleHandleA(NULL);
+  static char o[16384], a[MAX_PATH * 2], b[MAX_PATH * 2], two[MAX_PATH * 4 + 2];
+  dispatch_t dispatch = (dispatch_t)mxbm_orig_ui;
+  char reload[160]; unsigned long long stamp; int n, i, own = 0, first = 1;
+  size_t at;
+  if (!S.inEvent || !dispatch || !looksBuildOk(base)) return;
+  lock(); n = g_lookCount; memcpy(g_looksWork, g_looks, sizeof(Look) * (size_t)n); stamp = g_looksStamp; copy(reload, g_reload, sizeof reload); unlock();
+  srvCopy(base + 0xE62710, &own, 4);
+  g_gameCallThread = GetCurrentThreadId();
+  if (stamp != g_looksDone && reload[0]) reloadLists(base, reload);
+  at = (size_t)sprintf(o, "{\"v\":1,\"at\":%llu,\"stamp\":%llu,\"reloaded\":", nowMs(), stamp);
+  at = jstr(o, at, stamp != g_looksDone ? reload : "", sizeof o - 64);
+  g_looksDone = stamp;
+  memcpy(o + at, ",\"riders\":[", 11); at += 11;
+  for (i = 0; i < n; i++) {
+    const Look *L = &g_looksWork[i];
+    unsigned char *r = 0; int s, rebuild = 0, painted = 0, skipped = 0;
+    char nm[33];
+    for (s = 0; s < 50; s++) {
+      unsigned char *c = base + 0xF4EE20 + (size_t)s * 0x5B24;
+      if (*(const int *)c != 1 || s == own - 1 || *(const int *)(c + 0x0C) != L->num) continue;
+      memcpy(nm, c + 0x30, 32); nm[32] = 0;
+      if (_stricmp(nm, L->bike) == 0) { r = c; break; }
+    }
+    if (r) {
+      /* Models: helmet, boots, rider. Written only if installed; a change means a rebuild. */
+      static const int MODEL_OFF[3] = { 0xF0, 0x1B0, 0xD0 }, MODEL_F[3] = { 2, 7, 1 };
+      const GameList *MODEL_L[3] = { &L_HELMETS, &L_BOOTS, &L_RIDERS };
+      int m, groups = 0;
+      for (m = 0; m < 3; m++) {
+        const char *want = L->f[MODEL_F[m]];
+        memcpy(nm, r + MODEL_OFF[m], 32); nm[32] = 0;
+        if (!want[0] || _stricmp(nm, want) == 0) continue;
+        if (modelIndex(base, *MODEL_L[m], want) < 0) { skipped++; continue; }
+        setName(r + MODEL_OFF[m], want); rebuild = 1;
+      }
+      /* Paints: written only if installed for the (new) model; groups to repaint. */
+      {
+        char bike[33], rider[33], helmet[33], boots[33];
+        static const int P_OFF[6] = { 0x90, 0x110, 0x130, 0x170, 0x1F0, 0x1D0 }, P_F[6] = { 0, 3, 4, 5, 6, 8 }, P_GROUP[6] = { 1, 8, 8, 2, 2, 4 };
+        memcpy(bike, r + 0x30, 32); bike[32] = 0; memcpy(rider, r + 0xD0, 32); rider[32] = 0;
+        memcpy(helmet, r + 0xF0, 32); helmet[32] = 0; memcpy(boots, r + 0x1B0, 32); boots[32] = 0;
+        for (m = 0; m < 6; m++) {
+          const char *want = L->f[P_F[m]]; int ok;
+          memcpy(nm, r + P_OFF[m], 32); nm[32] = 0;
+          if (!want[0] || _stricmp(nm, want) == 0) continue;
+          switch (m) {
+            case 0: ok = findPaint(base, P_BIKE, L_BIKES, bike, want, "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a); break;
+            case 1: ok = findPaint(base, P_HELMET, L_HELMETS, helmet, want, "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a); break;
+            case 2: ok = findPaint(base, P_GOGGLES, L_HELMETS, helmet, want, "%srider\\helmets\\%s\\goggles\\%s.pnt", a, sizeof a); break;
+            case 3: ok = findPaint(base, P_SUIT, L_RIDERS, rider, want, "%srider\\riders\\%s\\paints\\%s.pnt", a, sizeof a); break;
+            case 4: ok = findPaint(base, P_GLOVES, L_RIDERS, rider, want, "%srider\\riders\\%s\\gloves\\%s.pnt", a, sizeof a); break;
+            default: ok = findPaint(base, P_BOOTS, L_BOOTS, boots, want, "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a); break;
+          }
+          if (!ok) { skipped++; continue; }
+          setName(r + P_OFF[m], want); groups |= P_GROUP[m];
+        }
+        if (rebuild) {
+          if (*(const int *)(r + 0x4EE8) == 0) *(volatile int *)(r + 0x4EE8) = 2;
+        } else if (groups && *(const int *)(r + 0x4EE8) == 0 && *(const int *)(r + 0x274) > 0) {
+          char n1[33], n2[33];
+#define RN(dst, off) (memcpy(dst, r + (off), 32), dst[32] = 0, dst)
+          if (groups & 1 && findPaint(base, P_BIKE, L_BIKES, bike, RN(n1, 0x90), "%sbikes\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BIKE_PARTS, 6, a); painted++; }
+          if (groups & 2) {
+            findPaint(base, P_SUIT, L_RIDERS, rider, RN(n1, 0x170), "%srider\\riders\\%s\\paints\\%s.pnt", a, sizeof a);
+            findPaint(base, P_GLOVES, L_RIDERS, rider, RN(n2, 0x1F0), "%srider\\riders\\%s\\gloves\\%s.pnt", b, sizeof b);
+            sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, BODY_PART, 1, two); painted++;
+          }
+          if (groups & 4 && findPaint(base, P_BOOTS, L_BOOTS, boots, RN(n1, 0x1D0), "%srider\\boots\\%s\\paints\\%s.pnt", a, sizeof a)) { paintParts(dispatch, r, BOOT_PARTS, 2, a); painted++; }
+          if (groups & 8) {
+            findPaint(base, P_HELMET, L_HELMETS, helmet, RN(n1, 0x110), "%srider\\helmets\\%s\\paints\\%s.pnt", a, sizeof a);
+            findPaint(base, P_GOGGLES, L_HELMETS, helmet, RN(n2, 0x130), "%srider\\helmets\\%s\\goggles\\%s.pnt", b, sizeof b);
+            sprintf(two, "%s%s%s", a, b[0] ? "|" : "", b); paintParts(dispatch, r, HELMET_PART, 1, two); painted++;
+          }
+#undef RN
+        }
+      }
+    }
+    if (at + 160 < sizeof o)
+      at += (size_t)sprintf(o + at, "%s{\"num\":%d,\"found\":%s,\"rebuild\":%s,\"repainted\":%d,\"notInstalled\":%d}", first ? "" : ",", L->num, r ? "true" : "false", rebuild ? "true" : "false", painted, skipped);
+    first = 0;
+  }
+  g_gameCallThread = 0;
+  o[at++] = ']'; o[at++] = '}'; o[at] = 0;
+  writeSmall("mxbm_looks_result.json", o);
+}
+
+/* Polled from the server-list thread: reads mxbm_looks.txt when it changes, and asks for a pass on
+ * the game's thread every 5 seconds while there are looks (riders join, builds finish). */
+static void looksPoll(void) {
+  static unsigned long long lastPass = 0;
+  char path[MAX_PATH * 2 + 40]; WIN32_FILE_ATTRIBUTE_DATA fa;
+  unsigned long long now = nowMs();
+  if (!mxbm_orig_ui) return;
+  sprintf(path, "%smxbm_looks.txt", g_dir);
+  if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fa)) {
+    if (g_lookCount) { lock(); g_lookCount = 0; unlock(); }
+    return;
+  }
+  if (CompareFileTime(&fa.ftLastWriteTime, &g_looksMtime) != 0 && fa.nFileSizeLow < 64 * 1024) {
+    static char buf[64 * 1024]; FILE *f = fopen(path, "rb"); size_t len; char *line, *next;
+    Look tmp[LOOK_MAX]; int count = 0; char reload[160] = ""; unsigned long long stamp = 0;
+    if (!f) return;
+    len = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[len] = 0;
+    if (strncmp(buf, "coremx-looks 1 ", 15) != 0) return;
+    g_looksMtime = fa.ftLastWriteTime;
+    stamp = _strtoui64(buf + 15, NULL, 10);
+    for (line = buf; line && *line; line = next) {
+      char *cols[13]; int c = 0;
+      next = strchr(line, '\n'); if (next) *next++ = 0;
+      { size_t ll = strlen(line); if (ll && line[ll - 1] == '\r') line[ll - 1] = 0; }
+      cols[c++] = line;
+      while (c < 13) { char *t = strchr(cols[c - 1], '\t'); if (!t) break; *t = 0; cols[c++] = t + 1; }
+      if (strcmp(cols[0], "reload") == 0 && c > 1) copy(reload, cols[1], sizeof reload);
+      else if (strcmp(cols[0], "look") == 0 && c >= 12 && count < LOOK_MAX) {
+        int k; Look *L = &tmp[count]; memset(L, 0, sizeof *L);
+        L->num = atoi(cols[1]); copy(L->bike, cols[2], sizeof L->bike);
+        for (k = 0; k < 9; k++) copy(L->f[k], cols[3 + k], sizeof L->f[k]);
+        if (L->num > 0 && L->bike[0]) count++;
+      }
+    }
+    lock(); memcpy(g_looks, tmp, sizeof(Look) * (size_t)count); g_lookCount = count; g_looksStamp = stamp; copy(g_reload, reload, sizeof g_reload); unlock();
+    lastPass = 0;
+  }
+  if (g_lookCount && S.inEvent && now - lastPass >= 5000) { lastPass = now; InterlockedOr(&mxbm_pending, 2); }
+}
+
+/* Runs on the game's main thread, from the UI stub. */
+void mxbm_run_pending(void) {
+  LONG work = InterlockedExchange(&mxbm_pending, 0);
+  if (work & 1) runPaintTest();
+  if (work & 2) applyLooks();
 }
 
 static void serverListStart(void) {

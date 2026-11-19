@@ -10,6 +10,20 @@ const PLUGIN = 'mxbm_presence.dlo';
 const STATE_FILE = 'mxbm_presence.json';
 const REPORT_EVERY = 30 * 1000;
 const PAINT_EVERY = 60 * 1000;
+
+// Live looks file for the plugin (see doSyncLooks below and plugin/mxbm_presence.c).
+const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint'];
+const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints' };
+function looksText(loadouts, reload, stamp) {
+  const clean = (v) => String(v || '').replace(/[\t\r\n]/g, ' ').trim().slice(0, 63);
+  const lines = [`coremx-looks 1 ${stamp}`, `reload\t${reload.join(',')}`];
+  for (const lo of loadouts) {
+    const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
+    lines.push(['look', lo.num, clean(lo.bikeId), ...LOOK_FIELDS.map((f) => clean(cur[f]))].join('\t'));
+  }
+  return lines.join('\n') + '\n';
+}
+
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
@@ -21,7 +35,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let lastError = null;
   let activeUsers = null;
   let timer = null;
-  let paintTimer = null;
+  let paintTimer = null, looksTimer = null;
   let retryTimer = null;
   const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null };
   let progressAt = 0;
@@ -147,14 +161,17 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
     }
     const changed = JSON.stringify(next) !== JSON.stringify(current);
+    const enteredServer = next?.inEvent && next.server && (!current?.inEvent || current.server !== next.server);
     current = next;
+    if (enteredServer) setTimeout(() => syncLooks(), 15000);
+    else if (!next?.inEvent && looksKey) clearLooks();
     if (changed) onChange(status());
     await report();
   }
 
   function stateForReport() {
     const s = current || {};
-    let riderName = '', riderProfile = '', hostName = '';
+    let riderName = '', riderProfile = '', hostName = '', profileNumber = 0;
     try {
       const global = fs.readFileSync(path.join(userDir(), 'global.ini'), 'latin1');
       riderProfile = global.match(/^lastprofile=(.*)$/m)?.[1]?.trim() || '';
@@ -162,6 +179,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         const profileText = fs.readFileSync(path.join(userDir(), 'profiles', riderProfile, 'profile.ini'), 'latin1');
         riderName = profileText.match(/^name=(.*)$/m)?.[1]?.trim() || '';
         hostName = profileText.match(/^hostsetup_name=(.*)$/m)?.[1]?.trim() || '';
+        profileNumber = Number(profileText.match(/^race_number=(\d{1,5})\s*$/m)?.[1]) || 0;
       }
     } catch {}
     // Hosting from Host World: the server name is the session name from Host setup ([ui]
@@ -175,6 +193,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
+      // Race number and bike in game, so other CoreMX users can find this rider in their game
+      // (live looks). The plugin reads the number from the game; the profile is the fallback.
+      raceNumber: s.inEvent ? (Number(s.raceNumber) || profileNumber || null) : null, bikeId: s.inEvent ? s.bikeId || '' : '',
       // (The plugin's server type is not a host flag: seen as 1 and 2 while hosting. Host World has
       // no port setting, so the game's default port 54210 is used.)
       ...(hosting ? { hosting: true, hostPort: 54210, ...publicAddress() } : {}),
@@ -227,6 +248,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const p = statePath();
     if (p) fs.watchFile(p, { interval: 2000 }, () => readState().catch(() => {}));
     timer = setInterval(() => readState().catch(() => {}), 10000);
+    looksTimer = setInterval(() => syncLooks(), 60 * 1000);
     readState().catch(() => {});
     paintTimer = setInterval(() => syncPaints().catch(() => {}), PAINT_EVERY);
     // Not signed in yet (service was down): try again every minute, quietly.
@@ -240,7 +262,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // Windows locks loaded plugins: never replace one while the game is open.
     updatePluginIfNeeded();
   }
-  function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); }
+  function stop() { if (timer) clearInterval(timer); if (paintTimer) clearInterval(paintTimer); if (looksTimer) clearInterval(looksTimer); if (retryTimer) clearInterval(retryTimer); const p = statePath(); if (p) fs.unwatchFile(p); }
 
   // ---------- public ----------
   function status() {
@@ -400,6 +422,38 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       return results;
     } finally { paint.busy = false; paint.progress = null; onChange(status()); }
   }
+  // ---------- live looks ----------
+  // While you ride on a server, other CoreMX users there are shown in your game with their own gear:
+  // their free files are downloaded, then the plugin repaints them (liveries and paints at once) or
+  // has the game rebuild them (a different helmet or boots). The plugin reads mxbm_looks.txt; see
+  // plugin/mxbm_presence.c. Only riders on the bike their shared loadout is for are included.
+  let looksRun = null, looksKey = '';
+  function looksPath() { return path.join(userDir(), 'mxbm_looks.txt'); }
+  function clearLooks() { looksKey = ''; fsp.rm(looksPath(), { force: true }).catch(() => {}); }
+  function syncLooks() {
+    if (looksRun) return looksRun;
+    looksRun = doSyncLooks().catch((e) => { paint.looksError = e.message; }).finally(() => { looksRun = null; });
+    return looksRun;
+  }
+  async function doSyncLooks() {
+    const c = cfg(), s = current;
+    if (!c.token || c.paintSync === false || !gameRunning || !s || !s.inEvent || !s.server) { if (looksKey) clearLooks(); return; }
+    const all = await serverRiderLoadouts(s.server);
+    const riders = all.filter((l) => l.via === 'plugin' && Number(l.num) > 0 && l.bikeId && l.bike && l.bikeId.toLowerCase() === l.bike.toLowerCase());
+    if (!riders.length) { if (looksKey) clearLooks(); return; }
+    const received = { ...(cfg().received || {}) };
+    const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
+    setCfg({ received });
+    const reload = new Set();
+    for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
+    if (reload.size) await onInstalled();
+    const key = JSON.stringify(riders.map((r) => [r.num, r.bikeId, r.equipped])) + [...reload].join();
+    if (key === looksKey && !reload.size) return;
+    looksKey = key;
+    await fsp.writeFile(looksPath() + '.tmp', looksText(riders, [...reload], Date.now()));
+    await fsp.rename(looksPath() + '.tmp', looksPath());
+  }
+
   async function setServerShare(on) {
     setCfg({ serverShare: !!on });
     if (cfg().token) await call('POST', '/v1/servershare', { share: !!on }).catch(() => {});
@@ -435,4 +489,4 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   };
 }
 
-module.exports = { create, PLUGIN, STATE_FILE };
+module.exports = { create, PLUGIN, STATE_FILE, looksText, RELOAD_FOR };
