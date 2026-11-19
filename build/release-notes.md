@@ -1,8 +1,6 @@
-CoreMX 1.0.39
+CoreMX 1.0.40
 
-- Shared gear now follows the bike you are actually riding in an online session, including after changing bikes.
-- The in-game Riders overlay shows when another rider's gear is not available locally yet.
-- When a shared model or paint is missing from a game list, the plugin reloads that list once and tries again on the next pass.
-- Online service v15 handles an interrupted file upload without crashing.
+- CoreMX now reads the mods folder MX Bikes is configured to use in `global.ini`, so installs, the library, and shared gear use the same location as the game.
+- The game plugin records the names of missing shared models and paints in its live-looks result file to help diagnose gear that has not appeared yet.
 
-Update the online service using CoreMX-server-v15.zip. Keep your existing account data, admin key, and shared-file folder when replacing the service files.
+The online service remains version 15. Its ZIP is included for convenience; servers already running v15 do not need to replace it.
