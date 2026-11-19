@@ -19,7 +19,7 @@ const FILES = path.resolve(arg('files', path.join(path.dirname(DATA), 'mxbm-file
 const MAX_FILE = 128 * 1024 * 1024;             // one equipped paint/model package
 const MAX_STORE = Number(arg('maxstore', 4 * 1024)) * 1024 * 1024; // all paint files together (MB, default 4 GB)
 fs.mkdirSync(FILES, { recursive: true });
-const VERSION = 13;
+const VERSION = 14;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -191,6 +191,8 @@ const routes = {
       serverAddressSource: s.serverAddressSource === 'game' ? 'game' : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
       riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64),
+      // Race number and bike in game: other CoreMX users on the server find this rider by them (live looks).
+      raceNumber: Number.isInteger(s.raceNumber) && s.raceNumber > 0 && s.raceNumber < 100000 ? s.raceNumber : null, bikeId: str(s.bikeId, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
     };
     // Someone hosting from Host World: their game has no address to report, but this request comes
@@ -425,7 +427,7 @@ const routes = {
       const here = !!(p && now - p.at < ONLINE_TTL && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
       const byName = !here && nameOnList(u.name, riderNames);
       if (!here && !byName) continue;
-      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
+      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: u.loadout.items.filter((it) => fs.existsSync(path.join(FILES, it.sha256))) });
       if (out.length >= 32) break;
     }
     return [200, { loadouts: out }];

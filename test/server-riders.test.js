@@ -23,16 +23,21 @@ test('riders on the same server share gear by plugin report or Steam name match'
   const me = await reg(1, 'Me'), plugin = await reg(2, 'PluginRider'), named = await reg(3, 'CaptiveDuck'), shy = await reg(4, 'Shy'), stranger = await reg(5, 'Elsewhere');
   for (const u of [plugin, named, shy, stranger]) await u.c('POST', '/v1/loadout', { bike: 'Fixture', items: [], equipped: [], unavailable: [] });
   // PluginRider's plugin reports the server and its rider list (which includes CaptiveDuck with a team tag, and Shy).
-  await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
+  await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', raceNumber: 526, bikeId: 'MX2OEM_2023_Kawasaki_KX250', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 13);
+  assert.equal(health.version, 14);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
   const { loadouts } = await me.c('POST', '/v1/server-riders', { server: 'test server' });
   const byName = Object.fromEntries(loadouts.map((l) => [l.name, l.via]));
   assert.deepEqual(byName, { PluginRider: 'plugin', CaptiveDuck: 'name' });
+  // Live looks: a plugin rider comes with the race number and bike they ride in game; a rider
+  // matched only by Steam name has neither (their game was not seen on this server).
+  const pr = loadouts.find((l) => l.name === 'PluginRider'), cd = loadouts.find((l) => l.name === 'CaptiveDuck');
+  assert.equal(pr.num, 526); assert.equal(pr.bikeId, 'MX2OEM_2023_Kawasaki_KX250');
+  assert.equal(cd.num, undefined);
   // Your own gear is never offered back to you, and a server nobody is on returns nothing.
   assert.equal((await plugin.c('POST', '/v1/server-riders', { server: 'Test Server' })).loadouts.some((l) => l.name === 'PluginRider'), false);
   assert.equal((await me.c('POST', '/v1/server-riders', { server: 'Empty Server' })).loadouts.length, 0);
