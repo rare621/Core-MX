@@ -56,7 +56,7 @@ test('Get Mods uses the requested profile, bike and unsaved outfit, returning a 
     bike3d: require('../src/lib/bike3d'), store: { get: () => ({}) },
     paintCompat: { validateRiderPaint: async (data) => validated.push(data.current) },
   });
-  vm.runInContext(source.slice(source.indexOf('  function draftProfile('), source.indexOf("  handle('rider:loadout'")) + source.slice(source.indexOf('  async function equipContext('), source.indexOf("  handle('jobs:cancel'")), context);
+  vm.runInContext(source.slice(source.indexOf('\nfunction draftProfile('), source.indexOf('\nfunction registerIpc(')) + source.slice(source.indexOf('  async function equipContext('), source.indexOf("  handle('jobs:cancel'")), context);
   const target = { profile: 'EditingProfile', bike: 'PreviewBike', changes: { rider: 'Hoodie', helmet: 'DraftHelmet', helmetPaint: 'DraftPaint', protection: '' } };
   const ctx = await handlers['jobs:equipContext']('job', 0, target);
   assert.equal(ctx.profile, 'EditingProfile'); assert.equal(ctx.bike, 'PreviewBike');

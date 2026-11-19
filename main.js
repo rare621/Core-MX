@@ -157,6 +157,27 @@ function watchPluginFiles() {
   fs.watchFile(missing, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onMissingTrackFile(missing); });
   fs.watchFile(hook, { interval: 3000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onHookStateFile(hook); });
   if (fs.existsSync(hook)) onHookStateFile(hook);
+  const overlay = path.join(dir, 'mxbm_overlay_save.json');
+  fs.watchFile(overlay, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onOverlaySave(overlay).catch((e) => console.warn('Overlay save:', e.message)); });
+}
+// The in-game overlay (F8) saves your paints: queue them like Apply does while the game runs, so
+// they are written to the profile when MX Bikes closes and shared with other riders right away.
+const OVERLAY_SLOTS = ['bikePaint', 'suitPaint', 'glovesPaint', 'bootsPaint', 'helmetPaint', 'gogglesPaint'];
+let queueRiderApply = null, lastOverlaySave = 0;
+async function onOverlaySave(file) {
+  const saved = JSON.parse(await fsp.readFile(file, 'utf8'));
+  if (!saved || saved.v !== 1 || !(saved.at > lastOverlaySave) || !gearAssets.validName(saved.bike) || !queueRiderApply) return;
+  lastOverlaySave = saved.at;
+  const changes = {};
+  for (const slot of OVERLAY_SLOTS) {
+    const value = saved.changes?.[slot];
+    if (typeof value === 'string' && value.length <= 100 && !/[\\/\r\n]|^\.+$/.test(value)) changes[slot] = value;
+  }
+  if (!Object.keys(changes).length) return;
+  const name = (await profile.listProfiles(profUserDir())).last;
+  if (!name) return;
+  await queueRiderApply(name, saved.bike, changes);
+  send('rider:changed', { active: name, fromGame: true });
 }
 function insideGame(p) {
   const g = store.get('settings').gameInstallDir;
@@ -825,6 +846,26 @@ function setupDownloadsSession() {
 
 // ---------- IPC ----------
 function handle(ch, fn) { ipcMain.handle(ch, async (_e, ...args) => fn(...args)); }
+
+// A profile with gear changes applied in memory (the real profile is changed only by Apply).
+function draftProfile(prof, bike, changes) {
+  const next = structuredClone(prof);
+  // Match MX Bikes: an absent per-bike protection inherits [info] protection.
+  const protection = changes.protection ?? (prof.sections.protection?.values[bike] || prof.sections.info?.values.protection || '');
+  for (const [slot, value] of Object.entries(changes || {})) {
+    if (slot === 'bikeAppearance' || slot === 'nickname' || slot === 'riderNumber') continue;
+    const desc = profile.SLOTS.find((s) => s.id === slot);
+    if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
+    next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
+  }
+  // A draft of None must also clear the global fallback in this in-memory
+  // profile. The real profile is changed only by Apply.
+  if (Object.hasOwn(changes, 'protection')) {
+    next.sections.info ||= { values: {} };
+    next.sections.info.values.protection = changes.protection;
+  }
+  return next;
+}
 
 function registerIpc() {
   handle('app:env', () => environment());
@@ -1535,24 +1576,6 @@ function registerIpc() {
   }
   handle('rider:selectBike', selectSavedBike);
   handle('rider:bikes', async (name) => profile.listBikes(modsDir(), await profile.readProfile(profUserDir(), name)));
-  function draftProfile(prof, bike, changes) {
-    const next = structuredClone(prof);
-    // Match MX Bikes: an absent per-bike protection inherits [info] protection.
-    const protection = changes.protection ?? (prof.sections.protection?.values[bike] || prof.sections.info?.values.protection || '');
-    for (const [slot, value] of Object.entries(changes || {})) {
-      if (slot === 'bikeAppearance' || slot === 'nickname' || slot === 'riderNumber') continue;
-      const desc = profile.SLOTS.find((s) => s.id === slot);
-      if (!desc || typeof value !== 'string' || value.length > 200 || /[\\/\r\n]|^\.+$/.test(value)) throw new Error('Invalid gear selection');
-      next.sections[desc.section] ||= { values: {} }; next.sections[desc.section].values[desc.key === 'protectionModel' ? protection : bike] = value;
-    }
-    // A draft of None must also clear the global fallback in this in-memory
-    // profile. The real profile is changed only by Apply.
-    if (Object.hasOwn(changes, 'protection')) {
-      next.sections.info ||= { values: {} };
-      next.sections.info.values.protection = changes.protection;
-    }
-    return next;
-  }
   handle('rider:loadout', async (name, bike, changes = {}) => {
     const prof = await profile.readProfile(profUserDir(), name);
     const saved = await profile.loadout(modsDir(), prof, bike, stockRiderPkz());
@@ -1586,6 +1609,11 @@ function registerIpc() {
     }
     return applyRider(name, bike, changes);
   });
+  queueRiderApply = async (name, bike, changes) => {
+    store.update('pendingApply', (all) => { const prev = (all || {})[`${name}|${bike}`]; return { ...(all || {}), [`${name}|${bike}`]: { name, bike, changes: { ...(prev?.changes || {}), ...changes }, at: Date.now() } }; });
+    watchPendingApply();
+    online?.syncPaints().catch(() => {});
+  };
   handle('rider:pendingApply', () => Object.values(store.get('pendingApply') || {}));
   handle('rider:cancelPendingApply', (name, bike) => { store.update('pendingApply', (all) => { const n = { ...(all || {}) }; delete n[`${name}|${bike}`]; return n; }); return true; });
   async function applyRider(name, bike, changes = {}) {
@@ -1947,8 +1975,13 @@ app.whenReady().then(async () => {
     currentOutfit: async () => {
       const list = await profile.listProfiles(profUserDir());
       if (!list.last) return null;
-      const prof = await profile.readProfile(profUserDir(), list.last);
-      const bike = profile.currentBike(prof);
+      const saved = await profile.readProfile(profUserDir(), list.last);
+      const bike = profile.currentBike(saved);
+      // Changes queued while the game runs (Rider tab or the in-game overlay) are shared with
+      // other riders straight away, not only once the game has closed and they are written.
+      const pending = bike && (store.get('pendingApply') || {})[`${list.last}|${bike}`];
+      let prof = saved;
+      if (pending) { try { prof = draftProfile(saved, bike, pending.changes || {}); } catch {} }
       // A purchase from a shop is personal to that account.  Keep those paths
       // out of peer sync even when the file itself is readable locally.
       const protectedPaths = Object.values(store.get('installs'))
