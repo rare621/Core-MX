@@ -1,8 +1,8 @@
-CoreMX 1.0.38
+CoreMX 1.0.39
 
-- The game plugin can report the connected server address in any online session, including hosted Worlds and practice sessions.
-- STUN status is recorded locally to help diagnose hosted server addresses.
-- The in-game Riders overlay shows CoreMX names alongside rider numbers and bikes.
-- CoreMX restores the overlay font from the game's own UI files when it is missing.
+- Shared gear now follows the bike you are actually riding in an online session, including after changing bikes.
+- The in-game Riders overlay shows when another rider's gear is not available locally yet.
+- When a shared model or paint is missing from a game list, the plugin reloads that list once and tries again on the next pass.
+- Online service v15 handles an interrupted file upload without crashing.
 
-The online service remains version 14. Its ZIP is included for convenience; servers already running v14 do not need to replace it.
+Update the online service using CoreMX-server-v15.zip. Keep your existing account data, admin key, and shared-file folder when replacing the service files.
