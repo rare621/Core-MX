@@ -194,3 +194,52 @@ test('R2 cleans up untracked uploads and files nobody needs any more', async (t)
   await call(me.token)('POST', '/v1/want', { shas: [sha] });
   assert.deepEqual((await c('POST', '/v1/presence', { state: { inGame: false } })).data.upload, [sha]);
 });
+
+// A file a rider asked for is never deleted before their CoreMX confirms it is installed: not when the
+// owner changes outfit, not across a service restart (an interrupted download stays possible).
+test('R2 keeps a requested file until the rider has installed it', async (t) => {
+  const r2 = await fakeR2();
+  t.after(() => r2.server.close());
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-r2-keep-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
+  const start = async () => {
+    const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const port = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+      child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+    });
+    // (A process ended by kill() has a signal, not an exit code, on Windows.)
+    const stop = async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } };
+    t.after(stop);
+    const call = (token) => async (method, route, body) => {
+      const res = await fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+      return { status: res.status, data: await res.json() };
+    };
+    return { call, stop };
+  };
+  let svc = await start();
+  const owner = (await svc.call()('POST', '/v1/register', { steamId: '76561198000000051', name: 'Owner' })).data;
+  const rider = (await svc.call()('POST', '/v1/register', { steamId: '76561198000000052', name: 'Rider' })).data;
+  const p = Buffer.alloc(1024, 6); p.write('PNT\0', 0, 'latin1'); p.writeUInt32LE(1, 104);
+  const sha = crypto.createHash('sha256').update(p).digest('hex'), key = '/coremx-sync/files/' + sha;
+  const kit = { slot: 'suitPaint', label: 'Kit', value: 'Kit', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: p.length };
+  await svc.call(owner.token)('POST', '/v1/loadout', { bike: 'B', items: [kit], equipped: [], unavailable: [], onDemand: true });
+  await svc.call(rider.token)('POST', '/v1/want', { shas: [sha] });
+  const grant = (await svc.call(owner.token)('POST', `/v1/files/${sha}/upload`)).data;
+  await fetch(grant.url, { method: 'PUT', body: p });
+  assert.deepEqual((await svc.call(owner.token)('POST', `/v1/files/${sha}/uploaded`)).data, { ok: true });
+  // The owner changes outfit: nobody wears the file, but the rider hasn't installed it yet.
+  await svc.call(owner.token)('POST', '/v1/loadout', { bike: 'B', items: [], equipped: [], unavailable: [], onDemand: true });
+  await new Promise((r) => setTimeout(r, 7000));
+  assert.ok(r2.objects.has(key), 'kept while the rider still needs it');
+  // A service restart keeps the request.
+  await svc.stop();
+  svc = await start();
+  await new Promise((r) => setTimeout(r, 7000));
+  assert.ok(r2.objects.has(key), 'kept across a restart');
+  // The rider's CoreMX installs it and says so: now it goes.
+  await svc.call(rider.token)('POST', '/v1/received', { shas: [sha] });
+  const until = async (ok, ms) => { for (let i = 0; i < ms / 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 100)); return ok(); };
+  assert.ok(await until(() => !r2.objects.has(key), 12000), 'deleted once installed and unworn');
+});

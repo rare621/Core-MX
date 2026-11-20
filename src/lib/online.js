@@ -54,7 +54,21 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   let timer = null;
   let paintTimer = null, looksTimer = null;
   let retryTimer = null;
-  const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null };
+  // waiting: friends whose CoreMX is uploading files you asked for ([{ id, name, files }]).
+  const paint = { busy: false, error: null, shared: null, report: null, unavailable: [], progress: null, at: null, waiting: [] };
+  let waitTimer = null;
+  // Gear lists the running game must reload because files arrived outside a live-looks pass (friends
+  // sync, Join): the plugin tries a missing name only once itself. Sent with the next looks file.
+  const pendingReload = new Set();
+  function noteDownloads(results) {
+    for (const r of results || []) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) pendingReload.add(RELOAD_FOR[it.slot]);
+    if (pendingReload.size && current?.inEvent) { looksKey = ''; syncLooks(); }
+  }
+  // Who is still uploading files you need; while anyone is, sync again in 20 seconds (not a minute).
+  function noteWaiting(report) {
+    paint.waiting = (report || []).map((lo) => ({ id: lo.id, name: lo.name || '', files: (lo.items || []).filter((it) => it.state === 'uploading' || it.state === 'waiting').length })).filter((w) => w.files);
+    if (paint.waiting.length && !waitTimer) waitTimer = setTimeout(() => { waitTimer = null; syncPaints().catch(() => {}); }, 20 * 1000);
+  }
   let progressAt = 0;
   let pluginCache = { key: '' };
   const pendingCalls = new Map();
@@ -278,6 +292,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
+      // The name MX Bikes shows for you on the server (read from the game by the plugin).
+      gameName: s.inEvent ? String(s.rider || '').slice(0, 64) : '',
       // Race number and bike in game, so other CoreMX users can find this rider in their game
       // (live looks). The plugin reads the number from the game; the profile is the fallback.
       raceNumber: s.inEvent ? (Number(s.raceNumber) || profileNumber || null) : null, bikeId: s.inEvent ? s.bikeId || '' : '',
@@ -383,7 +399,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers },
       serverShare: c.serverShare !== false,
       upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT, doubleNat: !!upnp.doubleNat, firewall: upnp.firewall || null, hosting: !!upnp.hostingSince },
-      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
+      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting },
     };
   }
 
@@ -499,7 +515,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
       const [checked] = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: [lo] });
       // Not uploaded yet: say whether their CoreMX is online to send it (asked for by the next sync).
-      for (const it of checked.items) if (it.state === 'waiting') it.state = lo.online === false ? 'offline' : 'uploading';
+      for (const it of checked.items) if (it.state === 'waiting' && cfg().paintSync !== false) it.state = lo.online === false ? 'offline' : 'uploading';
       next.push(checked);
       gearKeys.set(lo.id, key);
       if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
@@ -535,8 +551,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
+      noteWaiting(paint.report);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
+      noteDownloads(results);
       paint.error = null; paint.at = Date.now();
     } catch (e) { paint.error = e.message; }
     paint.busy = false; paint.progress = null;
@@ -595,6 +613,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
+      noteDownloads(results);
       return results;
     } finally { paint.busy = false; paint.progress = null; onChange(status()); }
   }
@@ -620,7 +639,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const received = { ...(cfg().received || {}) };
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
     setCfg({ received });
-    const reload = new Set();
+    const reload = new Set(pendingReload);
+    pendingReload.clear();
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
     if (reload.size) await onInstalled();
     const reports = Object.fromEntries(results.map((r) => [r.id, r]));

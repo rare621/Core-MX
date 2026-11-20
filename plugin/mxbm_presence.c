@@ -1505,7 +1505,9 @@ static const OvCard OV_OUTFIT[] = { { "HEAD", R_HELMET }, { NULL, R_HELMETPAINT 
   { "HANDS & FEET", R_GLOVES }, { NULL, R_BOOTS }, { NULL, R_BOOTSPAINT } };
 static const OvCard OV_BIKE[] = { { "BIKE", 0 } };
 static int g_ovTab = 0, g_ovCard = 0, g_ovPicker = -1, g_ovScroll = 0;
-typedef struct { float x0, y0, x1, y1; int kind, value; } OvHit; /* kind: 1 tab, 2 card, 3 option, 4 save, 5 close, 6 scroll */
+/* Riders tab: the rider whose gear is shown beside the panel (race number + bike), 0 = none. */
+static int g_ovRiderNum = 0; static char g_ovRiderBike[64];
+typedef struct { float x0, y0, x1, y1; int kind, value; } OvHit; /* kind: 1 tab, 2 card, 3 option, 4 save, 5 close, 6 scroll, 7 rider */
 static OvHit g_ovHits[64]; static int g_ovNHits;
 #define OV_ACCENT 0xFF328CFFu   /* orange (ABGR) */
 #define OV_PICKER_ROWS 12
@@ -1562,6 +1564,26 @@ static void ovStep(unsigned char *base, unsigned char *r, int row, int dir) {
 }
 static void ovSaveNow(unsigned char *r) { ovSave(r); copy(g_ovMsg, OV_SAVED_MSG, sizeof g_ovMsg); g_ovMsgUntil = nowMs() + 5000; }
 
+/* Riders tab: the statuses of riders CoreMX still lists on this server (a rider who left drops out
+ * of mxbm_looks.txt within about 20 seconds). idx gets indexes into g_lookStatus; returns how many. */
+static int presentRiders(int *idx, int max) {
+  int k, j, n = 0;
+  lock();
+  for (k = 0; k < g_lookStatusN && n < max; k++)
+    for (j = 0; j < g_lookCount; j++)
+      if (g_looks[j].num == g_lookStatus[k].num && _stricmp(g_looks[j].bike, g_lookStatus[k].bike) == 0) { idx[n++] = k; break; }
+  unlock();
+  return n;
+}
+/* A rider's look (gear names) from CoreMX's current list; 0 if they left. */
+static int riderLook(int num, const char *bike, Look *out) {
+  int j, found = 0;
+  lock();
+  for (j = 0; j < g_lookCount; j++) if (g_looks[j].num == num && _stricmp(g_looks[j].bike, bike) == 0) { *out = g_looks[j]; found = 1; break; }
+  unlock();
+  return found;
+}
+
 EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumString, void **_ppString) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r;
   const OvCard *cards; int ncards, f8, up, dn, lt, rt, en, tab, click, locked, i;
@@ -1606,6 +1628,12 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       if (mx < h->x0 || mx > h->x1 || my < h->y0 || my > h->y1) continue;
       if (h->kind == 1) { g_ovTab = h->value; g_ovCard = 0; g_ovPicker = -1; }
       else if (h->kind == 5) { g_ovOpen = 0; return; }
+      else if (h->kind == 7 && h->value >= 0 && h->value < g_lookStatusN) {
+        const LookStatus *st = &g_lookStatus[h->value];
+        if (g_ovRiderNum == st->num && _stricmp(g_ovRiderBike, st->bike) == 0) g_ovRiderNum = 0;
+        else { g_ovRiderNum = st->num; copy(g_ovRiderBike, st->bike, sizeof g_ovRiderBike); }
+      }
+      else if (h->kind == 8) g_ovRiderNum = 0;
       else if (r && !locked) {
         if (h->kind == 2) {
           int row = cards[h->value].row;
@@ -1635,17 +1663,20 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     char line[100];
     int k, groups = 0;
     for (k = 0; k < ncards; k++) if (cards[k].group) groups++;
-    if (g_ovTab == 2) { groups = 1; ncards = g_lookStatusN > 0 ? (g_lookStatusN < 8 ? g_lookStatusN : 8) : 1; }
+    int present[8], npresent = g_ovTab == 2 ? presentRiders(present, 8) : 0;
+    if (g_ovTab == 2) { groups = 1; ncards = npresent > 0 ? npresent : 1; }
     y1 = y + groups * 0.030f + ncards * 0.052f + 0.15f;
-    ovQuad(x0, y0, x1, y1, 0xE6141418);
+    ovQuad(x0 + 0.004f, y0 + 0.007f, x1 + 0.004f, y1 + 0.007f, 0x55000000);   /* shadow */
+    ovQuad(x0, y0, x1, y1, 0xEE141418);
     ovBox(x0, y0, x1, y1, 0.0015f, 0x30FFFFFF);
+    ovQuad(x0, y0, x1, y0 + 0.004f, OV_ACCENT);                                  /* accent strip */
     ovText("CoreMX", x0 + 0.014f, y0 + 0.016f, 0.018f, 0, OV_ACCENT);
     ovText("Rider", x0 + 0.014f, y0 + 0.040f, 0.034f, 0, 0xFFFFFFFF);
     /* Tabs (pills). */
     for (k = 0; k < 3; k++) {
       float tx0 = x0 + 0.014f + k * 0.075f, tx1 = tx0 + 0.068f, ty0 = y0 + 0.085f, ty1 = ty0 + 0.034f;
-      ovQuad(tx0, ty0, tx1, ty1, k == g_ovTab ? 0xEBFFFFFF : 0x14FFFFFF);
-      ovText(k == 2 ? "Riders" : k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFF100D0C : 0xFFD0D0D0);
+      ovQuad(tx0, ty0, tx1, ty1, k == g_ovTab ? OV_ACCENT : 0x14FFFFFF);
+      ovText(k == 2 ? "Riders" : k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFFFFFFFF : 0xFFD0D0D0);
       ovHit(tx0, ty0, tx1, ty1, 1, k);
     }
     /* Close (x). */
@@ -1657,9 +1688,10 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
        * you go to the pits and back to the track. Paints of a changed model wait with it. */
       int shown = 0;
       ovText("COREMX RIDERS ON THIS SERVER", x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.030f;
-      if (!g_lookStatusN) ovText("No other CoreMX riders here yet.", x0 + 0.020f, y + 0.010f, 0.016f, 0, 0xFFB0B0B0);
-      for (k = 0; k < g_lookStatusN && shown < 8; k++, shown++) {
-        LookStatus *st = &g_lookStatus[k];
+      if (!npresent) ovText("No other CoreMX riders here yet.", x0 + 0.020f, y + 0.010f, 0.016f, 0, 0xFFB0B0B0);
+      for (shown = 0; shown < npresent; shown++) {
+        LookStatus *st = &g_lookStatus[present[shown]];
+        int open = g_ovRiderNum == st->num && _stricmp(g_ovRiderBike, st->bike) == 0;
         unsigned char *vr = 0; int v, waiting;
         for (v = 0; v < 50; v++) {
           unsigned char *c = base + 0xF4EE20 + (size_t)v * 0x5B24; char b2[33];
@@ -1669,7 +1701,11 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         }
         waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
         if (vr && st->models[0] && !waiting) st->models[0] = 0;   /* the game rebuilt them: done */
-        ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, waiting ? 0x40328CFF : 0x12FFFFFF);
+        ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, open ? 0x30FFFFFF : waiting ? 0x40328CFF : 0x12FFFFFF);
+        if (open) ovQuad(x0 + 0.010f, y, x0 + 0.0135f, y + 0.046f, OV_ACCENT);
+        /* Status dot: green up to date, blue queued for the pits, amber something missing, grey not on track. */
+        ovQuad(x0 + 0.017f, y + 0.017f, x0 + 0.024f, y + 0.029f, !vr ? 0xFF707070 : waiting ? 0xFFFFB46C : st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
+        ovHit(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 7, present[shown]);
         {
           /* "Name  ·  #501  ·  2023 Kawasaki KX250": the bike id without its class prefix, spaced. */
           char bike[64]; const char *b = st->bike, *u = strchr(b, '_'); int i;
@@ -1677,7 +1713,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
           copy(bike, b, sizeof bike); for (i = 0; bike[i]; i++) if (bike[i] == '_') bike[i] = ' ';
           if (st->name[0]) sprintf(line, "%.30s   #%d   %.36s", st->name, st->num, bike); else sprintf(line, "#%d   %.40s", st->num, bike);
         }
-        ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
+        ovText(line, x0 + 0.030f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
         else if (st->missing && riderWait(st, line)) { /* line set: why it isn't here yet */ }
@@ -1685,9 +1721,10 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
         else sprintf(line, "Up to date");
-        ovText(line, x0 + 0.020f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : vr && st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
+        ovText(line, x0 + 0.030f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : vr && st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
         y += 0.052f;
       }
+      if (npresent) ovText("Click a rider to see their gear.", x0 + 0.014f, y + 0.004f, 0.0125f, 0, 0xFF808080);
     }
     else if (!r) ovText("Ride out on track to change your gear here.", x0 + 0.014f, y, 0.017f, 0, 0xFFB0B0B0);
     else for (k = 0; k < ncards; k++) {
@@ -1696,6 +1733,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       if (cards[k].group) { ovText(cards[k].group, x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.030f; }
       ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, row == g_ovPicker ? 0x40328CFF : on ? 0x24FFFFFF : 0x12FFFFFF);
       if (on || row == g_ovPicker) ovBox(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 0.0018f, row == g_ovPicker ? OV_ACCENT : 0x50FFFFFF);
+      if (on) ovQuad(x0 + 0.010f, y, x0 + 0.0135f, y + 0.046f, OV_ACCENT);
       ovText(OV_LABEL[row], x0 + 0.020f, y + 0.005f, 0.0135f, 0, 0xFF9A9A9A);
       memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
       sprintf(line, "%.42s", sel >= 0 ? g_ovOpt[row][sel] : cur[0] ? cur : c ? "Default" : "None installed");
@@ -1719,6 +1757,34 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     sprintf(line, "Click or Up/Down, Left/Right   Tab switch   Enter save   F%d close", g_ovKey - VK_F1 + 1);
     ovText(line, x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
 
+    /* Riders tab: the chosen rider's gear beside the panel (view only). */
+    if (g_ovTab == 2 && g_ovRiderNum) {
+      Look L;
+      if (!riderLook(g_ovRiderNum, g_ovRiderBike, &L)) g_ovRiderNum = 0;   /* they left */
+      else {
+        static const char *const GEAR[11] = { "Bike livery", "Rider model", "Helmet", "Helmet paint", "Goggles", "Suit", "Gloves", "Boots", "Boots paint", "Protector", "Protector paint" };
+        const float px0 = x1 + 0.008f, px1 = px0 + 0.24f, py0 = y0, rowH = 0.036f;
+        float py1 = py0 + 0.075f + 11 * rowH + 0.02f, gy = py0 + 0.075f;
+        int g;
+        ovQuad(px0 + 0.004f, py0 + 0.007f, px1 + 0.004f, py1 + 0.007f, 0x55000000);
+        ovQuad(px0, py0, px1, py1, 0xEE141418);
+        ovBox(px0, py0, px1, py1, 0.0015f, 0x30FFFFFF);
+        ovQuad(px0, py0, px1, py0 + 0.004f, OV_ACCENT);
+        sprintf(line, "%.30s", L.name[0] ? L.name : "Rider");
+        ovText(line, px0 + 0.012f, py0 + 0.016f, 0.020f, 0, 0xFFFFFFFF);
+        sprintf(line, "#%d   %.40s", L.num, L.bike);
+        ovText(line, px0 + 0.012f, py0 + 0.044f, 0.0125f, 0, 0xFF9A9A9A);
+        ovText("x", px1 - 0.012f, py0 + 0.014f, 0.020f, 2, 0xFFB0B0B0);
+        ovHit(px1 - 0.026f, py0 + 0.008f, px1 - 0.002f, py0 + 0.04f, 8, 0);
+        for (g = 0; g < 11; g++, gy += rowH) {
+          const char *v = L.f[g];
+          if (g == 10 && (!L.f[9][0] || !_stricmp(L.f[9], "None"))) continue;   /* no protector, no protector paint */
+          ovText(GEAR[g], px0 + 0.012f, gy, 0.0115f, 0, 0xFF8C8C8C);
+          sprintf(line, "%.40s", v[0] ? v : "Default");
+          ovText(line, px0 + 0.012f, gy + 0.014f, 0.0145f, 0, v[0] ? 0xFFFFFFFF : 0xFFB0B0B0);
+        }
+      }
+    }
     /* Picker beside the panel. */
     if (r && !locked && g_ovPicker >= 0) {
       const float px0 = x1 + 0.008f, px1 = px0 + 0.22f, py0 = y0, rowH = 0.034f;

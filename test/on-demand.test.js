@@ -72,3 +72,24 @@ test('the overlay is told why a rider\'s item is not there yet', () => {
     'wait\t2\tMX2OEM_2023_Kawasaki_KX250\tpaid\tLocked',
   ]);
 });
+
+// Each CoreMX user on a server reports the riders their own game knows; a late joiner's game only knows
+// those who came after it. The list shown stays the host's (or the longest-present reporter's).
+test('a server rider list does not jump between reports', async (t) => {
+  const { reg } = await service(t);
+  const host = await reg(5, 'Host'), late = await reg(6, 'Late'), other = await reg(7, 'Other');
+  const state = (riders, extra = {}) => ({ state: { inGame: true, inEvent: true, server: 'What!', trackId: 'Echo', riders: riders.map((name) => ({ name })), ...extra } });
+  await host.c('POST', '/v1/presence', state(['Uhh_sal', 'bshoener', 'Rare621'], { hosting: true, hostPort: 54210 }));
+  await late.c('POST', '/v1/presence', state(['Rare621']));
+  const names = async () => (await other.c('GET', '/v1/servers')).servers.find((s) => s.name === 'What!').riders.map((r) => r.name);
+  assert.deepEqual(await names(), ['Uhh_sal', 'bshoener', 'Rare621'], 'the host knows everyone');
+  await host.c('POST', '/v1/presence', state(['Uhh_sal', 'Rare621'], { hosting: true, hostPort: 54210 }));
+  await late.c('POST', '/v1/presence', state(['Rare621']));
+  assert.deepEqual(await names(), ['Uhh_sal', 'Rare621'], 'someone left: the host\'s list follows');
+  // Not hosted: the reporter on the server longest wins over a later one.
+  const a = await reg(8, 'First'), b = await reg(9, 'Second');
+  const join = (riders) => ({ state: { inGame: true, inEvent: true, server: 'Public', trackId: 'T', riders: riders.map((name) => ({ name })) } });
+  await a.c('POST', '/v1/presence', join(['First', 'X', 'Y']));
+  await b.c('POST', '/v1/presence', join(['Second']));
+  assert.deepEqual((await other.c('GET', '/v1/servers')).servers.find((s) => s.name === 'Public').riders.map((r) => r.name), ['First', 'X', 'Y']);
+});

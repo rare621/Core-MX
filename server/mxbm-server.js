@@ -35,7 +35,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 21;
+const VERSION = 22;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -53,15 +53,15 @@ const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {} }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {} }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const { liveFiles } = require('./cache-cleanup');
-const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha), inactiveMs: INACTIVE_MS });
+const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha) || wanted(sha), inactiveMs: INACTIVE_MS }); // never a file a rider still waits for
 async function cleanCache() {
   if (!cacheCleanupSafe) return;
   try {
@@ -74,13 +74,22 @@ setInterval(cleanCache, 30000).unref();
 const presence = new Map(); // steamId -> { at, share, state }
 const hostIps = new Map(); // steamId -> { ip, at } (IPv4 seen on /v1/hostip)
 let saveTimer = null;
+// Written at most 2 seconds after a change (a steady stream of changes can't postpone it forever),
+// and right away when the service is stopped (Ctrl+C, closing its window, a shutdown).
 function save() {
-  clearTimeout(saveTimer);
+  if (saveTimer) return;
   saveTimer = setTimeout(() => {
+    saveTimer = null;
     const tmp = DATA + '.tmp';
     fs.writeFile(tmp, JSON.stringify(db), (e) => { if (!e) fs.rename(tmp, DATA, () => {}); });
   }, 2000);
 }
+function saveNow() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  try { fs.writeFileSync(DATA + '.tmp', JSON.stringify(db)); fs.renameSync(DATA + '.tmp', DATA); } catch (e) { console.error('Could not save:', e.message); }
+}
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, () => { saveNow(); process.exit(0); });
 
 // ---------- helpers ----------
 const str = (v, n = 100) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
@@ -133,16 +142,37 @@ const haveFile = (sha) => !!(db.r2 && db.r2[sha]) || fs.existsSync(path.join(FIL
 // (POST /v1/want); the owner's app learns this from its next presence report (`upload`) and uploads
 // it. Apps from before on-demand (no `onDemand`/`pending` flags) still upload everything, and their
 // downloads count as asking, so they keep working. Every R2 file records when it was last needed.
-const WANT_TTL = 10 * 60 * 1000;                  // a request lasts 10 minutes (asked again while needed)
+const WANT_TTL = 10 * 60 * 1000;                  // an older app's implicit request lasts 10 minutes
+// A rider's own request stays until their CoreMX says the file is installed (POST /v1/received), so
+// the file is never deleted while they still need it (an interrupted download, a restart). It ends
+// by itself after PENDING_MAX if they never come back. Kept in the database across restarts.
+const PENDING_MAX = 2 * 24 * 60 * 60 * 1000;
 const KEEP_UNUSED = (Number(arg('keepdays', 3)) > 0 ? Number(arg('keepdays', 3)) : 3) * 24 * 60 * 60 * 1000; // an R2 file nobody has needed for 3 days is deleted
-const wants = new Map();                          // sha -> when it was last asked for
+// db.wants: sha -> { <rider id or "*" for older apps>: until }
 function noteUse(sha) {
   const rec = db.r2 && db.r2[sha];
   if (rec && Date.now() - (rec.used || 0) > 60 * 1000) { rec.used = Date.now(); save(); }
 }
-function want(sha) { wants.set(sha, Date.now()); noteUse(sha); }
-const wanted = (sha) => { const t = wants.get(sha); return !!t && Date.now() - t < WANT_TTL; };
-setInterval(() => { for (const [sha, t] of wants) if (Date.now() - t > WANT_TTL) wants.delete(sha); }, 60 * 1000).unref();
+function want(sha, who = '*') {
+  const until = Date.now() + (who === '*' ? WANT_TTL : PENDING_MAX);
+  const w = (db.wants[sha] = db.wants[sha] || {});
+  if (!w[who] || w[who] < until - 60 * 1000) { w[who] = until; save(); }
+  noteUse(sha);
+}
+// Someone still needs this file: it must be uploaded, and kept.
+const wanted = (sha) => Object.values(db.wants[sha] || {}).some((until) => until > Date.now());
+function received(sha, who) {
+  const w = db.wants[sha];
+  if (w && w[who]) { delete w[who]; if (!Object.keys(w).length) delete db.wants[sha]; save(); }
+}
+setInterval(() => {
+  let changed = false;
+  for (const [sha, w] of Object.entries(db.wants)) {
+    for (const [who, until] of Object.entries(w)) if (until <= Date.now()) { delete w[who]; changed = true; }
+    if (!Object.keys(w).length) { delete db.wants[sha]; changed = true; }
+  }
+  if (changed) save();
+}, 60 * 1000).unref();
 // Owners of a file (users wearing it) who are online now and can upload it.
 function ownerOnline(sha) {
   for (const [id, u] of Object.entries(db.users)) {
@@ -157,7 +187,7 @@ function ownerOnline(sha) {
 function itemsFor(u, pending) {
   const items = (u.loadout && u.loadout.items) || [];
   if (pending) return items.map((it) => ({ ...it, available: haveFile(it.sha256) }));
-  for (const it of items) if (!haveFile(it.sha256)) want(it.sha256);
+  for (const it of items) if (!haveFile(it.sha256)) want(it.sha256, '*');
   return items.filter((it) => haveFile(it.sha256));
 }
 // Files this user wears that someone asked for and that aren't uploaded yet.
@@ -303,7 +333,7 @@ const routes = {
       inGame: !!s.inGame, inEvent: !!s.inEvent, server: str(s.server, 64) || null, serverAddress: isAddress(s.serverAddress) ? s.serverAddress : null,
       serverAddressSource: s.serverAddressSource === 'game' ? 'game' : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
-      riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64),
+      riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64), gameName: str(s.gameName, 64),
       // Race number and bike in game: other CoreMX users on the server find this rider by them (live looks).
       raceNumber: Number.isInteger(s.raceNumber) && s.raceNumber > 0 && s.raceNumber < 100000 ? s.raceNumber : null, bikeId: str(s.bikeId, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
@@ -346,7 +376,21 @@ const routes = {
     if (state.inEvent && state.server && (state.trackId || state.trackName)) {
       const k = serverKey(state.server);
       const prev = db.servers[k] || { seenBy: [] };
-      const riders = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
+      const reported = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
+      // Every CoreMX user on the server reports the riders their own game knows. A game that joined
+      // later only knows riders who came after it, so reports differ and the list used to jump between
+      // them (1, 12, 8...). Each report is kept; the list shown is the one from the host, else from the
+      // CoreMX user who has been on the server longest (its game has seen everyone come and go).
+      const now = Date.now(), reports = {};
+      for (const [id, r] of Object.entries(prev.reports || {})) {
+        const p = presence.get(id);
+        if (id !== me.id && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === k) reports[id] = r;
+      }
+      const stayed = prev.reports && prev.reports[me.id] && previous?.inEvent && serverKey(previous.server || '') === k;
+      reports[me.id] = { riders: reported, since: stayed ? prev.reports[me.id].since : now };
+      const host = s.hosting === true ? me.id : prev.hosted && reports[prev.hostedBy] ? prev.hostedBy : null;
+      const best = host || Object.entries(reports).sort((a, b) => a[1].since - b[1].since)[0][0];
+      const riders = reports[best].riders;
       db.servers[k] = {
         // A rider who reached this Host World server can report the endpoint read from the game.
         // Prefer that fresh observation over the host's public-IP:54210 guess. Keep it only while
@@ -383,7 +427,7 @@ const routes = {
         })(),
         name: state.server,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',
-        riders, categories: [...new Set(riders.map((r) => r.category).filter(Boolean))],
+        riders, reports, categories: [...new Set(riders.map((r) => r.category).filter(Boolean))],
         session: state.session,
         lastSeen: Date.now(), seenBy: [...new Set([me.id, ...(prev.seenBy || [])])].slice(0, 50),
       };
@@ -402,7 +446,7 @@ const routes = {
           .filter(({ user, presence: p }) => user && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name));
         const riders = s.riders.map((r) => {
           const matchingRows = s.riders.filter((other) => normName(other.name) === normName(r.name));
-          const matchingUsers = reporters.filter(({ presence: p }) => [p.state.riderName, p.state.riderProfile].some((n) => n && normName(n) === normName(r.name)));
+          const matchingUsers = reporters.filter(({ presence: p }) => [p.state.gameName, p.state.riderName, p.state.riderProfile].some((n) => n && normName(n) === normName(r.name)));
           return matchingRows.length === 1 && matchingUsers.length === 1
             ? { ...r, coremxName: matchingUsers[0].user.name } : r;
         });
@@ -576,11 +620,18 @@ const routes = {
     for (const u of Object.values(db.users)) if (u.sharePaints !== false) for (const it of (u.loadout?.items || [])) worn.add(it.sha256);
     const states = {};
     for (const sha of shas) {
-      if (!worn.has(sha)) { states[sha] = 'gone'; continue; }
-      want(sha);
+      if (!worn.has(sha) && !haveFile(sha)) { states[sha] = 'gone'; continue; }
+      want(sha, me.id);
       states[sha] = haveFile(sha) ? 'ready' : ownerOnline(sha) ? 'uploading' : 'offline';
     }
     return [200, { states }];
+  },
+  // The rider's CoreMX installed these files: their requests end (the files may be deleted later by
+  // the usual rules, never before).
+  'POST /v1/received': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    for (const sha of (Array.isArray(body.shas) ? body.shas : []).filter((x) => /^[a-f0-9]{64}$/.test(String(x))).slice(0, 64)) received(sha, me.id);
+    return [200, { ok: true }];
   },
   'POST /v1/servershare': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
@@ -727,6 +778,8 @@ async function r2Upkeep() {
       }
     }
     for (const [sha, rec] of Object.entries(db.r2)) {
+      // Never while a rider who asked for it hasn't installed it yet.
+      if (wanted(sha)) { if (rec.unusedSince) { delete rec.unusedSince; save(); } continue; }
       // Kept while someone active wears it and someone needed it in the last 3 days (asked again if needed later).
       const needed = Date.now() - (rec.used || rec.at || 0) < KEEP_UNUSED || wanted(sha);
       if (live.has(sha) && needed) { if (rec.unusedSince) { delete rec.unusedSince; save(); } continue; }
