@@ -278,6 +278,43 @@ EXPORT void RaceRemoveEntry(void *_pData, int _iDataSize) {
   unlock();
 }
 
+/* The game's results table (classification): MX Bikes shows riders who left greyed out, so one of
+ * its per-rider numbers says who is still connected. Which one isn't documented to us yet, so each
+ * rider's first numbers are logged (mxbm_classification.log, under 256 KB) when the table changes,
+ * at most every 30 seconds, to work out the field from a real session. Only reads within the sizes
+ * the game gives. */
+static unsigned long long nowMs(void);
+EXPORT void RaceClassification(void *_pData, int _iDataSize, void *_pArray, int _iElemSize) {
+  static unsigned long long lastAt = 0; static unsigned lastHash = 0;
+  char path[MAX_PATH * 2 + 40]; FILE *f; SYSTEMTIME t;
+  int n, i, k, words; unsigned h = 2166136261u;
+  if (!_pData || _iDataSize < 16 || !_pArray || _iElemSize < 8 || _iElemSize > 4096) return;
+  n = ((const int *)_pData)[3];
+  if (n <= 0 || n > 64) return;
+  words = _iElemSize / 4; if (words > 8) words = 8;
+  for (i = 0; i < n; i++) {
+    const unsigned char *e = (const unsigned char *)_pArray + (size_t)i * (size_t)_iElemSize;
+    for (k = 0; k < words * 4; k++) { h ^= e[k]; h *= 16777619u; }
+  }
+  if (h == lastHash || nowMs() - lastAt < 30000) return;
+  lastHash = h; lastAt = nowMs();
+  sprintf(path, "%smxbm_classification.log", g_dir);
+  f = fopen(path, "ab"); if (!f) return;
+  if (ftell(f) > 256 * 1024) { fclose(f); f = fopen(path, "wb"); if (!f) return; }
+  GetLocalTime(&t);
+  fprintf(f, "%02d:%02d:%02d server=%.40s session=%d head=%d,%d,%d,%d entries=%d size=%d\r\n", t.wHour, t.wMinute, t.wSecond, S.server, S.session,
+    ((const int *)_pData)[0], ((const int *)_pData)[1], ((const int *)_pData)[2], n, n, _iElemSize);
+  for (i = 0; i < n; i++) {
+    const int *e = (const int *)((const unsigned char *)_pArray + (size_t)i * (size_t)_iElemSize);
+    const char *name = "";
+    for (k = 0; k < MAX_RIDERS; k++) if (S.riders[k].used && S.riders[k].num == e[0]) { name = S.riders[k].name; break; }
+    fprintf(f, "  #%d %.30s:", e[0], name);
+    for (k = 1; k < words; k++) fprintf(f, " %d", e[k]);
+    fprintf(f, "\r\n");
+  }
+  fclose(f);
+}
+
 EXPORT void RaceSession(void *_pData, int _iDataSize) {
   const RaceSessionData *e = (const RaceSessionData *)_pData;
   if (!e || _iDataSize < (int)sizeof(int)) return;
