@@ -76,8 +76,18 @@ function upnpCard(u = {}) {
     : u.state === 'failed' ? `Couldn't open the port: ${esc(u.error || 'unknown error')}. Turn on UPnP in your router settings, or forward UDP ${u.port || 54210} to this PC.`
     : 'Opens when you host a game from MX Bikes and closes when you stop.';
   return `<div class="set-card"><h3>Open the game port while hosting</h3><p>When you host from MX Bikes (Host World), CoreMX asks your router (UPnP) to let friends in on UDP ${u.port || 54210}. The rule is removed when you stop hosting or close CoreMX.</p>
-    <div class="path-row"><span class="${u.state === 'open' ? 'ok' : 'muted'}">${line}</span><span class="grow"></span><label class="toggle"><input type="checkbox" id="upnpToggle" ${u.enabled !== false ? 'checked' : ''}><span class="sw"></span></label></div></div>`;
+    <div class="path-row"><span class="${u.state === 'open' ? 'ok' : 'muted'}">${line}</span><span class="grow"></span><label class="toggle"><input type="checkbox" id="upnpToggle" ${u.enabled !== false ? 'checked' : ''}><span class="sw"></span></label></div>
+    ${u.state === 'open' && u.doubleNat ? `<div class="notice warn" style="margin-top:10px">${icon('alert')}<div>Your router sits behind another router or the internet provider's modem (it has a home-network outside address). Open UDP ${u.port || 54210} on that modem too, forwarded to this router, or put the modem in bridge mode.</div></div>` : ''}
+    <div class="path-row" style="margin-top:10px"><span class="${firewallClass(u.firewall)}" id="firewallLine">${firewallLine(u.firewall)}</span><span class="grow"></span>
+      ${u.firewall?.state === 'blocked' ? `<button class="btn btn-primary" data-firewall-allow>${icon('check')}Allow MX Bikes</button>` : `<button class="btn" data-firewall-check>${icon('refresh')}Check firewall</button>`}</div></div>`;
 }
+// Windows Firewall: riders time out when it drops MX Bikes, even with the router port open.
+function firewallLine(fw) {
+  if (!fw) return 'Windows Firewall: checked when you host.';
+  if (fw.state === 'blocked') return `${esc(fw.detail)}. Riders joining you will time out.`;
+  return `${esc(fw.detail)}.`;
+}
+function firewallClass(fw) { return fw?.state === 'blocked' ? 'warn-text' : fw && fw.state !== 'unknown' ? 'ok' : 'muted'; }
 async function renderPluginSettings(c) {
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings" id="pluginSettings"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div>`;
   try {
@@ -91,6 +101,17 @@ async function renderPluginSettings(c) {
       <div class="set-card"><h3>In-game overlay key</h3><p>Opens the CoreMX overlay on track, to change your outfit and bike livery. Changes apply within a second, even while MX Bikes is running.</p>
         <div class="path-row"><select id="overlayKey">${['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11'].map((k) => `<option ${k === overlayKeyName() ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
         ${overlayKeyName() === 'F8' && plugins.some((p) => /^mxb_ragdoll\.dlo$/i.test(p.name) && p.enabled) ? `<div class="notice warn" style="margin-top:10px">${icon('alert')}<div>MX Bikes Ragdoll opens its own menu with F8 too. Pick another key so both don't open together.</div></div>` : ''}</div>`;
+    box.addEventListener('click', async (e) => {
+      const allow = e.target.closest('[data-firewall-allow]'), check = e.target.closest('[data-firewall-check]');
+      if (!allow && !check) return;
+      const button = allow || check; button.disabled = true;
+      try {
+        if (allow && !await confirmBox('Allow MX Bikes through Windows Firewall?', 'Riders joining your hosted game need MX Bikes to be let in. CoreMX adds an inbound rule for MX Bikes (UDP, all network types) and turns off any rule that blocks it. Windows will ask for administrator permission.', 'Allow MX Bikes')) { button.disabled = false; return; }
+        await api.invoke(allow ? 'online:firewallAllow' : 'online:firewallCheck');
+        if (allow) toast('MX Bikes is allowed through Windows Firewall', 'ok', 3000);
+        await renderPluginSettings(c);
+      } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); button.disabled = false; }
+    });
     $('#upnpToggle', box)?.addEventListener('change', async (e) => {
       try { await api.invoke('online:upnp', e.target.checked); toast(e.target.checked ? 'CoreMX opens the game port on your router while you host' : 'Router port opening turned off', 'ok', 2400); await renderPluginSettings(c); }
       catch (err) { toast(esc(cleanErr(err)), 'err'); }

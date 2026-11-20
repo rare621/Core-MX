@@ -264,7 +264,9 @@ test('hosting opens the router port; leaving the game or turning it off closes i
   const log = [];
   const portMapper = { open: async (port) => { log.push(`open ${port}`); }, close: async () => { log.push('close'); } };
   let running = true;
-  const f = fixture({ userDir: () => root, isGameRunning: async () => running, portMapper, resolveServerAddress: async () => null });
+  const checks = [];
+  const firewall = { check: async () => { checks.push(Date.now()); return { state: 'blocked', detail: 'No rule' }; }, allow: async () => {} };
+  const f = fixture({ userDir: () => root, isGameRunning: async () => running, portMapper, firewall, resolveServerAddress: async () => null });
 
   await presence('Someone Else');
   await f.client.refresh();
@@ -275,6 +277,8 @@ test('hosting opens the router port; leaving the game or turning it off closes i
   await f.client.refresh();
   assert.deepEqual(log, ['open 54210'], 'opened once while hosting (renewed later, not every poll)');
   assert.equal(f.client.status().upnp.state, 'open');
+  assert.equal(f.client.status().upnp.firewall.state, 'blocked', 'the firewall is checked when hosting starts');
+  assert.equal(checks.length, 1, 'not on every poll');
 
   running = false;
   await f.client.refresh();

@@ -933,3 +933,6 @@ select option { background: var(--panel); }
 .post-tabs { margin-top: 20px; }
 .post-tabs + .desc, .post-tabs ~ .post-install { margin-top: 14px; }
 .desc[hidden] { display: none; }
+
+/* Status text that needs attention (e.g. Windows Firewall blocking MX Bikes). */
+.warn-text { color: var(--warn); }

@@ -1511,6 +1511,8 @@ function registerIpc() {
   handle('online:syncServerRiders', (server, ids) => online.syncServerRiders(String(server || '').slice(0, 64), Array.isArray(ids) ? ids.map(String).slice(0, 32) : []));
   handle('online:serverShare', (on) => online.setServerShare(on));
   handle('online:upnp', (on) => online.setUpnp(!!on));
+  handle('online:firewallCheck', async () => { await online.checkFirewall(); return online.status(); });
+  handle('online:firewallAllow', () => online.allowFirewall());
   const friendPreviewLoadouts = new Map();
   handle('online:friendLoadout', async (friendId) => {
     const outfit = await online.friendLoadout(friendId);
