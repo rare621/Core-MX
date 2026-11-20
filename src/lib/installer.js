@@ -35,6 +35,7 @@ const KINDS = {
   sound:           { label: 'Bike sound', base: () => 'bikes' },
   plugin:          { label: 'Game plugin', base: () => 'plugins', root: 'game' },
   graphics:        { label: 'Graphics mod (game folder)', base: () => '', root: 'game' },
+  menuUi:          { label: 'Menu, loading screen or menu background (game folder)', base: () => '', root: 'game' },
   custom:          { label: 'Other (choose folder)', base: (o) => o.customDir || '' },
 };
 const PAINT_OF = { boots: 'bootPaint', helmet: 'helmetPaint', protection: 'protectionPaint', bike: 'bikePaint' };
@@ -48,9 +49,44 @@ const CATEGORY_KIND = [
   [[35, 52, 129, 309, 534], 'riderKit'],
   [[37, 51, 361], 'bikePaint'], [[46], 'sound'], [[45, 179, 304, 463], 'bike'],
   [[22, 360, 122, 173], 'track'],
+  [[168, 57], 'menuUi'],
   [[174, 609, 130], 'graphics'],
   [[30], 'riderKit'], [[29], 'bike'],
 ];
+
+// Menus, loading screens and menu backgrounds (MXB Mods "UI" and "Menu Backgrounds"). They only
+// work in the game install folder (creators: "not in mods"): menu files (.mnu, their tiles/ images,
+// bkgrnd.tga, splash.tga) go in MX Bikes/ui, a menu background scene in MX Bikes/misc/bg (bg.map,
+// bg.amb) or MX Bikes/misc/bg.pkz. Returns rel -> destination, null (readme, preview, launcher: not
+// copied) or undefined (no known place, or two files for one place: the player chooses).
+const MENU_SKIP = /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif|bat|cmd|exe|ps1|vbs|msi)$/i;
+function menuDestinations(files) {
+  const out = new Map();
+  const split = (rel) => rel.split('/');
+  // A folder holding a .mnu file is a copy of MX Bikes/ui (any wrapper folders above it are dropped).
+  const mnuDirs = files.filter((f) => /\.mnu$/i.test(f.rel)).map((f) => split(f.rel).slice(0, -1).map((s) => s.toLowerCase()));
+  for (const f of files) {
+    const segs = split(f.rel), l = segs.map((s) => s.toLowerCase()), fname = segs[segs.length - 1], lname = fname.toLowerCase();
+    if (MENU_SKIP.test(fname)) { out.set(f.rel, null); continue; }
+    const at = (name) => { const i = l.indexOf(name); return i >= 0 && i < segs.length - 1 ? i : -1; };
+    let dest;
+    if (at('misc') >= 0) dest = ['misc', ...segs.slice(at('misc') + 1)].join('/');
+    else if (at('ui') >= 0) dest = ['ui', ...segs.slice(at('ui') + 1)].join('/');
+    else if (/^bg\.(map|amb)$/.test(lname)) dest = `misc/bg/${lname}`;
+    else if (lname === 'bg.pkz') dest = 'misc/bg.pkz';
+    else if (at('bg') >= 0) dest = ['misc', ...segs.slice(at('bg'))].join('/');
+    else {
+      const root = mnuDirs.filter((d) => d.every((s, i) => l[i] === s) && d.length < segs.length).sort((a, b) => a.length - b.length)[0];
+      if (root) dest = ['ui', ...segs.slice(root.length)].join('/');
+      else if (/^(bkgrnd|splash)\.tga$/.test(lname)) dest = `ui/${lname}`;
+    }
+    out.set(f.rel, dest);
+  }
+  const uses = new Map();
+  for (const d of out.values()) if (d) uses.set(d.toLowerCase(), (uses.get(d.toLowerCase()) || 0) + 1);
+  for (const [rel, d] of out) if (d && uses.get(d.toLowerCase()) > 1) out.set(rel, undefined);
+  return out;
+}
 
 function kindFromCategories(cats = []) {
   for (const [ids, kind] of CATEGORY_KIND) if (ids.some((id) => cats.includes(id))) return kind;
@@ -214,6 +250,7 @@ function plan(files, ctx, opts = {}) {
   // existing settings (.ini / .cfg) are kept when it is updated.
   const pluginsAt = (rel) => rel.split('/').findIndex((seg, i, all) => i < all.length - 1 && seg.toLowerCase() === 'plugins');
   const hasPluginsFolder = kind === 'plugin' && files.some((f) => pluginsAt(f.rel) >= 0);
+  const menuDest = kind === 'menuUi' ? menuDestinations(files) : null;
   for (const f of files) {
     if (hasPluginsFolder) {
       const at = pluginsAt(f.rel), segs = f.rel.split('/');
@@ -225,6 +262,12 @@ function plan(files, ctx, opts = {}) {
     }
     if (!gameRoot && isServerCopy(f.rel) && riderNames.has(f.rel.split('/').pop().toLowerCase())) {
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'server-copy' });
+      continue;
+    }
+    if (menuDest) {
+      const dest = menuDest.get(f.rel);
+      const status = dest === null ? 'skip' : dest === undefined ? 'unresolved' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: dest || null, status, how: dest ? 'menu' : dest === null ? 'doc' : 'menu-unknown' });
       continue;
     }
     if (gameRoot) {
@@ -415,6 +458,8 @@ function plan(files, ctx, opts = {}) {
     }
   }
   if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : kind === 'animationGame' ? 'animations' : 'graphics mods'} go there.`);
+  if (kind === 'menuUi' && files.some((f) => /\.(bat|cmd|exe)$/i.test(f.rel))) warnings.push('This mod comes with a launcher (.bat/.exe). CoreMX never runs those; only its images and menu files are installed.');
+  if (kind === 'menuUi' && entries.some((e) => e.status === 'unresolved')) warnings.push('Some files have no known place in MX Bikes/ui or MX Bikes/misc (or several files would land in the same place, like colour options). Check the mod description and pick the ones you want.');
   if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : kind === 'animationGame' ? 'The creator requires these .anm files in MX Bikes/rider/animations/mx. Close the game before installing or changing them.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
   else if (/^tools|^plugins|reshade/i.test(ctx.categoryNames ? ctx.categoryNames.join(' ') : '')) warnings.push('Tools, plugins and ReShade presets usually go in the game install folder, not mods/. Check the mod description.');
 
@@ -503,4 +548,4 @@ async function apply(p, rootDir, { signal, rollbackDir } = {}) {
   }
 }
 
-module.exports = { plan, apply, KINDS, kindFromCategories, guessTrackType, guessModel, listModels };
+module.exports = { menuDestinations, plan, apply, KINDS, kindFromCategories, guessTrackType, guessModel, listModels };
