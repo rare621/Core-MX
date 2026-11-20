@@ -34,7 +34,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 19;
+const VERSION = 20;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -95,7 +95,18 @@ function clientIp(req) {
   }
   return peer;
 }
-const isAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || '')) && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(String(v));
+// A public IPv4 game address (never a home-network, carrier-shared, link-local or loopback one).
+const isAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || '')) && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(String(v));
+// A host's address on its own home network: only for riders on that same network (same public IP),
+// whose router usually can't connect them to their own public address.
+const isLanAddress = (v) => /^(\d{1,3}\.){3}\d{1,3}:\d{2,5}$/.test(String(v || '')) && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(String(v));
+function addressFor(srv, viewerIps = []) {
+  if (srv && srv.hosted && srv.hostLan && srv.hostIp && viewerIps.includes(srv.hostIp)) return { address: srv.hostLan, sameNetwork: true };
+  return { address: srv ? srv.address || null : null, sameNetwork: false };
+}
+// The IPv4 addresses a request may come from: the connection, and the one the app last reported over
+// IPv4 (/v1/hostip; an app that reaches the service over IPv6 has no IPv4 on its requests).
+const viewerIps = (req, me) => { const h = me && hostIps.get(me.id); return [clientIp(req), h && Date.now() - h.at < 30 * 60 * 1000 ? h.ip : null].filter(Boolean); };
 const hash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const serverKey = (name) => str(name, 64).toLowerCase();
 // Rider names in game often carry team tags ("CaptiveDuck | CRMX"); compare on words.
@@ -205,7 +216,7 @@ function cleanServers() {
   if (keys.length > MAX_SERVERS) keys.sort((a, b) => db.servers[a].lastSeen - db.servers[b].lastSeen).slice(0, keys.length - MAX_SERVERS).forEach((k) => delete db.servers[k]);
 }
 
-function presenceView(id) {
+function presenceView(id, viewer = []) {
   const p = presence.get(id);
   const u = db.users[id];
   if (!p || Date.now() - p.at > ONLINE_TTL) return { id, name: u ? u.name : '', online: false, lastSeen: u ? u.lastSeen || null : null };
@@ -213,7 +224,8 @@ function presenceView(id) {
   const srv = s.server ? db.servers[serverKey(s.server)] : null;
   return {
     id, name: u ? u.name : '', online: true, inGame: !!s.inGame, inEvent: !!s.inEvent,
-    server: s.inEvent ? s.server || null : null, address: s.inEvent ? (srv && srv.address) || s.serverAddress || null : null,
+    server: s.inEvent ? s.server || null : null, address: s.inEvent ? addressFor(srv, viewer).address || s.serverAddress || null : null,
+    sameNetwork: !!(s.inEvent && addressFor(srv, viewer).sameNetwork),
     trackId: s.trackId || null, trackName: s.trackName || null, bikeName: s.bikeName || null, category: s.category || null,
     riders: srv ? srv.riders.length : null, lastSeen: p.at,
     session: s.inEvent ? s.session ?? null : null,
@@ -277,6 +289,7 @@ const routes = {
       // Over IPv6 the request carries no IPv4; use the IPv4 the app recorded with /v1/hostip.
       if (!isAddress(addr) && fresh) addr = `${seen.ip}:${port}`;
       if (isAddress(addr)) state.serverAddress = addr;
+      if (isLanAddress(s.hostLan)) state.hostLan = s.hostLan;
     }
     // The game plugin reports a fresh non-event state as soon as MX Bikes
     // closes or the rider leaves a server.  Remove that reporter from the
@@ -312,6 +325,7 @@ const routes = {
             return {
               address: observed ? prev.observedAddress : state.serverAddress,
               hosted: true, hostedBy: me.id, guessedAddress: state.serverAddress,
+              hostLan: state.hostLan || null, hostIp: state.serverAddress.split(':')[0],
               observedAddress: observed ? prev.observedAddress : null,
               observedAt: observed ? prev.observedAt : null,
             };
@@ -325,7 +339,7 @@ const routes = {
             const observed = fromGame ? state.serverAddress : prev.observedAddress || null;
             const guessedAddress = prev.guessedAddress || prev.address || null;
             return {
-              address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, guessedAddress,
+              address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, guessedAddress, hostLan: prev.hostLan || null, hostIp: prev.hostIp || null,
               observedAddress: observed, observedAt: fromGame ? Date.now() : observed ? prev.observedAt : null,
             };
           }
@@ -343,7 +357,8 @@ const routes = {
     return [200, { ok: true, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length }];
   },
 
-  'GET /v1/servers': async () => {
+  'GET /v1/servers': async (req, body, me) => {
+    const viewer = viewerIps(req, me);
     const now = Date.now();
     const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL)
       .map((s) => {
@@ -355,7 +370,8 @@ const routes = {
           return matchingRows.length === 1 && matchingUsers.length === 1
             ? { ...r, coremxName: matchingUsers[0].user.name } : r;
         });
-        return { name: s.name, address: s.address, hosted: !!s.hosted, addressObserved: !!(s.hosted && s.observedAddress), trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
+        const at = addressFor(s, viewer);
+        return { name: s.name, address: at.address, sameNetwork: at.sameNetwork, hosted: !!s.hosted, addressObserved: !!(s.hosted && s.observedAddress), trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
       })
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];
@@ -376,7 +392,7 @@ const routes = {
       if (!(u.friends || []).includes(me.id)) return { id, name: u.name, status: 'not-added-back' };
       const p = presence.get(id);
       if (p && !p.share) return { id, name: u.name, status: 'hidden' };
-      return { ...presenceView(id), status: 'ok' };
+      return { ...presenceView(id, viewerIps(req, me)), status: 'ok' };
     });
     return [200, { friends: out }];
   },
