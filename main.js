@@ -1482,7 +1482,11 @@ function registerIpc() {
   handle('online:share', (on) => online.setShare(on));
   handle('online:servers', async (force = false) => { const result = await online.servers(); const servers = await addKnownServerAddresses(result.servers); return { ...result, servers: await serverPing.measure(servers, undefined, !!force) }; });
   handle('online:friends', async (force = false) => {
-    const friends = await online.syncFriends();
+    // Each friend's Steam profile photo (CoreMX friend ids are Steam IDs).
+    const me = steam.detect(paths.steamRoot());
+    const raw = await online.syncFriends();
+    const photos = me.found ? steam.avatars(paths.steamRoot(), me.steamId, raw.map((f) => f.id)) : {};
+    const friends = raw.map((f) => (photos[f.id] ? { ...f, avatar: photos[f.id] } : f));
     await online.refreshFriendGear(!!force);
     if (!friends.some((f) => f.online && f.server && !f.address)) return friends;
     const addresses = await knownServerAddresses();
