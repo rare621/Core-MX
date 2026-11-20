@@ -1587,6 +1587,7 @@ function registerIpc() {
     return shell.openExternal(url);
   }));
   handle('online:cancelSignIn', () => online.cancelSignIn());
+  handle('online:leaderboard', () => online.leaderboard());
   handle('online:disconnect', () => online.disconnect());
   handle('online:share', (on) => online.setShare(on));
   handle('online:servers', async (force = false) => { const result = await online.servers(); const servers = await addKnownServerAddresses(result.servers); return { ...result, servers: await serverPing.measure(servers, undefined, !!force) }; });

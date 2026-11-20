@@ -215,6 +215,43 @@ function missingBikesDialog(s, result) {
   });
 }
 
+// ---------- Friends leaderboard ----------
+// The 8 tracks you and your friends rode most recently, everyone's best lap per bike class (from
+// MX Bikes' own records.ini; only mutual friends see each other). Challenge sets Play up for it.
+const lapTime = (t) => { const m = Math.floor(t / 60), sec = t - m * 60; return `${m}:${sec.toFixed(3).padStart(6, '0')}`; };
+const lapClassOf = (bike) => { const m = String(bike || '').match(/^(MX\w*?|SM\w*?|EN\w*?)OEM_/i); return m ? `${m[1].toUpperCase().replace(/^MXE$/, 'MX-E')} OEM` : 'Other bikes'; };
+const lapKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+function leaderboardHtml(tracks) {
+  if (!tracks.length) return `<div class="fr-empty"><div class="fr-empty-ico">${icon('clock')}</div><h3>No lap times yet</h3><p>Ride any track in MX Bikes. Your best laps, and your friends', show up here for the last 8 tracks you rode.</p></div>`;
+  return tracks.map((t, ti) => `<div class="set-card lap-card"><div class="lap-head"><div><h3 style="margin:0">${esc(t.track)}</h3><span class="muted">${t.at ? 'Last lap ' + esc(timeAgo(t.at * 1000)) : ''}</span></div></div>
+    ${t.classes.map((cl, ci) => `<div class="lap-class"><div class="lap-class-head"><b>${esc(cl.class)}</b><button class="btn btn-sm btn-primary" data-lap-challenge="${ti}|${ci}">${icon('play')}Challenge</button></div>
+      <div class="lap-rows">${cl.entries.map((e, i) => `<div class="lap-row${e.me ? ' me' : ''}"><span class="lap-pos">${i + 1}</span><span class="lap-name">${esc(e.name || 'Rider')}${e.me ? ' <span class="muted">(you)</span>' : ''}</span><span class="lap-bike muted">${esc(prettyBikeId(e.bike))}</span><span class="lap-time mono">${lapTime(e.time)}</span><span class="lap-gap muted mono">${i ? '+' + (e.time - cl.entries[0].time).toFixed(3) : ''}</span></div>`).join('')}</div></div>`).join('')}</div>`).join('');
+}
+async function loadLeaderboard(c) {
+  const box = $('#lapBoard', c); if (!box) return;
+  if (!S.live.status?.service?.connected) { box.innerHTML = '<div class="set-card muted">Sign in with Steam to compare lap times with your friends.</div>'; return; }
+  try { S.live.board = (await api.invoke('online:leaderboard')).tracks || []; }
+  catch (e) { box.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(e))}</div></div>`; return; }
+  if (!box.isConnected) return;
+  box.innerHTML = leaderboardHtml(S.live.board) + '<p class="muted" style="margin-top:10px">Best laps come from MX Bikes\' own records. Only friends who added you back can see yours; turn off "Share my riding status" in Sync settings to stop sharing them.</p>';
+  box.querySelectorAll('[data-lap-challenge]').forEach((b) => b.addEventListener('click', () => {
+    const [ti, ci] = b.dataset.lapChallenge.split('|').map(Number);
+    lapChallenge(S.live.board[ti], S.live.board[ti].classes[ci]);
+  }));
+}
+// Play with that track and a bike of that class: yours from the board, else the leader's, else any.
+function lapChallenge(t, cl) {
+  const track = (S.items || []).find((i) => i.group === 'tracks' && !i.disabled && [i.title, i.name, i.info && i.info.name].some((n) => n && lapKey(n) === lapKey(t.track)));
+  if (!track) { toast(`You don't have <b>${esc(t.track)}</b> yet. Find it in Get Mods.`, 'info', 5000); findTrack(t.track); return; }
+  const bikes = (S.items || []).filter((i) => i.group === 'bikes' && !i.disabled && lapClassOf(i.name) === cl.class);
+  const has = (name) => bikes.find((b) => b.name.toLowerCase() === String(name || '').toLowerCase());
+  const bike = has(cl.entries.find((e) => e.me)?.bike) || has(cl.entries[0]?.bike) || (cl.class !== 'Other bikes' ? bikes[0] : null);
+  if (!bike && cl.class !== 'Other bikes') toast(`You have no ${esc(cl.class)} bike. Get the OEM pack in OEM Packs.`, 'info', 5000);
+  if (bike) { S.rider.bike = bike.name; S.rider.selectionDirty = true; S.rider.bikes = null; }
+  S.ride.track = track.name; S.gameTab = 'ride'; go('game');
+  toast(`Set up: <b>${esc(track.title || track.name)}</b>${bike ? ' on <b>' + esc(bike.title || bike.name) + '</b>' : ''}. Beat ${esc(cl.entries[0]?.name || 'the best')}: ${cl.entries[0] ? lapTime(cl.entries[0].time) : ''}`, 'ok', 6000);
+}
+
 async function joinLiveServer(s) {
   if (typeof bikeCheck !== 'undefined' && (s.riders || []).length) {
     const result = bikeCheck.check(s.riders, installedBikeNames());
@@ -460,7 +497,7 @@ async function renderFriends(c) {
     <div class="me-stats"><div><b>${S.friends.length}</b><small>Friends</small></div><div><b>${counts.ride}</b><small>Riding</small></div><div><b>${counts.on}</b><small>Online</small></div></div>
     <button class="btn btn-primary" data-act="friends-add">${icon('users')}Add friends</button></div>` : '';
   // Friends view tabs: the list, or the sync settings (so neither needs scrolling past the other).
-  const tab = c.id === 'content' && S.live.friendsTab === 'sync' ? 'sync' : 'friends';
+  const tab = c.id === 'content' && ['sync', 'board'].includes(S.live.friendsTab) ? S.live.friendsTab : 'friends';
   const displayKey = JSON.stringify([
     tab, c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
     S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
@@ -486,10 +523,10 @@ async function renderFriends(c) {
   const searchFocused = document.activeElement?.id === 'friendSearch';
   const selection = searchFocused ? document.activeElement.selectionStart : 0;
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar"><h2>Friends</h2>${c.id === 'content' ? `<div class="seg-tabs"><button class="${tab === 'friends' ? 'active' : ''}" data-friends-tab="friends">${icon('users')}Friends</button><button class="${tab === 'sync' ? 'active' : ''}" data-friends-tab="sync">${icon('settings')}Sync settings</button></div>` : ''}<div class="grow"></div>
+    <div class="toolbar"><h2>Friends</h2>${c.id === 'content' ? `<div class="seg-tabs"><button class="${tab === 'friends' ? 'active' : ''}" data-friends-tab="friends">${icon('users')}Friends</button><button class="${tab === 'board' ? 'active' : ''}" data-friends-tab="board">${icon('clock')}Leaderboard</button><button class="${tab === 'sync' ? 'active' : ''}" data-friends-tab="sync">${icon('settings')}Sync settings</button></div>` : ''}<div class="grow"></div>
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
       ${c.id === 'content' ? '' : `<button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button>`}</div>
-    <div class="scroller">${tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
+    <div class="scroller">${tab === 'board' ? `<div class="fr-page">${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
       <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
       <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
       ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
@@ -500,6 +537,7 @@ async function renderFriends(c) {
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
     </section></div></div></div></div>`}`;
   if (c.firstElementChild) c.firstElementChild._friendsDisplayKey = displayKey;
+  if (tab === 'board') loadLeaderboard(c);
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
   if (search) {

@@ -776,6 +776,50 @@ const routes = {
     signIns.delete(String(body.state));
     return [200, { done: true, ...st.result }];
   },
+  // Friends leaderboard. Each app sends its player's best laps from MX Bikes' own records.ini (best
+  // lap per track and bike, with the day it was set); only mutual friends see them.
+  'POST /v1/laps': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const best = new Map();
+    for (const l of Array.isArray(body.laps) ? body.laps.slice(0, 2000) : []) {
+      const track = str(l && l.track, 80), bike = str(l && l.bike, 80), time = Number(l && l.time), at = Math.floor(Number(l && l.at) || 0);
+      if (!track || !/^[\w .()&'+-]{1,80}$/.test(bike) || !(time > 5 && time < 3600)) continue;
+      const key = track.toLowerCase() + '\u0001' + bike.toLowerCase();
+      if (!best.has(key) || best.get(key).time > time) best.set(key, { track, bike, time: Math.round(time * 1000) / 1000, at: at > 0 && at < Date.now() / 1000 + 86400 ? at : 0 });
+    }
+    me.user.laps = [...best.values()].sort((a, b) => b.at - a.at).slice(0, 500);
+    save();
+    return [200, { ok: true, laps: me.user.laps.length }];
+  },
+  // The 8 tracks you and your mutual friends rode most recently, with everyone's best lap per
+  // bike class (MX1 OEM, MX2 OEM, ...; other bikes together).
+  'GET /v1/leaderboard': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const people = [me.id, ...(me.user.friends || []).filter((id) => db.users[id] && (db.users[id].friends || []).includes(me.id))];
+    const tracks = new Map();
+    for (const id of [...new Set(people)]) {
+      for (const l of db.users[id].laps || []) {
+        const key = l.track.toLowerCase();
+        if (!tracks.has(key)) tracks.set(key, { track: l.track, at: 0, laps: [] });
+        const t = tracks.get(key);
+        t.at = Math.max(t.at, l.at || 0);
+        t.laps.push({ ...l, id });
+      }
+    }
+    const out = [...tracks.values()].sort((a, b) => b.at - a.at).slice(0, 8).map((t) => {
+      const classes = new Map();
+      for (const l of t.laps) {
+        const cls = lapClass(l.bike);
+        if (!classes.has(cls)) classes.set(cls, new Map());
+        const byUser = classes.get(cls);
+        if (!byUser.has(l.id) || byUser.get(l.id).time > l.time) byUser.set(l.id, l);
+      }
+      return { track: t.track, at: t.at, classes: [...classes].sort((a, b) => classOrder(a[0]) - classOrder(b[0])).map(([cls, byUser]) => ({
+        class: cls, entries: [...byUser.values()].sort((a, b) => a.time - b.time).map((l) => ({ id: l.id, name: db.users[l.id].name || '', me: l.id === me.id, bike: l.bike, time: l.time, at: l.at })),
+      })) };
+    });
+    return [200, { tracks: out }];
+  },
   // Who this token belongs to, and whether Steam has confirmed it.
   'GET /v1/me': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
@@ -788,6 +832,13 @@ const routes = {
     return [200, { ok: true }];
   },
 };
+
+// A bike's class from its folder name, as the game shows it: MX1OEM_2023_Kawasaki_KX450 -> "MX1 OEM".
+function lapClass(bike) {
+  const m = String(bike || '').match(/^(MX\w*?|SM\w*?|EN\w*?)OEM_/i);
+  return m ? `${m[1].toUpperCase().replace(/^MXE$/, 'MX-E')} OEM` : 'Other bikes';
+}
+const classOrder = (c) => { const i = ['MX1 OEM', 'MX2 OEM', 'MX3 OEM', 'MX-E OEM'].indexOf(c); return i < 0 ? (c === 'Other bikes' ? 99 : 50) : i; };
 
 // ---------- Sign in with Steam ----------
 const signIns = new Map(); // state -> { secretHash, expect, name, returnTo, at, result, codeHash }
