@@ -310,13 +310,20 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const c = cfg();
     if (!c.url || !c.token) return;
     const state = stateForReport();
+    if (state.hosting && Date.now() - lanAt > 5 * 60 * 1000) {
+      lanAt = Date.now();
+      lanAddress = await localAddress().catch(() => null);
+    }
+    if (state.hosting) {
+      if (lanAddress) state.hostLan = `${lanAddress}:54210`;
+      else delete state.hostLan;
+    }
     const key = JSON.stringify(state);
     // The manager stays online even with MX Bikes closed. Keep its heartbeat alive.
     if (!force && key === lastSent && Date.now() - lastSentAt < REPORT_EVERY) return;
     // Every app tells the service its IPv4 now and then (hosts for their address; riders so a host on
     // their own home network can be joined at its local address), even when it talks over IPv6.
     if (Date.now() - hostIpAt > 5 * 60 * 1000) { hostIpAt = Date.now(); await postOverIPv4('/v1/hostip').catch(() => {}); }
-    if (state.hosting && Date.now() - lanAt > 5 * 60 * 1000) { lanAt = Date.now(); lanAddress = await localAddress().catch(() => null); }
     try {
       const result = await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
       activeUsers = Number.isInteger(result.activeUsers) ? result.activeUsers : null;

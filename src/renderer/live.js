@@ -168,7 +168,19 @@ async function drawLiveServers(refresh) {
 // their Steam name is on the server's rider list), offer to download their free gear first
 // so their bikes and outfits show up in game. Then the usual track check and join.
 async function joinLiveServer(s) {
-  const join = () => {
+  const join = async () => {
+    // The list can sit open while a host's estimated endpoint is replaced by the address
+    // observed by a rider who joined in-game. Use the current endpoint, not the card's copy.
+    try {
+      const latest = await api.invoke('online:servers');
+      const current = (latest.servers || []).find((row) => row.name?.toLowerCase() === s.name?.toLowerCase());
+      if (!current || (s.trackId && current.trackId && s.trackId.toLowerCase() !== current.trackId.toLowerCase())) {
+        toast('This server changed or went offline. Refresh the list before joining.', 'info', 6000);
+        return;
+      }
+      s = current;
+    } catch { toast('Could not refresh this server address; trying the last known one.', 'info', 5000); }
+    if (!s.address) { toast('This server does not have a join address yet.', 'info', 5000); return; }
     // Home-hosted (Host World) servers are often only reachable through the in-game browser.
     if (s.hosted) toast(`<b>${esc(s.name)}</b> is game hosted. If MX Bikes says <b>connection timed out</b>, join it from <b>Multiplayer → World</b> in the game.`, 'info', 9000);
     return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s), trackId: s.trackId || '' });
@@ -694,6 +706,17 @@ async function syncAndJoinFriend(friend, session) {
   const problems = report?.items?.filter((item) => ['failed', 'name-taken', 'skipped'].includes(item.state)).length || 0;
   if (problems) toast(`${problems} of ${friend.name}'s files need attention — open Gear & sync for details`, 'info', 5000);
   else toast(`Checked ${friend.name}'s current free gear and tyres`, 'ok', 1800);
+  // Sync may take long enough for the host's endpoint or the friend's session to change.
+  let latest = null;
+  try { latest = await api.invoke('online:friends'); }
+  catch { toast('Could not refresh your friend’s address; trying the last known one.', 'info', 5000); }
+  if (latest) {
+    const current = latest.find((entry) => entry.id === friend.code);
+    if (!current?.online || !current.server || !current.address || current.server !== session.server) {
+      throw new Error('Your friend changed or left the server. Refresh Friends before joining.');
+    }
+    session = current;
+  }
   const track = session.trackName || session.trackId;
   if (track && !trackHave(session)) return findFriendTrack(friend, session, true);
   return joinServer(session.address, { name: session.server, address: session.address, track, trackId: session.trackId || '' });
