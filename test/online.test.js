@@ -323,3 +323,42 @@ test('a player whose game stopped receiving is reported off the server', async (
   await f.client.refresh();
   assert.equal(sent.at(-1).server, 'My Track Day');
 });
+
+test('with a current service, CoreMX registers nothing until you sign in with Steam; the code from the browser finishes it', async (t) => {
+  const calls = [];
+  let polls = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    calls.push(url);
+    const body = options.body ? JSON.parse(options.body) : {};
+    const reply = (data, status = 200) => new Response(JSON.stringify(data), { status });
+    if (url.endsWith('/v1/health')) return reply({ ok: true, version: 24 });
+    if (url.endsWith('/v1/auth/steam/start')) { assert.equal(body.steamId, '76561198000000000'); return reply({ state: 'a'.repeat(32), secret: 's'.repeat(48), url: 'https://steamcommunity.com/openid/login?x=1' }); }
+    if (url.endsWith('/v1/auth/steam/poll')) { polls++; return reply(body.code === 'c'.repeat(32) ? { done: true, token: 't'.repeat(48), id: '76561198000000000', name: 'Fixture' } : { done: false, confirmed: polls > 1 }); }
+    return reply({ friends: [] });
+  });
+  const f = fixture();
+  f.set({ token: null, id: null, url: 'http://67.84.130.214:60000' });
+  const st = await f.client.connect();
+  assert.equal(st.service.connected, false);
+  assert.equal(st.service.needsSignIn, true);
+  assert.ok(!calls.some((u) => u.endsWith('/v1/register')), 'nothing is registered without asking');
+  let opened = null;
+  const done = f.client.signIn(async (url) => { opened = url; });
+  await new Promise((resolve) => setTimeout(resolve, 4500));
+  assert.equal(opened, 'https://steamcommunity.com/openid/login?x=1');
+  assert.equal(f.client.status().service.signingIn.confirmed, true);
+  assert.equal(f.client.signInCode('b'.repeat(32), 'c'.repeat(32)), false, 'a link for another sign-in is ignored');
+  assert.equal(f.client.signInCode('a'.repeat(32), 'c'.repeat(32)), true);
+  const result = await done;
+  assert.equal(result.service.connected, true);
+  assert.equal(f.config().token, 't'.repeat(48));
+  assert.equal(f.config().verified, true);
+});
+
+test('a token that stops working (account taken back) asks to sign in again', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ error: 'not signed in' }), { status: 401 }));
+  const f = fixture();
+  await f.client.refresh().catch(() => {});
+  assert.equal(f.config().token, null);
+  assert.equal(f.client.status().service.needsSignIn, true);
+});

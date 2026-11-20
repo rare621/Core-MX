@@ -183,6 +183,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   async function jsonCall(method, route, body) {
     const res = await request(route, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(10000) });
     const data = await res.json().catch(() => ({}));
+    // The token stopped working (signed in elsewhere took the account back, or the account was
+    // removed): sign in with Steam again.
+    if (res.status === 401 && cfg().token && !route.startsWith('/v1/auth/')) { setCfg({ token: null, id: null, verified: null }); needsSignIn = true; onChange(status()); }
     if (!res.ok) throw new Error(data.error || `Online service answered ${res.status}`);
     return data;
   }
@@ -395,7 +398,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     readState().catch(() => {});
     paintTimer = setInterval(() => syncPaints().catch(() => {}), PAINT_EVERY);
     // Not signed in yet (service was down): try again every minute, quietly.
-    retryTimer = setInterval(() => { const c = cfg(); if (defaultUrl && !c.token && !c.optedOut) connect().then(() => { lastError = null; onChange(status()); }).catch(() => {}); }, 60 * 1000);
+    retryTimer = setInterval(() => { const c = cfg(); if (defaultUrl && !c.token && !c.optedOut && !needsSignIn && !signing) connect().then(() => { lastError = null; onChange(status()); }).catch(() => {}); }, 60 * 1000);
     // A built-in service address (online.config.json): connect to it without asking.
     const c = cfg();
     if (c.url && defaultUrl && c.url !== defaultUrl) setCfg({ url: defaultUrl, ...(sameService(c.url) ? {} : { token: null, id: null }) });
@@ -416,7 +419,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       plugin: pluginStatus(),
       game: { running: gameRunning },
       presence: current,
-      service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers },
+      service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers,
+        needsSignIn: !c.token && needsSignIn, signingIn: signing ? { confirmed: signing.confirmed } : null, verified: c.token ? (c.verified ?? null) : null },
       serverShare: c.serverShare !== false,
       upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT, doubleNat: !!upnp.doubleNat, firewall: upnp.firewall || null, hosting: !!upnp.hostingSince },
       paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting },
@@ -468,8 +472,54 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return status();
   }
 
-  // Point the app at a service and register this PC's Steam account with it.
-  // Always the built-in service (online.config.json); users never pick an address.
+  // ---------- Sign in with Steam ----------
+  // The service has Steam confirm the account (Steam's own sign-in page in the browser); nothing is
+  // registered until the player chooses to. Older services (before v24) still use the old register.
+  let needsSignIn = false, signing = null;
+  const steamSignIn = (health) => Number(health?.version) >= 24 || (health?.features || []).includes('steam-signin');
+  async function signIn(open) {
+    if (!defaultUrl) throw new Error('This copy of the app has no online service built in.');
+    const sid = steamId();
+    if (!sid) throw new Error('Open Steam and sign in on this PC first: CoreMX uses the Steam account you play MX Bikes on.');
+    const prev = cfg();
+    if (prev.url !== defaultUrl) setCfg({ url: defaultUrl, token: null, id: null });
+    const r = await call('POST', '/v1/auth/steam/start', { steamId: sid, name: steamName() || prev.name || '' });
+    const mine = { state: r.state, code: null, confirmed: false };
+    signing = mine; onChange(status());
+    try {
+      await open(r.url);
+      const until = Date.now() + 10 * 60 * 1000;
+      while (signing === mine && Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (signing !== mine) break;
+        const p = await call('POST', '/v1/auth/steam/poll', { state: r.state, secret: r.secret, ...(mine.code ? { code: mine.code } : {}) });
+        if (p.done) {
+          setCfg({ url: defaultUrl, token: p.token, id: p.id, name: p.name || steamName() || '', verified: true, optedOut: false });
+          needsSignIn = false; lastError = null; lastSent = '';
+          signing = null; onChange(status());
+          await readState().catch(() => {});
+          syncFriends().catch(() => {});
+          syncPaints().catch(() => {});
+          return status();
+        }
+        if (p.confirmed && !mine.confirmed) { mine.confirmed = true; onChange(status()); }
+      }
+      if (signing !== mine) throw new Error('Sign-in cancelled.');
+      throw new Error('Steam sign-in timed out. Try again.');
+    } finally { if (signing === mine) { signing = null; onChange(status()); } }
+  }
+  // The browser handed back the code (mxbm://signin/<state>/<code>), on this PC.
+  function signInCode(state, code) { if (signing && signing.state === state) { signing.code = code; return true; } return false; }
+  function cancelSignIn() { signing = null; onChange(status()); return status(); }
+  // Whether Steam has confirmed this account (accounts made by apps before 1.0.48 are not).
+  async function checkVerified() {
+    if (!cfg().token) return;
+    try { const me = await call('GET', '/v1/me'); if (cfg().verified !== !!me.verified) { setCfg({ verified: !!me.verified }); onChange(status()); } }
+    catch {}
+  }
+
+  // Go online with this PC's account. Always the built-in service (online.config.json); users never
+  // pick an address. Without an account yet, a current service needs Sign in with Steam (see signIn).
   async function connect(_url, name) {
     if (!defaultUrl) throw new Error('This copy of the app has no online service built in.');
     const u = defaultUrl;
@@ -479,11 +529,14 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const prev = cfg();
     name = steamName() || name || prev.name || '';
     setCfg({ url: u, token: sameService(prev.url) ? prev.token : null, id: sameService(prev.url) ? prev.id : null, name, optedOut: false });
-    await call('GET', '/v1/health');
+    const health = await call('GET', '/v1/health');
     if (!cfg().token) {
+      if (steamSignIn(health)) { needsSignIn = true; lastError = null; onChange(status()); return status(); }
       const r = await call('POST', '/v1/register', { steamId: sid, name: name || '' });
       setCfg({ token: r.token, id: r.id });
     }
+    needsSignIn = false;
+    if (steamSignIn(health)) checkVerified();
     lastSent = '';
     await readState(); // reads the game state, then reports it
     await syncFriends().catch(() => {});
@@ -699,7 +752,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const c = cfg();
     if (!c.token || !c.id || c.id !== steamId()) { role = { admin: false, owner: false, at: Date.now() }; return role; }
     if (!force && Date.now() - role.at < 60 * 1000) return role;
-    try { const r = await call('GET', '/v1/admin/role'); role = { admin: !!r.admin, owner: !!r.owner, at: Date.now() }; }
+    try { const r = await call('GET', '/v1/admin/role'); role = { admin: !!r.admin, owner: !!r.owner, verified: r.verified !== false, at: Date.now() }; }
     catch { const owner = c.id === ADMIN_STEAM_ID; role = { admin: owner, owner, at: Date.now() }; }
     return role;
   }
@@ -709,7 +762,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
   }
   async function unlockAdmin(key) {
-    if (!(await adminRole(true)).admin) throw new Error('Admin is only for admin accounts. Ask the owner to add your friend code.');
+    const r = await adminRole(true);
+    if (!r.admin) throw new Error('Admin is only for admin accounts. Ask the owner to add your friend code.');
+    if (r.verified === false) throw new Error('Sign in with Steam first (Online → Friends): Admin needs an account Steam has confirmed.');
     if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
     const value = String(key || '').trim();
     if (!value) throw new Error('Enter the server admin key.');
@@ -718,7 +773,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

@@ -33,6 +33,8 @@ async function liveStatus(refresh) {
 api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
+  const signKey = (x) => JSON.stringify([x?.service?.connected, x?.service?.needsSignIn, x?.service?.signingIn, x?.service?.verified]);
+  if (previous && signKey(previous) !== signKey(st) && (S.view === 'friends' || S.view === 'online')) { S.live.friends = null; setTimeout(() => (S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content'))), 0); }
   // Hosting while Windows Firewall drops MX Bikes: say so once per hosting session.
   const fw = st?.upnp;
   if (fw?.hosting && fw.firewall?.state === 'blocked' && !S.firewallWarned) {
@@ -62,6 +64,11 @@ const trackLabel = (s) => s.trackName || s.trackId || '';
 const trackHave = (s) => !!(trackInstalled(s.trackName || '') || trackInstalled(s.trackId || ''));
 
 // Card that sets things up: plugin, then service. Shown until both are done; collapses to a status line after.
+// Sign in with Steam: Steam's own page opens in the browser; CoreMX never sees the password.
+function signInRowHtml(sv) {
+  if (sv.signingIn) return `<div class="live-step">${icon('steam')}<div style="flex:1"><b>${sv.signingIn.confirmed ? 'Steam confirmed your account' : 'Waiting for Steam…'}</b><div class="muted">${sv.signingIn.confirmed ? 'If your browser asks, allow it to open CoreMX.' : "Sign in on Steam's page in your browser. It may already be signed in: then just click Sign In."}</div></div><button class="btn btn-sm btn-ghost" data-act="live-signin-cancel">Cancel</button></div>`;
+  return `<div class="live-step">${icon('steam')}<div style="flex:1"><b>Sign in with Steam</b><div class="muted">Friends, live servers and gear sharing use your Steam account. Steam's own sign-in page opens in your browser; CoreMX never sees your password.</div></div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Sign in with Steam</button></div>`;
+}
 function setupCardHtml(st, where) {
   if (!st) return '';
   const p = st.plugin, sv = st.service;
@@ -69,15 +76,19 @@ function setupCardHtml(st, where) {
     ? `<div class="live-step"><span style="color:var(--warn)">${icon('alert')}</span><div><b>Game plugin update required</b><div class="muted">The installed plugin is older than this app. Close MX Bikes, update the plugin, then reopen the game to report server sessions.</div></div><button class="btn btn-sm btn-primary" data-act="live-plugin-install">Update plugin</button></div>`
     : p.installed
     ? `<div class="live-step done">${icon('check')}<div><b>Game plugin installed</b><div class="muted">Tells the app which server and track you're on. ${st.game.running ? '' : 'It starts with MX Bikes.'}</div></div><button class="btn btn-sm btn-ghost" data-act="live-plugin-remove">Remove</button></div>`
-    : `<div class="live-step">${icon('download')}<div><b>Install the game plugin</b><div class="muted">A small plugin using MX Bikes' official plugin system. It only reads the server name, track and rider list and saves them for this app — no game changes, no network.</div></div>
+    : `<div class="live-step">${icon('download')}<div><b>Install the game plugin</b><div class="muted">Optional. It tells CoreMX your server, track and riders, shows friends' gear on them in game, and adds the F8 overlay. It hooks into the game to do this (on your screen only); see what it does in the plugin's README.</div></div>
         ${p.available ? `<button class="btn btn-sm btn-primary" data-act="live-plugin-install">Install</button>` : '<span class="muted" style="font-size:12px">Not built yet</span>'}</div>`;
-  const svcRow = sv.connected
+  const svcRow = !sv.connected && (sv.needsSignIn || sv.signingIn) ? signInRowHtml(sv)
+    : sv.connected && sv.verified === false && !sv.signingIn
+    ? `<div class="live-step"><span style="color:var(--warn)">${icon('steam')}</span><div style="flex:1"><b>Verify your account with Steam</b><div class="muted">Online as ${esc(sv.name || '')}. Signing in with Steam once confirms this Steam ID is really yours, so nobody else can use it. Admin needs it.</div></div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
+    : sv.connected && sv.signingIn ? signInRowHtml(sv)
+    : sv.connected
     ? `<div class="live-step done">${icon('check')}<div><b>Online${sv.name ? ` as ${esc(sv.name)}` : ''}</b>${sv.error ? `<div style="color:var(--warn)">${esc(sv.error)}</div>` : '<div class="muted">Signed in with your Steam account.</div>'}</div><button class="btn btn-sm btn-ghost" data-act="live-disconnect">Go offline</button></div>`
     : sv.defaultUrl
       ? `<div class="live-step">${icon('globe')}<div style="flex:1"><b>Online features</b><div class="muted">${sv.error ? `<span style="color:var(--warn)">Couldn't reach the online service — it may be offline right now.</span>` : 'Signing in with your Steam account…'}</div></div>
           <button class="btn btn-sm btn-primary" data-act="live-connect">${sv.error ? 'Try again' : 'Go online'}</button></div>`
       : `<div class="live-step">${icon('globe')}<div style="flex:1"><b>Online features aren't set up</b><div class="muted">This copy of the app has no online service built in.</div></div></div>`;
-  if (p.installed && !p.needsUpdate && sv.connected && !sv.error && where !== 'friends') return '';
+  if (p.installed && !p.needsUpdate && sv.connected && !sv.error && sv.verified !== false && !sv.signingIn && where !== 'friends') return '';
   return `<div class="set-card live-setup"><h3>Live servers & friends</h3>${pluginRow}${svcRow}</div>`;
 }
 
@@ -392,7 +403,9 @@ async function renderFriends(c) {
 
   const ps = st && st.paintSync;
   const steam = S.accounts.steam || {};
-  const banner = !st ? '' : !connected
+  const banner = !st ? '' : !connected && (st.service.needsSignIn || st.service.signingIn)
+    ? `<div class="fr-banner off"><span class="fr-dot off"></span><div>${st.service.signingIn ? (st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser.") : '<b>Sign in with Steam</b> to see friends, live servers and share gear. Steam\'s own page opens in your browser.'}</div>${st.service.signingIn ? '<button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button>' : `<button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Sign in with Steam</button>`}</div>`
+    : !connected
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div><b>You're offline.</b> ${st.service.defaultUrl ? "Friends' status and paint sync are paused until the online service is reachable." : 'Online features are not set up in this copy of the app.'}</div>${st.service.defaultUrl ? `<button class="btn btn-sm" data-act="live-connect">Try again</button>` : ''}</div>`
     : `<div class="fr-banner on"><span class="fr-dot ride"></span><div>Online as <b>${esc(st.service.name || steam.name || '')}</b>${st.service.error ? ` · <span style="color:var(--warn)">${esc(st.service.error)}</span>` : ''}</div>
         ${ps && ps.enabled ? `<span class="muted" style="font-size:12px">${ps.busy ? 'Syncing paints…' : ps.at ? `Paints synced ${esc(timeAgo(ps.at))}` : ''}</span>` : ''}</div>`;
@@ -524,7 +537,9 @@ document.addEventListener('click', async (e) => {
   const rerender = () => { S.live.servers = null; S.live.friends = null; S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content')); };
   if (act === 'live-plugin-install') return busy(async () => { S.live.status = await api.invoke('online:pluginInstall'); toast('Plugin installed — it starts next time you open MX Bikes', 'ok', 4000); rerender(); })();
   if (act === 'live-plugin-remove') { if (await confirmBox('Remove plugin', 'Remove the CoreMX plugin from your game\'s plugins folder?', 'Remove', true)) busy(async () => { S.live.status = await api.invoke('online:pluginRemove'); rerender(); })(); return; }
-  if (act === 'live-connect') return busy(async () => { S.live.status = await api.invoke('online:connect'); toast('Online', 'ok'); rerender(); })();
+  if (act === 'live-connect') return busy(async () => { S.live.status = await api.invoke('online:connect'); toast(S.live.status?.service?.connected ? 'Online' : 'Sign in with Steam to go online', 'ok'); rerender(); })();
+  if (act === 'live-signin') return busy(async () => { S.live.status = await api.invoke('online:signIn'); toast('Signed in with Steam', 'ok', 3000); rerender(); })();
+  if (act === 'live-signin-cancel') { S.live.status = await api.invoke('online:cancelSignIn'); rerender(); return; }
   if (act === 'paint-now') e.preventDefault();
   if (act === 'paint-now') return busy(async () => { S.live.status = await api.invoke('online:paintSyncNow'); renderFriends($('#content')); })();
   if (act === 'paint-remove') {

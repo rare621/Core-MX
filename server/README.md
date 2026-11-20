@@ -41,6 +41,16 @@ What happens then:
 - The storage safety cap (`--maxstore`) is 100 GB with R2 (4 GB without). Only equipped files count, so normal use stays far below it. The service window warns at 80% full. At most, 100 GB costs about $1.35 a month in R2.
 - Without `r2.json`, everything works as before. A broken `r2.json` stops the service with a clear error instead of quietly falling back.
 
+## Sign in with Steam (service v24)
+
+Accounts are created by **Sign in with Steam**: the app opens Steam's own sign-in page (OpenID) in the browser, the service asks Steam to confirm the answer, and a one-time code is handed back to CoreMX on that same PC through an `mxbm://signin` link. Nobody can claim someone else's Steam ID, and a sign-in link someone sends you can't give them your account.
+
+- `--openregister yes` keeps the old `POST /v1/register` (apps before 1.0.48 claim a Steam ID without proof). **Off by default**: deploy v24 together with the app release that signs in with Steam, or old apps can't create new accounts (existing accounts keep working).
+- Accounts made the old way are "unverified". When the real owner signs in with Steam, the old tokens stop working (a claimed ID is taken back) and the account, with its friends, is kept and marked verified.
+- A verified account can be signed in on up to 5 PCs.
+- **Admin needs a verified account**, the owner included: sign in with Steam once in the new app.
+- The service builds Steam's return address from the request's `Host` / `X-Forwarded-Host` and `X-Forwarded-Proto` (Caddy sends these). If that is wrong behind another proxy, set `--publicurl https://coremx.app`.
+
 ## Announcements
 
 The Admin settings tab appears for the owner (Steam `76561198098586128`) and for admins the owner adds by friend code in Admin → Admins (they see the tab within a minute; removing them takes it away). Only the owner can add or remove admins. Everyone unlocks it with the same key from `admin.key` on the server PC. The service also verifies the registered account token and the key; a changed local app cannot grant itself admin access. The key stays in app memory for that session and is never included in a release.
