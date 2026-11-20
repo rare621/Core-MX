@@ -224,11 +224,12 @@ function openLiveServer(s) {
   const tl = trackLabel(s), have = trackHave(s);
   let showAllRiders = false;
   const ridersBody = () => {
-    const riders = s.riders || [], shown = showAllRiders ? riders : riders.slice(0, 5);
+    const riders = [...(s.riders || [])].sort((a, b) => !!b.coremxName - !!a.coremxName), shown = showAllRiders ? riders : riders.slice(0, 5);
+    const onCoreMx = riders.filter((r) => r.coremxName).length;
     return `<div class="muted" style="margin-bottom:12px">${tl ? `Track: <b style="color:var(--text)">${esc(tl)}</b> ${have ? `<span style="color:var(--ok)">${icon('check')} installed</span>` : `<span style="color:var(--warn)">not installed</span>`}` : 'Track unknown'}
         ${sessionLabel(s) ? ` · ${esc(sessionLabel(s))}` : ''} · seen ${esc(timeAgo(s.lastSeen))}${s.address ? ` · <span class="mono">${esc(s.address)}</span>` : ''}</div>
-      <div class="section-title" style="margin-top:0">Riders (${riders.length})</div>
-        <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.coremxName || r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.coremxName || r.name)}</div><div class="m">${r.coremxName && r.coremxName !== r.name ? `MX Bikes: ${esc(r.name)} · ` : ''}${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
+      <div class="section-title" style="margin-top:0">Riders (${riders.length})${onCoreMx ? ` · ${onCoreMx} use CoreMX` : ''}</div>
+        <div class="srv-list">${shown.map((r) => `<div class="srv"><div class="srv-ico" style="border-radius:50%">${esc((r.coremxName || r.name || '?').slice(0, 1).toUpperCase())}</div><div class="srv-txt"><div class="t">${esc(r.coremxName || r.name)}${r.coremxName ? ' <span class="coremx-badge" title="Uses CoreMX">CoreMX</span>' : ''}</div><div class="m">${r.coremxName && r.coremxName !== r.name ? `MX Bikes: ${esc(r.name)} · ` : ''}${esc(r.bike)}${r.category ? ` · ${esc(r.category)}` : ''}</div></div></div>`).join('') || '<div class="srv muted">No rider list yet.</div>'}</div>
       ${riders.length > 5 ? `<button class="btn" style="margin-top:12px" data-live-riders-toggle>${showAllRiders ? 'Show fewer riders' : `Show all ${riders.length} riders`}</button>` : ''}`;
   };
   const m = modal({
