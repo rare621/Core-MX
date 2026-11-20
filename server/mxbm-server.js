@@ -34,7 +34,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 18;
+const VERSION = 19;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -52,11 +52,11 @@ const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {}, announcements: [], r2: {} }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {} }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, announcements: [], r2: {}, ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const { liveFiles } = require('./cache-cleanup');
@@ -133,11 +133,44 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+// Daily active accounts for the Admin tab: { "2026-11-19": [steamId, ...] } on this PC's calendar,
+// kept for ACTIVITY_DAYS. Only account ids are kept; names come from the accounts.
+const ACTIVITY_DAYS = 90;
+const dayKey = (t = Date.now()) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// The calendar day i days ago (noon, so daylight-saving changes never skip or repeat a day).
+const dayAgo = (i) => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - i); return dayKey(d.getTime()); };
+function markActive(id) {
+  const day = dayKey(), list = (db.activity[day] = db.activity[day] || []);
+  if (list.includes(id)) return;
+  list.push(id);
+  const keep = new Set(Array.from({ length: ACTIVITY_DAYS }, (_, i) => dayAgo(i)));
+  for (const k of Object.keys(db.activity)) if (!keep.has(k)) delete db.activity[k];
+  save();
+}
+function adminActivity(days = 30) {
+  const now = Date.now(), n = Math.max(1, Math.min(ACTIVITY_DAYS, Math.round(Number(days) || 30)));
+  const daily = Array.from({ length: n }, (_, i) => dayAgo(n - 1 - i)).map((date) => ({ date, count: (db.activity[date] || []).length }));
+  const counted = new Map();
+  for (const { date } of daily) for (const id of db.activity[date] || []) counted.set(id, (counted.get(id) || 0) + 1);
+  // One row per account (Steam ID), so a name never shows twice for the same person.
+  const users = Object.entries(db.users).map(([id, u]) => {
+    const p = presence.get(id), online = !!(p && now - p.at < ONLINE_TTL), st = (online && p.state) || {};
+    return { id, name: u.name || '', createdAt: u.createdAt || null, lastSeen: u.lastSeen || null, online, inGame: !!st.inGame, server: st.inEvent ? str(st.server, 64) : '', track: st.inEvent ? str(st.trackName || st.trackId, 64) : '', activeDays: counted.get(id) || 0 };
+  }).sort((a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)));
+  const within = (ms) => users.filter((u) => u.lastSeen && now - u.lastSeen < ms).length;
+  return {
+    summary: { accounts: users.length, onlineNow: users.filter((u) => u.online).length, inGame: users.filter((u) => u.online && u.inGame).length, today: (db.activity[dayKey(now)] || []).length,
+      last5Days: within(5 * 86400000), last30Days: within(30 * 86400000), newThisWeek: users.filter((u) => u.createdAt && now - u.createdAt < 7 * 86400000).length },
+    daily, users, trackedSince: Object.keys(db.activity).sort()[0] || null, at: now,
+  };
+}
+
 function auth(req) {
   const m = String(req.headers.authorization || '').match(/^Bearer ([a-f0-9]{48})$/);
   if (!m) return null;
   const h = hash(m[1]);
   for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h) {
+    markActive(id);
     // Any signed-in request means the user has CoreMX open (synced files stay while seen within INACTIVE_MS).
     if (Date.now() - (u.lastSeen || 0) > 60000) { u.lastSeen = Date.now(); save(); }
     return { id, user: u };
@@ -198,6 +231,7 @@ const routes = {
     if (db.users[id]) return [409, { error: 'This Steam ID is already registered on this service. Ask the person running it to reset it.' }];
     const token = crypto.randomBytes(24).toString('hex');
     db.users[id] = { tokenHash: hash(token), name: str(body.name, 40), friends: [], createdAt: Date.now(), lastSeen: Date.now() };
+    markActive(id);
     save();
     return [200, { id, token }];
   },
@@ -397,6 +431,11 @@ const routes = {
   'POST /v1/admin/status': async (req, body, me) => {
     if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
     return [200, { accounts: Object.keys(db.users).length, announcements: (db.announcements || []).length }];
+  },
+  // Who used CoreMX: one row per account, daily active counts and totals (Admin tab).
+  'POST /v1/admin/activity': async (req, body, me) => {
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    return [200, adminActivity(body.days)];
   },
   'POST /v1/admin/announcements': async (req, body, me) => {
     if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];

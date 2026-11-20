@@ -1503,6 +1503,7 @@ function registerIpc() {
   handle('online:deleteNotification', (id) => online.deleteNotification(id));
   handle('online:adminUnlock', (key) => online.unlockAdmin(key));
   handle('online:adminStatus', () => online.adminStatus());
+  handle('online:adminActivity', (days) => online.adminActivity(Math.max(1, Math.min(90, Number(days) || 30))));
   handle('online:createAnnouncement', (title, message) => online.createAnnouncement(title, message));
   handle('online:paintSync', (on) => online.setPaintSync(on));
   handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));

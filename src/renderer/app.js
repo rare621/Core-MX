@@ -3132,6 +3132,80 @@ async function renderSettings(c) {
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
   $('#autoImages').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoImages: e.target.checked }); if (e.target.checked) backgroundImages(); });
 }
+// ---------- Admin: who uses CoreMX ----------
+// One row per account (Steam ID), daily active riders, and totals, from the online service.
+S.admin = S.admin || {};
+const ADMIN_FILTERS = [['recent', 'Last 5 days'], ['online', 'Online now'], ['all', 'All accounts']];
+function adminDate(t) { return t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: new Date(t).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }) : '—'; }
+function adminDay(key) { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); }
+function adminUserRows(a) {
+  const q = (S.admin.q || '').trim().toLowerCase(), filter = S.admin.filter || 'recent', FIVE = 5 * 86400000;
+  return (a?.users || []).filter((u) => filter === 'all' || (filter === 'online' ? u.online : u.online || (u.lastSeen && Date.now() - u.lastSeen < FIVE)))
+    .filter((u) => !q || `${u.name} ${u.id} ${u.server}`.toLowerCase().includes(q));
+}
+function adminUsersHtml(a) {
+  const rows = adminUserRows(a), days = a?.daily?.length || 30;
+  if (!rows.length) return `<div class="admin-empty muted">${S.admin.q ? 'No accounts match your search.' : (S.admin.filter || 'recent') === 'online' ? 'Nobody is online right now.' : 'No one has used CoreMX in this period.'}</div>`;
+  return rows.map((u) => {
+    const status = u.online ? (u.inGame ? (u.server ? `Riding on ${esc(u.server)}${u.track ? ` · ${esc(u.track)}` : ''}` : 'In MX Bikes') : 'Online in CoreMX') : u.lastSeen ? `Last seen ${esc(timeAgo(u.lastSeen))}` : 'Not seen yet';
+    const share = Math.round(Math.min(1, u.activeDays / days) * 100);
+    return `<div class="admin-user" data-open="https://steamcommunity.com/profiles/${esc(u.id)}" title="Open Steam profile">
+      <span class="admin-user-av">${esc((u.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${u.online ? u.inGame ? 'ride' : 'on' : 'off'}"></span></span>
+      <span class="admin-user-main"><b>${esc(u.name || 'Unnamed')}</b><small class="${u.online ? 'admin-online' : 'muted'}">${status}</small></span>
+      <span class="admin-user-days" title="${u.activeDays} of the last ${days} days"><span class="admin-meter"><i style="width:${share}%"></i></span><small class="muted">${u.activeDays} / ${days} days</small></span>
+      <span class="admin-user-joined muted"><small>Joined</small>${esc(adminDate(u.createdAt))}</span></div>`;
+  }).join('');
+}
+function adminChartHtml(a) {
+  // Days before the service kept daily history are left out (shown as a note instead of empty bars).
+  const since = a?.trackedSince, all = a?.daily || [], daily = since ? all.filter((d) => d.date >= since) : all, max = Math.max(1, ...daily.map((d) => d.count));
+  const step = Math.ceil(daily.length / 6), last = daily.length - 1;
+  const label = (i) => i === 0 || i === last || (daily.length > 10 && i % step === 0 && last - i >= step / 2);
+  return `<div class="admin-chart" role="img" aria-label="Riders using CoreMX each day">${daily.map((d, i) => {
+    const day = adminDay(d.date), untracked = false;
+    return `<div class="admin-bar${untracked ? ' untracked' : ''}${i === daily.length - 1 ? ' today' : ''}" title="${esc(day.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))} · ${untracked ? 'not tracked yet' : `${d.count} rider${d.count === 1 ? '' : 's'}`}">
+      <span class="admin-bar-n">${d.count || ''}</span><i style="height:${untracked ? 0 : Math.max(d.count ? 6 : 2, Math.round(d.count / max * 100))}%"></i><small>${label(i) ? esc(day.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })) : ''}</small></div>`;
+  }).join('')}</div>${since && all[0] && all[0].date < since ? `<p class="muted admin-note">Daily history started ${esc(adminDate(adminDay(since).getTime()))}, when the online service was updated.</p>` : ''}`;
+}
+function adminActivityHtml(a) {
+  return `<div class="set-card admin-activity">${adminActivityInner(a)}</div>`;
+}
+// The card's contents: redrawn in place (redrawing the card itself would replay its fade-in).
+function adminActivityInner(a) {
+  const s = a?.summary || {}, range = S.admin.range || 30;
+  const tile = (n, label, hint, cls = '') => `<div class="admin-tile ${cls}"><b>${Number(n) || 0}</b><span>${label}</span>${hint ? `<small>${hint}</small>` : ''}</div>`;
+  return `<div class="admin-head"><div><h3>Riders using CoreMX</h3><p class="muted">${a ? `Updated ${esc(timeAgo(a.at))}` : 'Loading…'}</p></div><span class="grow"></span>
+      <div class="seg-tabs">${[7, 30, 90].map((d) => `<button class="${range === d ? 'active' : ''}" data-admin-range="${d}">${d} days</button>`).join('')}</div>
+      <button class="btn btn-icon" data-admin-refresh title="Refresh">${icon('refresh')}</button></div>
+    <div class="admin-tiles">${tile(s.onlineNow, 'Online now', `${Number(s.inGame) || 0} in MX Bikes`, 'live')}${tile(s.today, 'Today')}${tile(s.last5Days, 'Last 5 days')}${tile(s.last30Days, 'Last 30 days')}${tile(s.accounts, 'Accounts', `${Number(s.newThisWeek) || 0} new this week`)}</div>
+    <div class="admin-sub">Riders each day</div>${adminChartHtml(a)}
+    <div class="admin-list-head"><div class="seg-tabs">${ADMIN_FILTERS.map(([id, label]) => `<button class="${(S.admin.filter || 'recent') === id ? 'active' : ''}" data-admin-filter="${id}">${label}</button>`).join('')}</div><span class="grow"></span>
+      <div class="search">${icon('search')}<input id="adminSearch" placeholder="Search riders…" value="${esc(S.admin.q || '')}" aria-label="Search riders"></div></div>
+    <div class="admin-users" id="adminUsers">${adminUsersHtml(a)}</div>`;
+}
+async function loadAdminActivity(c) {
+  try { S.admin.activity = await api.invoke('online:adminActivity', S.admin.range || 30); }
+  catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
+  const box = $('.admin-activity', c);
+  if (box) { box.innerHTML = adminActivityInner(S.admin.activity); wireAdminActivity(c); }
+}
+function wireAdminActivity(c) {
+  const box = $('.admin-activity', c); if (!box) return;
+  $('#adminSearch', box)?.addEventListener('input', (e) => { S.admin.q = e.target.value; $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity); });
+  if (box._wired) return;
+  box._wired = true;
+  box.addEventListener('click', (e) => {
+    const range = e.target.closest('[data-admin-range]'), filter = e.target.closest('[data-admin-filter]');
+    if (range) { S.admin.range = Number(range.dataset.adminRange); loadAdminActivity(c); }
+    else if (filter) {
+      S.admin.filter = filter.dataset.adminFilter;
+      box.querySelectorAll('[data-admin-filter]').forEach((b) => b.classList.toggle('active', b === filter));
+      $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity);
+    }
+    else if (e.target.closest('[data-admin-refresh]')) loadAdminActivity(c);
+  });
+}
+
 async function renderAdminSettings(c) {
   if (!S.accounts.steam) await refreshAccounts();
   if (S.accounts.steam?.steamId !== ADMIN_STEAM_ID) { S.settingsTab = 'general'; return renderSettings(c); }
@@ -3140,7 +3214,7 @@ async function renderAdminSettings(c) {
     catch (error) { S.admin.unlocked = false; S.admin.stats = null; toast(esc(cleanErr(error)), 'err', 6000); }
   }
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings admin-settings">
-    ${S.admin.unlocked ? `<div class="set-card"><h3>CoreMX accounts</h3><div class="admin-account-count">${Number(S.admin.stats?.accounts) || 0}</div><p>Registered accounts using the online service.</p></div>
+    ${S.admin.unlocked ? `${adminActivityHtml(S.admin.activity)}
     <div class="set-card"><h3>New announcement</h3><p>People see this once when the app next checks online. It also stays in their Notifications until they delete it.</p>
       <div class="field"><label for="adminTitle">Title</label><input class="input" id="adminTitle" maxlength="100" placeholder="Server maintenance"></div>
       <div class="field"><label for="adminMessage">Description</label><textarea class="input" id="adminMessage" maxlength="2000" rows="5" placeholder="Tell everyone what is happening and when."></textarea></div>
@@ -3148,6 +3222,7 @@ async function renderAdminSettings(c) {
       <div class="field"><label for="adminKey">Server admin key</label><input class="input" id="adminKey" type="password" autocomplete="off"></div>
       <button class="btn btn-primary" id="adminUnlock">Unlock</button></div>`}
   </div></div></div></div>`;
+  if (S.admin.unlocked) { wireAdminActivity(c); loadAdminActivity(c); }
   $('#adminUnlock')?.addEventListener('click', async (e) => {
     e.currentTarget.disabled = true;
     try { S.admin.stats = await api.invoke('online:adminUnlock', $('#adminKey').value); S.admin.unlocked = true; renderAdminSettings(c); }
