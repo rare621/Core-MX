@@ -16,17 +16,25 @@ test('presigned URLs match the AWS Signature V4 reference example', () => {
 
 // A tiny stand-in for R2: stores objects in memory and only accepts presigned requests.
 function fakeR2() {
-  const objects = new Map(), log = [];
+  const objects = new Map(), modified = new Map(), log = [];
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     log.push(`${req.method} ${u.pathname}`);
+    // Listing the bucket is signed in the Authorization header (ListObjectsV2), objects by presigned links.
+    if (req.method === 'GET' && u.searchParams.get('list-type') === '2') {
+      if (!/^AWS4-HMAC-SHA256 Credential=/.test(req.headers.authorization || '') || !req.headers['x-amz-date']) { res.writeHead(403); return res.end(); }
+      const prefix = u.pathname + '/' + (u.searchParams.get('prefix') || '');
+      const keys = [...objects.keys()].filter((k) => k.startsWith(prefix));
+      res.writeHead(200, { 'content-type': 'application/xml' });
+      return res.end(`<ListBucketResult><IsTruncated>false</IsTruncated>${keys.map((k) => `<Contents><Key>${k.slice(u.pathname.length + 1)}</Key><LastModified>${new Date(modified.get(k) || Date.now()).toISOString()}</LastModified><Size>${objects.get(k).length}</Size></Contents>`).join('')}</ListBucketResult>`);
+    }
     if (!u.searchParams.get('X-Amz-Signature') || req.headers.authorization) { res.writeHead(403); return res.end(); }
-    if (req.method === 'PUT') { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => { objects.set(u.pathname, Buffer.concat(c)); res.writeHead(200); res.end(); }); return; }
+    if (req.method === 'PUT') { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => { objects.set(u.pathname, Buffer.concat(c)); modified.set(u.pathname, Date.now()); res.writeHead(200); res.end(); }); return; }
     if (req.method === 'GET') { const o = objects.get(u.pathname); if (!o) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'content-length': o.length }); return res.end(o); }
     if (req.method === 'DELETE') { objects.delete(u.pathname); res.writeHead(204); return res.end(); }
     res.writeHead(405); res.end();
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, objects, log, origin: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, objects, modified, log, origin: `http://127.0.0.1:${server.address().port}` })));
 }
 
 test('with r2.json, paint files go to and come from R2, never through the service', async (t) => {
@@ -142,4 +150,47 @@ test('R2 keeps only files that riders using CoreMX wear', async (t) => {
   assert.ok(await until(() => !has(a.sha), 12000), 'away user\'s file removed');
   // Back: the service asks for it again.
   assert.deepEqual((await c('POST', '/v1/loadout', { bike: 'B', items: [a.item], equipped: [], unavailable: [] })).data.missing, [a.sha]);
+});
+
+// Storage that isn't tracked (an upload whose check never arrived) is found by listing the bucket and
+// deleted once it is an hour old; a tracked file nobody has needed for the keep time is deleted too.
+test('R2 cleans up untracked uploads and files nobody needs any more', async (t) => {
+  const r2 = await fakeR2();
+  t.after(() => r2.server.close());
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-r2-sweep-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
+  // Leftovers in the bucket: one old untracked upload, one from a minute ago (maybe still being checked).
+  const oldKey = '/coremx-sync/files/' + 'a'.repeat(64), newKey = '/coremx-sync/files/' + 'b'.repeat(64);
+  r2.objects.set(oldKey, Buffer.alloc(10)); r2.modified.set(oldKey, Date.now() - 2 * 3600 * 1000);
+  r2.objects.set(newKey, Buffer.alloc(10)); r2.modified.set(newKey, Date.now() - 60 * 1000);
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--sweepminutes', '0.001', '--keepdays', String(3 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = (token) => async (method, route, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    return { status: res.status, data: await res.json() };
+  };
+  const until = async (ok, ms) => { for (let i = 0; i < ms / 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 100)); return ok(); };
+  assert.ok(await until(() => !r2.objects.has(oldKey), 9000), 'the old untracked upload is deleted');
+  assert.ok(r2.objects.has(newKey), 'a recent one is left alone (its check may still come)');
+  // A tracked, worn file that nobody needs (keep time 3 s here) is deleted even though it is worn.
+  const me = (await call()('POST', '/v1/register', { steamId: '76561198000000041', name: 'Rider' })).data, c = call(me.token);
+  const p = Buffer.alloc(1024, 5); p.write('PNT\0', 0, 'latin1'); p.writeUInt32LE(1, 104);
+  const sha = crypto.createHash('sha256').update(p).digest('hex');
+  await c('POST', '/v1/loadout', { bike: 'B', items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: p.length }], equipped: [], unavailable: [] });
+  const grant = (await c('POST', `/v1/files/${sha}/upload`)).data;
+  await fetch(grant.url, { method: 'PUT', body: p });
+  assert.deepEqual((await c('POST', `/v1/files/${sha}/uploaded`)).data, { ok: true });
+  const key = '/coremx-sync/files/' + sha;
+  assert.ok(r2.objects.has(key));
+  // Kept a while (still worn, just used), then deleted when nobody has needed it for the keep time.
+  for (let i = 0; i < 15; i++) { await c('POST', '/v1/presence', { state: { inGame: false } }); await new Promise((r) => setTimeout(r, 200)); }
+  assert.ok(await until(() => !r2.objects.has(key), 12000), 'not needed for the keep time: deleted');
+  // Needed again later: it is asked for and the owner uploads it again.
+  await call(me.token)('POST', '/v1/want', { shas: [sha] });
+  assert.deepEqual((await c('POST', '/v1/presence', { state: { inGame: false } })).data.upload, [sha]);
 });

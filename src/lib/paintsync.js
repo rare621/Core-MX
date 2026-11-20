@@ -65,6 +65,8 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
         target = data && (['suitPaint', 'glovesPaint'].includes(s.id) ? prefix : 'rider') + '/' + data.relative;
       }
       if (!data && s.id !== 'bikePaint' && stockPkz && await gear.paintSource({ modsDir, rider, stockPkz }, s.id, c).catch(() => null)) continue;
+      // A livery inside the bike's own package (readable, or encrypted like the OEM bikes') comes with the bike.
+      if (s.id === 'bikePaint' && (data ? data.archivePath : bikeDir && fs.existsSync(bikeDir + '.pkz'))) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: WITH_BIKE_MESSAGE, included: 'bike' }); continue; }
       if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing or unreadable (it may be locked by its creator)');
       const needs = [];
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
@@ -89,6 +91,8 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
     else equipped.push({ slot, label: slot === 'tyres' ? 'Bike tyres' : 'Bike tyre dependency', value: name, state: 'default' });
     const exists = await fsp.stat(path.join(modsDir, 'tyres', name)).then(() => true).catch(() => false) || await fsp.stat(path.join(modsDir, 'tyres', name + '.pkz')).then(() => true).catch(() => false);
     if (!exists) continue; // Built-in game tyres are already available on both PCs.
+    // OEM tyres ship with the OEM bike packs (oem_mx, ...): everyone riding those bikes has them.
+    if (name === tyre.base && /^oem[_-]/i.test(name)) { unavailable.push({ slot, label: 'Tyres: ' + name, error: WITH_BIKE_MESSAGE, included: 'bike' }); continue; }
     try {
       const target = 'tyres/' + name + '.pkz';
       if (protectedItem(target)) throw new Error(PAID_MESSAGE);
@@ -125,6 +129,9 @@ function modSources(installs) {
   };
 }
 const SOURCE_MESSAGE = 'Could not sync this file. Open its MXB Mods page to install it manually.';
+// Files that come with the bike itself (its default tyre, a livery inside the bike's package): anyone
+// riding that bike has them, so they are not uploaded.
+const WITH_BIKE_MESSAGE = 'Comes with the bike';
 
 async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, sourceFor = () => null, onProgress = () => {} }) {
   const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths, stockPkz);
@@ -135,7 +142,8 @@ async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, 
   });
   if (appearance) outfit.unavailable.push(appearance);
   const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
-  const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
+  // onDemand: the service asks for a file only once someone needs it (see server/mxbm-server.js).
+  const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable, onDemand: true };
   const r = await call('POST', '/v1/loadout', payload);
   const missing = items.filter((i) => (r.missing || []).includes(i.sha256));
   let completed = 0;
@@ -152,6 +160,7 @@ async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, 
 async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
   const entry = { ...it, requirements: it.needs || [], needs: [], state: 'ready' };
   delete entry.buf;
+  delete entry.available;
   if (!safeRel(it.path) || !/^[a-f0-9]{64}$/.test(it.sha256) || !Number.isSafeInteger(it.size) || it.size <= 0 || it.size > MAX_FILE) return { ...entry, state: 'skipped', error: 'Invalid shared file' };
   for (const n of it.needs || []) if (!await have(n)) entry.needs.push(n);
   const dst = path.resolve(modsDir, ...it.path.split('/'));
@@ -187,12 +196,14 @@ async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
     if (data && !owned) return { ...entry, state: 'name-taken', error: 'A different paint with this name is already installed' };
   }
   if (existing && (!received[it.path] || sha256(existing) !== received[it.path].sha256)) return { ...entry, state: 'name-taken', error: 'A different file with this name is already installed' };
+  // Needed, but its owner hasn't uploaded it yet (uploads happen once someone needs a file).
+  if (it.available === false) return { ...entry, state: 'waiting' };
   return entry;
 }
 
 // preloaded: loadouts already fetched elsewhere (riders on the same server), instead of mutual friends.
 async function listFriends({ call, modsDir, received = {}, have, friendId, preloaded }) {
-  const { loadouts = [] } = preloaded ? { loadouts: preloaded } : await call('GET', '/v1/loadouts');
+  const { loadouts = [] } = preloaded ? { loadouts: preloaded } : await call('GET', '/v1/loadouts?pending=1');
   const report = [];
   for (const lo of loadouts.filter((l) => !friendId || l.id === friendId)) {
     const items = [];
@@ -200,6 +211,12 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
     const current = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     const unavailable = [];
     for (const entry of lo.unavailable || []) {
+      // Comes with the bike: you have it when you have that bike.
+      if (entry.included === 'bike' || entry.error === WITH_BIKE_MESSAGE) {
+        const bike = lo.bike && gear.validName(lo.bike) && await profile.findBikeDir(modsDir, lo.bike);
+        unavailable.push({ ...entry, included: 'bike', state: bike ? 'have' : 'unavailable', error: bike ? WITH_BIKE_MESSAGE : `Comes with the bike (${lo.bikeName || lo.bike}), which you don't have` });
+        continue;
+      }
       const paid = /paid|store-protected/i.test(entry.error || '');
       const accountBound = /tied to your account|account-bound/i.test(entry.error || '');
       let installed = false;
@@ -221,8 +238,24 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
   return report;
 }
 
+// Asks the service for files you need that aren't uploaded yet; their owners upload them on their
+// next report. Each becomes 'uploading' (owner online), 'offline' (owner's CoreMX is closed) or, if it
+// arrived meanwhile, 'ready' again. Older services have no /v1/want: those items stay 'waiting'.
+async function requestMissing(call, report) {
+  const waiting = report.flatMap((lo) => lo.items.filter((it) => it.state === 'waiting'));
+  if (!waiting.length) return;
+  let states = {};
+  try { states = (await call('POST', '/v1/want', { shas: [...new Set(waiting.map((it) => it.sha256))] })).states || {}; } catch { return; }
+  for (const it of waiting) {
+    const st = states[it.sha256];
+    if (st === 'uploading' || st === 'offline') it.state = st;
+    else if (st === 'ready') it.state = 'ready';
+  }
+}
+
 async function fetchFriends({ call, download, modsDir, received, have, friendId, preloaded, onProgress = () => {} }) {
   const report = await listFriends({ call, modsDir, received, have, friendId, preloaded });
+  await requestMissing(call, report);
   const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
   let completed = 0;
   for (const { lo, it } of pending) {
@@ -270,4 +303,4 @@ async function removeReceived(modsDir, received) {
   }
   return n;
 }
-module.exports = { modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };
+module.exports = { WITH_BIKE_MESSAGE, requestMissing, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };

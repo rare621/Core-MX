@@ -232,11 +232,25 @@ EXPORT void RunDeinit(void) { S.onTrack = 0; }
 
 EXPORT void RaceDeinit(void) { lock(); memset(&S, 0, sizeof S); writeState(); unlock(); }
 
+/* Rider joins and leaves as the game reports them, to mxbm_riders.log (kept under 64 KB), so a rider
+ * list that keeps someone who left can be traced to what the game sent. */
+static char g_dir[MAX_PATH * 2];   /* the game's user folder (set at startup) */
+static void riderLog(const char *what, int num, const char *name, int unactive) {
+  char path[MAX_PATH * 2 + 40]; FILE *f; SYSTEMTIME t;
+  sprintf(path, "%smxbm_riders.log", g_dir);
+  f = fopen(path, "ab"); if (!f) return;
+  if (ftell(f) > 64 * 1024) { fclose(f); f = fopen(path, "wb"); if (!f) return; }
+  GetLocalTime(&t);
+  fprintf(f, "%02d:%02d:%02d %s #%d %.40s%s server=%.40s session=%d\r\n", t.wHour, t.wMinute, t.wSecond, what, num, name ? name : "", unactive ? " (unactive)" : "", S.server, S.session);
+  fclose(f);
+}
+
 EXPORT void RaceAddEntry(void *_pData, int _iDataSize) {
   const RaceEntry *e = (const RaceEntry *)_pData;
   int i, slot = -1;
   if (!e || _iDataSize < (int)offsetof(RaceEntry, m_iUnactive)) return;
   lock();
+  riderLog("add", e->m_iRaceNum, e->m_szName, _iDataSize >= (int)sizeof(RaceEntry) && e->m_iUnactive);
   for (i = 0; i < MAX_RIDERS; i++) if (S.riders[i].used && S.riders[i].num == e->m_iRaceNum) { slot = i; break; }
   if (slot < 0) for (i = 0; i < MAX_RIDERS; i++) if (!S.riders[i].used) { slot = i; break; }
   if (slot >= 0) {
@@ -258,6 +272,7 @@ EXPORT void RaceRemoveEntry(void *_pData, int _iDataSize) {
   int i;
   if (!e || _iDataSize < (int)sizeof(RaceRemove)) return;
   lock();
+  riderLog("remove", e->m_iRaceNum, NULL, 0);
   for (i = 0; i < MAX_RIDERS; i++) if (S.riders[i].used && S.riders[i].num == e->m_iRaceNum) S.riders[i].used = 0;
   writeState();
   unlock();
@@ -346,7 +361,7 @@ __asm__(
   "  jmp [rip + mxbm_orig_ui]\n"
   ".att_syntax prefix\n");
 
-static char g_dir[MAX_PATH * 2];
+
 static void **g_slot = 0;
 static volatile LONG g_hookStop = 0;
 static HANDLE g_hookThread = 0;
@@ -974,6 +989,13 @@ static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
 /* applied[f]: fnv of the look value CoreMX last applied for field f. The game record can already hold
  * the right name (sent over the network) while the rider was drawn with defaults because the files
  * arrived after he was built, so a matching name alone does not mean it is shown. */
+/* Why a rider's item isn't in your game yet, from CoreMX ("wait" lines in mxbm_looks.txt): code is
+ * uploading (their CoreMX is sending it), offline (their CoreMX is closed), bike (comes with a bike
+ * you don't have), paid (not shared) or failed. Read by the overlay's Riders tab. */
+typedef struct { int num; char bike[64]; char code[12]; char label[44]; } LookWait;
+#define WAIT_MAX (LOOK_MAX * 4)
+static LookWait g_waits[WAIT_MAX];
+static int g_waitCount = 0;
 typedef struct { int num; char bike[64]; char models[64]; int paints; char name[48]; int missing; char firstMissing[64]; unsigned applied[LOOK_FIELDS_N]; } LookStatus; /* missing: items you do not have (paid, not shared yet, not installed) */
 static LookStatus g_lookStatus[LOOK_MAX];
 static int g_lookStatusN = 0;
@@ -1217,6 +1239,7 @@ static void looksPoll(void) {
   if (CompareFileTime(&fa.ftLastWriteTime, &g_looksMtime) != 0 && fa.nFileSizeLow < 64 * 1024) {
     static char buf[64 * 1024]; FILE *f = fopen(path, "rb"); size_t len; char *line, *next;
     Look tmp[LOOK_MAX]; int count = 0; char reload[160] = ""; unsigned long long stamp = 0;
+    static LookWait wtmp[WAIT_MAX]; int wcount = 0;
     if (!f) return;
     len = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[len] = 0;
     if (strncmp(buf, "coremx-looks 1 ", 15) != 0) return;
@@ -1236,8 +1259,14 @@ static void looksPoll(void) {
         if (c > 14) copy(L->name, cols[14], sizeof L->name);
         if (L->num > 0 && L->bike[0]) count++;
       }
+      else if (strcmp(cols[0], "wait") == 0 && c >= 5 && wcount < WAIT_MAX) {
+        LookWait *W = &wtmp[wcount]; memset(W, 0, sizeof *W);
+        W->num = atoi(cols[1]); copy(W->bike, cols[2], sizeof W->bike); copy(W->code, cols[3], sizeof W->code); copy(W->label, cols[4], sizeof W->label);
+        if (W->num > 0) wcount++;
+      }
     }
-    lock(); memcpy(g_looks, tmp, sizeof(Look) * (size_t)count); g_lookCount = count; g_looksStamp = stamp; copy(g_reload, reload, sizeof g_reload); unlock();
+    lock(); memcpy(g_looks, tmp, sizeof(Look) * (size_t)count); g_lookCount = count; g_looksStamp = stamp; copy(g_reload, reload, sizeof g_reload);
+    memcpy(g_waits, wtmp, sizeof(LookWait) * (size_t)wcount); g_waitCount = wcount; unlock();
     lastPass = 0;
   }
   if (g_lookCount && S.inEvent && now - lastPass >= 5000) { lastPass = now; InterlockedOr(&mxbm_pending, 2); }
@@ -1297,6 +1326,28 @@ static const GameList *ovModelList(int row) {
     case R_HELMETPAINT: case R_GOGGLES: case R_HELMET: return &L_HELMETS;
     default: return &L_PROT;
   }
+}
+
+/* The most useful reason CoreMX gave for this rider's missing items (uploading first). */
+static int riderWait(const LookStatus *st, char *line) {
+  static const char *const ORDER[5] = { "uploading", "offline", "bike", "paid", "failed" };
+  LookWait w; int found = 0, k, i;
+  lock();
+  for (k = 0; k < 5 && !found; k++)
+    for (i = 0; i < g_waitCount; i++)
+      if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { w = g_waits[i]; found = 1; break; }
+  unlock();
+  if (!found) return 0;
+  {
+    const char *who = st->name[0] ? st->name : "their";
+    const char *sfx = st->name[0] ? "'s" : "";
+    if (!strcmp(w.code, "uploading")) sprintf(line, "%.28s: uploading from %.24s%s CoreMX...", w.label, who, sfx);
+    else if (!strcmp(w.code, "offline")) sprintf(line, "%.28s: waiting for %.24s%s CoreMX to come online", w.label, who, sfx);
+    else if (!strcmp(w.code, "bike")) sprintf(line, "%.32s: comes with a bike you don't have", w.label);
+    else if (!strcmp(w.code, "paid")) sprintf(line, "%.36s: paid, not shared", w.label);
+    else sprintf(line, "%.36s: couldn't be downloaded", w.label);
+  }
+  return 1;
 }
 
 /* Gear synced from friends that you haven't installed yourself is not offered (CoreMX keeps it under
@@ -1629,6 +1680,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
+        else if (st->missing && riderWait(st, line)) { /* line set: why it isn't here yet */ }
         else if (st->missing && st->firstMissing[0]) sprintf(line, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
         else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");

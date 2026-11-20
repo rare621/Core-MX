@@ -71,6 +71,22 @@ function createR2(cfg, { fetchImpl = fetch } = {}) {
       const res = await fetchImpl(url('PUT', sha, 900), { method: 'PUT', body: buf, signal: AbortSignal.timeout(300000) });
       if (!res.ok) throw new Error(`R2 upload failed (${res.status})`);
     },
+    // Every object under files/ (key, size, last modified), across pages.
+    async list() {
+      const all = [];
+      let token = null;
+      for (let page = 0; page < 1000; page++) {
+        const query = { 'list-type': '2', prefix: 'files/', ...(token ? { 'continuation-token': token } : {}) };
+        const req = signRequest({ method: 'GET', host, path: `/${cfg.bucket}`, query, region: 'auto', accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey });
+        const res = await fetchImpl(cfg.testOrigin ? req.url.replace(`https://${host}`, cfg.testOrigin) : req.url, { headers: req.headers, signal: AbortSignal.timeout(30000) });
+        if (!res.ok) throw new Error(`R2 list failed (${res.status})`);
+        const { items, next } = parseList(await res.text());
+        all.push(...items);
+        if (!next) break;
+        token = next;
+      }
+      return all;
+    },
     async remove(sha) {
       const res = await fetchImpl(url('DELETE', sha, 120), { method: 'DELETE', signal: AbortSignal.timeout(30000) });
       if (!res.ok && res.status !== 404) throw new Error(`R2 delete failed (${res.status})`);
@@ -78,4 +94,30 @@ function createR2(cfg, { fetchImpl = fetch } = {}) {
   };
 }
 
-module.exports = { presign, loadConfig, createR2 };
+// A request signed in its Authorization header (AWS Signature V4), for bucket operations a presigned
+// link can't do (listing).
+function signRequest({ method, host, path, query = {}, region, accessKeyId, secretAccessKey, now = new Date(), payload = 'UNSIGNED-PAYLOAD' }) {
+  const amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const day = amzDate.slice(0, 8), scope = `${day}/${region}/s3/aws4_request`;
+  const qs = Object.keys(query).sort().map((k) => `${enc(k)}=${enc(query[k])}`).join('&');
+  const headers = { host, 'x-amz-content-sha256': payload, 'x-amz-date': amzDate };
+  const signedHeaders = Object.keys(headers).sort().join(';');
+  const canonical = [method, path.split('/').map(enc).join('/'), qs, Object.keys(headers).sort().map((h) => `${h}:${headers[h]}\n`).join(''), signedHeaders, payload].join('\n');
+  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonical)].join('\n');
+  const key = hmac(hmac(hmac(hmac('AWS4' + secretAccessKey, day), region), 's3'), 'aws4_request');
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${hmac(key, toSign).toString('hex')}`;
+  return { url: `https://${host}${path}${qs ? '?' + qs : ''}`, headers: { 'x-amz-content-sha256': headers['x-amz-content-sha256'], 'x-amz-date': amzDate, authorization } };
+}
+// ListObjectsV2 answer: keys, sizes and dates, plus the token for the next page.
+function parseList(xml) {
+  const items = [...String(xml).matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)].map((m) => ({
+    key: (m[1].match(/<Key>([^<]*)<\/Key>/) || [])[1] || '',
+    size: Number((m[1].match(/<Size>(\d+)<\/Size>/) || [])[1]) || 0,
+    modified: Date.parse((m[1].match(/<LastModified>([^<]*)<\/LastModified>/) || [])[1] || '') || 0,
+  }));
+  const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+  const next = (String(xml).match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/) || [])[1] || null;
+  return { items, next: truncated ? next : null };
+}
+
+module.exports = { presign, loadConfig, createR2, signRequest, parseList };

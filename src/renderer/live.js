@@ -195,39 +195,62 @@ async function joinLiveServer(s) {
     if (!/timeout/.test(e.message || '')) toast(esc(cleanErr(e)), 'info', 5000);
     return join();
   }
+  // Their files: ready to download, being uploaded by their CoreMX (files are uploaded once someone
+  // needs them), or waiting for their CoreMX to come online.
+  const UPLOADING = ['waiting', 'uploading'];
+  const count = (r, states) => r.items.filter((it) => states.includes(it.state)).length;
   const sizeOf = (r) => r.items.filter((it) => it.state === 'ready').reduce((n, it) => n + (it.size || 0), 0);
-  const want = riders.filter((r) => r.items.some((it) => it.state === 'ready'));
+  const want = riders.filter((r) => count(r, ['ready', ...UPLOADING, 'offline']));
   if (!want.length) {
     if (riders.length) toast(`You already have the gear for ${riders.length === 1 ? esc(riders[0].name) : riders.length + ' riders'} on this server`, 'ok', 2500);
     return join();
   }
   const fmt = (n) => (typeof fmtSize === 'function' ? fmtSize(n) : `${Math.round(n / 1024)} KB`);
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const row = (r, i) => {
-    const ready = r.items.filter((it) => it.state === 'ready');
+    const ready = count(r, ['ready']), uploading = count(r, UPLOADING), offline = count(r, ['offline']);
     const paid = (r.unavailable || []).filter((u) => /paid|store-protected/i.test(u.error || '')).length;
     const needs = [...new Map(r.items.flatMap((it) => it.needs || []).map((n) => [`${n.kind}|${n.name}`, n])).values()];
-    return `<label class="sr-row"><input type="checkbox" data-sr="${i}" checked><span class="fr-av">${esc((r.name || '?').slice(0, 1).toUpperCase())}</span>
-      <span class="sr-txt"><b>${esc(r.name)}</b><small>${ready.length} file${ready.length === 1 ? '' : 's'} · ${fmt(sizeOf(r))}${r.bikeName || r.bike ? ` · ${esc(prettyBikeId(r.bikeName || r.bike))}` : ''}</small>
+    const parts = [ready ? `${plural(ready, 'file')} · ${fmt(sizeOf(r))}` : '', uploading ? `${plural(uploading, 'file')} uploading from their CoreMX` : '', offline ? `${plural(offline, 'file')} when their CoreMX is online` : ''].filter(Boolean);
+    return `<label class="sr-row"><input type="checkbox" data-sr="${i}" ${ready || uploading ? 'checked' : ''}><span class="fr-av">${esc((r.name || '?').slice(0, 1).toUpperCase())}</span>
+      <span class="sr-txt"><b>${esc(r.name)}</b><small>${parts.join(' · ')}${r.bikeName || r.bike ? ` · ${esc(prettyBikeId(r.bikeName || r.bike))}` : ''}</small>
       ${needs.length ? `<small class="sr-warn">Needs ${needs.map((n) => esc(n.name.replace(/_/g, ' '))).join(', ')} to show fully</small>` : ''}${paid ? `<small class="muted">${paid} paid item${paid > 1 ? 's' : ''} not shared</small>` : ''}</span>
       <span class="sr-via" title="${r.via === 'name' ? 'Their Steam name matches a rider on this server' : 'Their game plugin reports this server'}">${r.via === 'name' ? 'Name match' : 'On server'}</span></label>`;
   };
   const m = modal({
     title: `Riders on ${esc(s.name)}`, size: 'sm',
-    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} CoreMX. Download their gear so you see their bikes and outfits in game? Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
+    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} CoreMX. Download their gear so you see their bikes and outfits in game? Files their CoreMX is still uploading are waited for (up to a minute and a half). Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
     foot: `<button class="btn" data-sr-skip>Join without gear</button><span class="grow"></span><button class="btn btn-primary" data-sr-go>${icon('download')}Download & join</button>`,
   });
-  $('[data-sr-skip]', m).addEventListener('click', () => { m.close(); join(); });
+  let joinNow = false;
+  $('[data-sr-skip]', m).addEventListener('click', () => { joinNow = true; m.close(); join(); });
   $('[data-sr-go]', m).addEventListener('click', async (e) => {
     const ids = $$('[data-sr]', m).filter((c) => c.checked).map((c) => want[Number(c.dataset.sr)].id);
     if (!ids.length) { m.close(); return join(); }
-    e.target.disabled = true; $('[data-sr-skip]', m).disabled = true;
+    e.target.disabled = true;
+    // While waiting for uploads, the other button joins right away (the rest arrives while you ride).
+    const skip = $('[data-sr-skip]', m); skip.textContent = 'Join now';
     const p = $('.sr-progress', m); p.hidden = false; p.innerHTML = '<div class="spinner"></div> Downloading gear…';
+    let got = 0, failed = 0, pending = 0, offline = 0;
+    const started = Date.now();
     try {
-      const results = await api.invoke('online:syncServerRiders', s.name, ids);
-      const got = results.reduce((n, r) => n + r.items.filter((it) => it.state === 'downloaded').length, 0);
-      const failed = results.reduce((n, r) => n + r.items.filter((it) => it.state === 'failed').length, 0);
-      toast(`Downloaded ${got} file${got === 1 ? '' : 's'}${failed ? ` · ${failed} couldn't be downloaded` : ''}`, failed ? 'info' : 'ok', 3500);
+      for (;;) {
+        const results = await api.invoke('online:syncServerRiders', s.name, ids);
+        if (joinNow) return;
+        got += results.reduce((n, r) => n + count(r, ['downloaded']), 0);
+        failed = results.reduce((n, r) => n + count(r, ['failed']), 0);
+        offline = results.reduce((n, r) => n + count(r, ['offline']), 0);
+        const waiting = results.filter((r) => count(r, UPLOADING));
+        pending = waiting.reduce((n, r) => n + count(r, UPLOADING), 0);
+        if (!pending || Date.now() - started > 90 * 1000) break;
+        p.innerHTML = `<div class="spinner"></div> Waiting for ${waiting.map((r) => esc(r.name)).join(', ')}'s CoreMX to upload ${plural(pending, 'file')}…${got ? ` · ${got} downloaded` : ''}`;
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        if (joinNow) return;
+      }
+      const notes = [failed ? `${failed} couldn't be downloaded` : '', pending ? `${pending} still uploading (added while you ride)` : '', offline ? `${offline} wait for their CoreMX to come online` : ''].filter(Boolean);
+      toast(`Downloaded ${plural(got, 'file')}${notes.length ? ` · ${notes.join(' · ')}` : ''}`, failed ? 'info' : 'ok', 4500);
     } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+    if (joinNow) return;
     m.close(); join();
   });
 }
@@ -295,10 +318,14 @@ function friendGearSummary(items) {
   const files = items || [];
   const got = files.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
   const queued = files.filter((it) => it.state === 'ready').length;
+  const uploading = files.filter((it) => ['waiting', 'uploading'].includes(it.state)).length;
+  const offline = files.filter((it) => it.state === 'offline').length;
   const attention = files.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
   const count = `${got} of ${files.length} free files synced`;
-  return { got, queued, attention, complete: got === files.length,
+  return { got, queued: queued + uploading, attention, complete: got === files.length,
     text: queued ? `${queued} update${queued === 1 ? '' : 's'} queued · ${count}`
+      : uploading ? `${uploading} file${uploading === 1 ? '' : 's'} uploading from their CoreMX · ${count}`
+      : offline ? `${offline} file${offline === 1 ? '' : 's'} download when their CoreMX is online · ${count}`
       : attention ? `${attention} file${attention === 1 ? '' : 's'} need attention · ${count}` : count };
 }
 async function renderFriends(c) {
@@ -616,12 +643,12 @@ async function openFriendDetails(friend) {
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     const track = l && (l.trackName || l.trackId);
     const missing = track && !trackHave(l);
-    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
+    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Uploading from their CoreMX…', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
     const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
       if (unavailable && unavailable.state !== 'have' && /paid|store-protected/i.test(unavailable.error || '')) return '';
-      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? 'Paid mod — already installed' : unavailable.error : unsharedLabel(slot, outfit.equipped);
+      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? (unavailable.included === 'bike' ? 'Comes with the bike — you have it' : 'Paid mod — already installed') : unavailable.error : unsharedLabel(slot, outfit.equipped);
       const needs = item && item.needs || [];
       return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.source ? `<div class="sync-warning">${esc(unavailable.source.title)} <button class="btn btn-sm" data-friend-post="${esc(String(unavailable.source.postId))}">Open on MXB Mods</button></div>` : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');

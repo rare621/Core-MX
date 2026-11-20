@@ -14,13 +14,29 @@ const PAINT_EVERY = 60 * 1000;
 // Live looks file for the plugin (see doSyncLooks below and plugin/mxbm_presence.c).
 const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint'];
 const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
-function looksText(loadouts, reload, stamp) {
+// "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
+// sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
+// have), failed. Older plugins skip these lines. status: rider id -> sync report (items, unavailable).
+const WAIT_ITEM = { waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed' };
+function waitLines(lo, report, clean) {
+  if (!report) return [];
+  const out = [];
+  for (const it of report.items || []) if (WAIT_ITEM[it.state]) out.push([WAIT_ITEM[it.state], it.value || it.label]);
+  for (const u of report.unavailable || []) {
+    if (u.state === 'have') continue;
+    const code = u.included === 'bike' ? 'bike' : /paid|store-protected|tied to your account|account-bound/i.test(u.error || '') ? 'paid' : null;
+    if (code) out.push([code, String(u.label || '').replace(/^[^:]*:\s*/, '')]);
+  }
+  return out.slice(0, 6).map(([code, label]) => ['wait', lo.num, clean(lo.bikeId), code, clean(label).slice(0, 40)].join('\t'));
+}
+function looksText(loadouts, reload, stamp, reports = {}) {
   const clean = (v) => String(v || '').replace(/[\t\r\n]/g, ' ').trim().slice(0, 63);
   const lines = [`coremx-looks 1 ${stamp}`, `reload\t${reload.join(',')}`];
   for (const lo of loadouts) {
     const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     // The CoreMX name is the last column (older plugins read only the gear columns).
     lines.push(['look', lo.num, clean(lo.bikeId), ...LOOK_FIELDS.map((f) => clean(cur[f])), clean(lo.name).slice(0, 40)].join('\t'));
+    lines.push(...waitLines(lo, reports[lo.id], clean));
   }
   return lines.join('\n') + '\n';
 }
@@ -327,6 +343,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       const result = await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
       activeUsers = Number.isInteger(result.activeUsers) ? result.activeUsers : null;
+      // Someone needs files you wear that aren't uploaded yet: share now (uploads only those).
+      if (Array.isArray(result.upload) && result.upload.length && c.paintSync !== false) syncPaints().catch(() => {});
       lastSent = key; lastSentAt = Date.now(); lastError = null;
       onChange(status());
     } catch (e) { lastError = e.message; activeUsers = null; onChange(status()); }
@@ -466,13 +484,13 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const gearKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.slot, it.path, it.sha256]), lo.equipped, lo.unavailable]);
   async function refreshFriendGear(force = false) {
     if (!cfg().token) return paint.report || [];
-    const { loadouts = [] } = await call('GET', '/v1/loadouts');
+    const { loadouts = [] } = await call('GET', '/v1/loadouts?pending=1');
     const previous = new Map((paint.report || []).map((lo) => [lo.id, lo]));
     const next = [];
     let changed = loadouts.length !== previous.size;
     const seen = new Set();
     for (const lo of loadouts) {
-      const key = gearKey(lo);
+      const key = gearKey(lo) + (lo.items || []).map((it) => it.available === false ? '0' : '1').join('') + (lo.online ? 'on' : 'off');
       const previousKey = gearKeys.get(lo.id);
       seen.add(lo.id);
       if (!force && previousKey === key && previous.has(lo.id)) {
@@ -480,6 +498,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         continue;
       }
       const [checked] = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: [lo] });
+      // Not uploaded yet: say whether their CoreMX is online to send it (asked for by the next sync).
+      for (const it of checked.items) if (it.state === 'waiting') it.state = lo.online === false ? 'offline' : 'uploading';
       next.push(checked);
       gearKeys.set(lo.id, key);
       if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
@@ -556,11 +576,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!cfg().token) throw new Error('Go online first to see riders on this server');
     const health = await call('GET', '/v1/health');
     if (health.version < 6) throw new Error('Update the online server (mxbm-online-service.zip) to sync gear from riders on a server');
-    return (await call('POST', '/v1/server-riders', { server })).loadouts || [];
+    return (await call('POST', '/v1/server-riders', { server, pending: true })).loadouts || [];
   }
   async function serverRiders(server) {
     const loadouts = await serverRiderLoadouts(server);
     const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
+    await paintsync.requestMissing(call, report); // their owners start uploading now
     return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
   }
   async function syncServerRiders(server, ids) {
@@ -602,10 +623,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const reload = new Set();
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
     if (reload.size) await onInstalled();
-    const key = JSON.stringify(riders.map((r) => [r.num, r.bikeId, r.equipped])) + [...reload].join();
+    const reports = Object.fromEntries(results.map((r) => [r.id, r]));
+    const states = results.map((r) => [r.id, (r.items || []).map((it) => it.state), (r.unavailable || []).map((u) => u.state)]);
+    const key = JSON.stringify([riders.map((r) => [r.num, r.bikeId, r.equipped]), states]) + [...reload].join();
     if (key === looksKey && !reload.size) return;
     looksKey = key;
-    await fsp.writeFile(looksPath() + '.tmp', looksText(riders, [...reload], Date.now()));
+    await fsp.writeFile(looksPath() + '.tmp', looksText(riders, [...reload], Date.now(), reports));
     await fsp.rename(looksPath() + '.tmp', looksPath());
   }
 
