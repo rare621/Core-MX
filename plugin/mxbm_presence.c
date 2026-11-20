@@ -1602,7 +1602,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         ovText(line, x0 + 0.020f, y + 0.005f, 0.0145f, 0, 0xFFFFFFFF);
         if (!vr) sprintf(line, "Not on track right now");
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
-        else if (st->missing && st->firstMissing[0]) sprintf(line, "Needs %.40s%s (CoreMX gets free gear for you)", st->firstMissing, st->missing > 1 ? " and more" : "");
+        else if (st->missing && st->firstMissing[0]) sprintf(line, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
         else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
         else sprintf(line, "Up to date");

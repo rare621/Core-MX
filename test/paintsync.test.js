@@ -43,8 +43,31 @@ test('equipped sync includes the helmet model and chosen paints, excludes unused
   assert.ok(await validateModel(bundle.buf));
   const file = path.join(f.root, 'model.pkz'); await fs.writeFile(file, bundle.buf);
   const archive = await openArchive(file);
+  assert.ok(archive.entries.some((e) => e.fileName === 'Helmet/'));
+  assert.ok(archive.entries.some((e) => e.fileName === 'Helmet/helmet.edf'));
+  assert.ok(archive.entries.every((e) => e.fileName.startsWith('Helmet/')));
   assert.ok(archive.entries.every((e) => !/\.pnt$/i.test(e.fileName)));
   assert.ok(outfit.items.every((it) => !it.label.includes('Unused')));
+});
+
+test('an older flat CoreMX helmet package is replaced with a game-readable model folder', async (t) => {
+  const f = await fixture(t);
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
+  const helmet = outfit.items.find((it) => it.slot === 'helmet');
+  const old = zip({ 'gfx.cfg': 'model = helmet.hrc', 'helmet.edf': model('helmet'),
+    'helmet.hrc': 'level0\n{\nscene = helmet.edf\n}' });
+  const rel = 'rider/helmets/Helmet.pkz';
+  await f.write(f.receiver, rel, old);
+  const received = { [rel]: { sha256: sha(old), from: 'friend', at: Date.now() } };
+  const options = { call: async () => ({ loadouts: [{ id: 'friend', name: 'friend', items: [helmet] }] }),
+    modsDir: f.receiver, received, have: () => true, download: async () => helmet.buf };
+  const before = await sync.listFriends(options);
+  assert.equal(before[0].items[0].state, 'ready');
+  const result = await sync.fetchFriends(options);
+  assert.equal(result[0].items[0].state, 'downloaded');
+  assert.equal(sha(await fs.readFile(path.join(f.receiver, rel))), helmet.sha256);
+  const archive = await openArchive(path.join(f.receiver, rel));
+  assert.ok(archive.entries.some((e) => e.fileName === 'Helmet/helmet.edf'));
 });
 
 test('a free sealed helmet and its selected paint use normal friend sync even when the MXB Mods source is known', async (t) => {

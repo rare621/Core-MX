@@ -41,9 +41,11 @@ async function modelBundle({ modsDir, rider = 'default_mx', kind, name }) {
     if (/\.edf$/i.test(rel) && decodeBlob(item.buf).toString('latin1', 0, 4) !== 'EDF\0') throw new Error('The equipped model is unreadable');
     total += item.buf.length;
     if (total > MAX_FILE || files.length >= 500) throw new Error('This equipped model is too large to sync');
-    files.push([rel.toLowerCase(), item.buf]);
+    // MX Bikes looks up model files below the model's named folder inside a
+    // PKZ. A flat archive can pass our asset checks yet never appear in game.
+    files.push([`${name}/${rel}`, item.buf]);
   }
-  return files.some(([name]) => /\.edf$/i.test(name)) ? zip(files) : null;
+  return files.some(([entry]) => /\.edf$/i.test(entry)) ? zip([[`${name}/`, Buffer.alloc(0)], ...files]) : null;
 }
 
 function validateModel(buf, kind) {
@@ -56,7 +58,9 @@ function validateModel(buf, kind) {
       archive.on('error', fail);
       archive.on('entry', (entry) => {
         size += entry.uncompressedSize;
-        if (++count > 500 || size > MAX_FILE || !modelFile(entry.fileName, kind) || entry.generalPurposeBitFlag & 1) return fail();
+        const modelDirectory = entry.fileName.endsWith('/') && entry.uncompressedSize === 0 &&
+          gear.validName(entry.fileName.slice(0, -1));
+        if (++count > 501 || size > MAX_FILE || (!modelDirectory && !modelFile(entry.fileName, kind)) || entry.generalPurposeBitFlag & 1) return fail();
         if (/\.edf$/i.test(entry.fileName)) mesh = true;
         archive.readEntry();
       });

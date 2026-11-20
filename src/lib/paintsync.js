@@ -162,7 +162,9 @@ async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
   // The same content in the legacy layout or inside a model package also counts.
   if (it.modelKind && gear.validName(it.value)) {
     const local = await modelBundle({ modsDir, rider: it.rider || 'default_mx', kind: it.modelKind, name: it.value }).catch(() => null);
-    if (local && sha256(local) === it.sha256) return { ...entry, state: 'have', needs: [] };
+    // A CoreMX-owned package with different bytes may be an older flat model
+    // archive. Reinstall it even if repacking its files resembles the sender's.
+    if (local && !owned && sha256(local) === it.sha256) return { ...entry, state: 'have', needs: [] };
     if (local && !owned) return { ...entry, state: 'name-taken', error: 'A different version of this model is already installed' };
   } else if (gear.validName(it.value)) {
     let data;
