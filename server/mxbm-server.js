@@ -21,6 +21,7 @@ fs.mkdirSync(FILES, { recursive: true });
 // Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
 const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
 const R2 = (() => { const c = require('./r2').loadConfig(R2_FILE); return c ? require('./r2').createR2(c) : null; })();
+const HOST_GRACE = (Number(arg('hostgraceseconds', 120)) >= 0 ? Number(arg('hostgraceseconds', 120)) : 120) * 1000; // see staleFor
 const SWEEP_EVERY = (Number(arg('sweepminutes', 60)) > 0 ? Number(arg('sweepminutes', 60)) : 60) * 60 * 1000; // untracked R2 objects
 const R2_GRACE = (Number(arg('unusedseconds', 120)) > 0 ? Number(arg('unusedseconds', 120)) : 120) * 1000; // an R2 file nobody wears is deleted after 2 minutes
 // Synced files of users who haven't opened CoreMX for this long are removed (R2 and this PC); their
@@ -388,9 +389,19 @@ const routes = {
       }
       const stayed = prev.reports && prev.reports[me.id] && previous?.inEvent && serverKey(previous.server || '') === k;
       reports[me.id] = { riders: reported, since: stayed ? prev.reports[me.id].since : now };
+      // A home-hosted game started again under the same name: players still "on" it since before this
+      // session began (stuck on a closed game's "connection lost" screen) belong to the old game. Their
+      // reports don't count for the new one (2 minutes' grace for reports arriving just before the host's).
+      const continuingHost = s.hosting === true && prev.hosted && prev.hostedBy === me.id && previous?.inEvent &&
+        serverKey(previous.server || '') === k && now - previousPresence.at < ONLINE_TTL;
+      const hostSince = s.hosting === true ? (continuingHost ? prev.hostSince || now : now) : prev.hosted ? prev.hostSince || 0 : 0;
+      const hostId = s.hosting === true ? me.id : prev.hosted ? prev.hostedBy : null;
+      const staleFor = (id) => !!(hostSince && id !== hostId && reports[id] && reports[id].since < hostSince - HOST_GRACE);
+      // (Stale reports are kept, so their age is remembered, but never chosen.)
+      const meStale = staleFor(me.id);
       const host = s.hosting === true ? me.id : prev.hosted && reports[prev.hostedBy] ? prev.hostedBy : null;
-      const best = host || Object.entries(reports).sort((a, b) => a[1].since - b[1].since)[0][0];
-      const riders = reports[best].riders;
+      const best = host || (Object.entries(reports).filter(([id]) => !staleFor(id)).sort((a, b) => a[1].since - b[1].since)[0] || [])[0];
+      const riders = best ? reports[best].riders : prev.riders || [];
       db.servers[k] = {
         // A rider who reached this Host World server can report the endpoint read from the game.
         // Prefer that fresh observation over the host's public-IP:54210 guess. Keep it only while
@@ -404,7 +415,7 @@ const routes = {
             const observed = continuing && prev.observedAddress;
             return {
               address: observed ? prev.observedAddress : state.serverAddress,
-              hosted: true, hostedBy: me.id, guessedAddress: state.serverAddress,
+              hosted: true, hostedBy: me.id, hostSince, guessedAddress: state.serverAddress,
               hostLan: state.hostLan || null, hostIp: state.serverAddress.split(':')[0],
               observedAddress: observed ? prev.observedAddress : null,
               observedAt: observed ? prev.observedAt : null,
@@ -414,17 +425,17 @@ const routes = {
           const hostStillThere = hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && serverKey(hp.state.server || '') === k;
           if (hostStillThere) {
             const sameTrack = !prev.trackId || !state.trackId || prev.trackId === state.trackId;
-            const fromGame = state.serverAddress && state.serverAddressSource === 'game' && sameTrack;
+            const fromGame = !meStale && state.serverAddress && state.serverAddressSource === 'game' && sameTrack;
             // Same session as long as the host is still on it (hostStillThere), so keep what a game saw.
             const observed = fromGame ? state.serverAddress : prev.observedAddress || null;
             const guessedAddress = prev.guessedAddress || prev.address || null;
             return {
-              address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, guessedAddress, hostLan: prev.hostLan || null, hostIp: prev.hostIp || null,
+              address: observed || guessedAddress, hosted: true, hostedBy: prev.hostedBy, hostSince: prev.hostSince || 0, guessedAddress, hostLan: prev.hostLan || null, hostIp: prev.hostIp || null,
               observedAddress: observed, observedAt: fromGame ? Date.now() : observed ? prev.observedAt : null,
             };
           }
           // Its host left (the game is closed): stays marked as theirs, so the list leaves it out.
-          if (prev.hosted && prev.hostedBy && prev.hostedBy !== me.id) return { address: null, hosted: true, hostedBy: prev.hostedBy, guessedAddress: prev.guessedAddress || null, observedAddress: null, observedAt: null };
+          if (prev.hosted && prev.hostedBy && prev.hostedBy !== me.id) return { address: null, hosted: true, hostedBy: prev.hostedBy, hostSince: prev.hostSince || 0, guessedAddress: prev.guessedAddress || null, observedAddress: null, observedAt: null };
           return { address: state.serverAddress || null, hosted: false };
         })(),
         name: state.server,
