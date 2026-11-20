@@ -935,5 +935,7 @@ select option { background: var(--panel); }
 .post-tabs + .desc, .post-tabs ~ .post-install { margin-top: 14px; }
 .desc[hidden] { display: none; }
 
+/* A rider who uses CoreMX (server rider lists). */
+.coremx-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .02em; vertical-align: 1px; }
 /* Status text that needs attention (e.g. Windows Firewall blocking MX Bikes). */
 .warn-text { color: var(--warn); }
