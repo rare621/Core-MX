@@ -41,12 +41,8 @@ test('equipped sync includes the helmet model and chosen paints, excludes unused
   assert.deepEqual(outfit.items.find((it) => it.slot === 'helmetPaint').buf, f.helmetPaint);
   const bundle = outfit.items.find((it) => it.slot === 'helmet');
   assert.ok(await validateModel(bundle.buf));
-  const file = path.join(f.root, 'model.pkz'); await fs.writeFile(file, bundle.buf);
-  const archive = await openArchive(file);
-  assert.ok(archive.entries.some((e) => e.fileName === 'Helmet/'));
-  assert.ok(archive.entries.some((e) => e.fileName === 'Helmet/helmet.edf'));
-  assert.ok(archive.entries.every((e) => e.fileName.startsWith('Helmet/')));
-  assert.ok(archive.entries.every((e) => !/\.pnt$/i.test(e.fileName)));
+  // The creator's own package is shared exactly as installed (never unpacked, decrypted or repacked).
+  assert.deepEqual(bundle.buf, await fs.readFile(path.join(f.source, 'rider/helmets/Helmet.pkz')));
   assert.ok(outfit.items.every((it) => !it.label.includes('Unused')));
 });
 
@@ -258,7 +254,9 @@ test('two real clients exchange only mutual-friend equipped files through the on
   assert.equal(uploaded.length, 4);
   assert.equal((await ac('POST', '/v1/presence', { state: { inGame: false } })).upload.length, 0, 'nothing left to upload');
   const report = await fetchB();
-  assert.equal(report[0].items.filter((it) => it.state === 'downloaded').length, 4);
+  // The helmet's own package carries its paint, so that paint is already there once the helmet is.
+  assert.deepEqual(report[0].items.map((it) => [it.slot, it.state]), [['helmet', 'downloaded'], ['bikePaint', 'downloaded'], ['helmetPaint', 'have'], ['suitPaint', 'downloaded']]);
+  assert.deepEqual(await fs.readFile(path.join(f.receiver, 'rider/helmets/Helmet.pkz')), await fs.readFile(path.join(f.source, 'rider/helmets/Helmet.pkz')), 'the encrypted package arrives byte for byte');
   assert.ok(report[0].equipped.some((entry) => entry.slot === 'bootsPaint'), 'the server must retain the final outfit slots for the full 3D preview');
   await ac('POST', '/v1/presence', { state: { inGame: false } });
   const friend = (await bc('GET', '/v1/friends')).friends[0];

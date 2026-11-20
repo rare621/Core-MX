@@ -1,10 +1,16 @@
-// Deterministic model-only packages: unused paint variants are not transferred.
+// Equipped models are shared as the creator's own files, never decrypted:
+//   - a model package (<name>.pkz) is sent exactly as installed, encrypted or not. Content tied to
+//     the buyer's account is refused (it only works for them);
+//   - a model installed as a loose folder is packed into a plain zip of its (plain) files;
+//   - a model found only inside another, encrypted package is not shared (the friend needs their
+//     own copy).
 const { crc32 } = require('zlib');
 const { chainOf, readChain, listFiles } = require('./asset-sources');
 const gear = require('./gear-assets');
+const fs = require('fs');
 const path = require('path');
 const yauzl = require('yauzl');
-const { decodeBlob, assertShareableFile } = require('./assetread');
+const { assertShareableFile, sealedInfo } = require('./assetread');
 
 const MAX_FILE = 512 * 1024 * 1024;   // R2 storage; the service refuses more than 100 MB when it has no R2
 const modelFile = (name, kind) => typeof name === 'string' && !/^[\\/]|[\\:\0]/.test(name) && !name.split('/').some((n) => !n || n === '.' || n === '..') && (/\.(edf|hrc|cfg|ini|anm|tga|dds|png|jpe?g|bmp)$/i.test(name) || kind === 'tyres' && /\.tyre$/i.test(name)) && !/(^|\/)(paints|goggles)\//i.test(name);
@@ -27,18 +33,36 @@ function zip(files) {
   return result;
 }
 
+const SUBDIR = { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' };
+const sealedFile = async (file) => {
+  const h = await fs.promises.open(file, 'r');
+  try { const { size } = await h.stat(); if (size < 62) return false; const b = Buffer.alloc(4); await h.read(b, 0, 4, size - 62); return b.toString('ascii') === 'KCOL'; }
+  finally { await h.close(); }
+};
 async function modelBundle({ modsDir, rider = 'default_mx', kind, name }) {
   if (!gear.validName(rider) || !gear.validName(name) || !['rider', 'helmet', 'boots', 'protection', 'tyres'].includes(kind)) return null;
-  const modelDir = kind === 'tyres' ? path.join(modsDir, 'tyres') : path.join(modsDir, 'rider', { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind]);
-  await assertShareableFile(path.join(modelDir, name + '.pkz'));
+  const modelDir = kind === 'tyres' ? path.join(modsDir, 'tyres') : path.join(modsDir, 'rider', SUBDIR[kind]);
+  // The model's own package, in the current or the older per-rider layout: sent as it is.
+  const packages = [path.join(modelDir, name + '.pkz')];
+  if (['helmet', 'boots', 'protection'].includes(kind)) packages.push(path.join(modsDir, 'rider', 'riders', rider, SUBDIR[kind], name + '.pkz'));
+  for (const pkz of packages) {
+    let st; try { st = await fs.promises.stat(pkz); } catch { continue; }
+    if (!st.isFile()) continue;
+    if (st.size > MAX_FILE) throw new Error('This equipped model exceeds the 512 MB sync limit');
+    await assertShareableFile(pkz); // account-bound: refused
+    return fs.promises.readFile(pkz);
+  }
+  // A loose model folder.
   const source = kind === 'tyres' ? await chainOf([{ dir: path.join(modsDir, 'tyres', name) }]) : kind === 'rider' ? await chainOf([{ dir: path.join(modsDir, 'rider', 'riders', name) }])
-    : await gear.modelSources({ modsDir, rider }, { helmet: 'helmets', boots: 'boots', protection: 'protections' }[kind], name);
+    : await gear.modelSources({ modsDir, rider }, SUBDIR[kind], name);
+  for (const src of source) if (src.kind === 'pkz' && await sealedFile(src.pkz)) throw new Error('This model comes inside an encrypted package. Your friend needs their own copy.');
   const files = []; let total = 0;
   for (const rel of (await listFiles(source)).filter((rel) => modelFile(rel, kind))) {
     if (kind === 'rider' && /^(helmets|boots|protections|gloves|goggles|paints)\//i.test(rel)) continue;
     const item = await readChain(source, rel);
     if (!item) continue;
-    if (/\.edf$/i.test(rel) && decodeBlob(item.buf).toString('latin1', 0, 4) !== 'EDF\0') throw new Error('The equipped model is unreadable');
+    // A loose file may itself be encrypted: it is sent as it is (the game reads it), not decoded.
+    if (/\.edf$/i.test(rel) && !sealedInfo(item.buf) && item.buf.toString('latin1', 0, 4) !== 'EDF\0') throw new Error('The equipped model is unreadable');
     total += item.buf.length;
     if (total > MAX_FILE || files.length >= 500) throw new Error('This equipped model is too large to sync');
     // MX Bikes looks up model files below the model's named folder inside a
@@ -48,8 +72,12 @@ async function modelBundle({ modsDir, rider = 'default_mx', kind, name }) {
   return files.some(([entry]) => /\.edf$/i.test(entry)) ? zip([[`${name}/`, Buffer.alloc(0)], ...files]) : null;
 }
 
+// What a friend sent for a model slot: the creator's encrypted package (checked from its footer only:
+// not account-bound), or a zip holding a model. It is saved as a .pkz for the game; never unpacked.
+const safeEntry = (name) => typeof name === 'string' && !/^[\\/]|[\\:\0]/.test(name) && !name.split('/').some((n) => n === '.' || n === '..') && !/\.(exe|dll|com|scr|bat|cmd|ps1|vbs|js|msi|lnk)$/i.test(name);
 function validateModel(buf, kind) {
   if (buf.length > MAX_FILE) return Promise.resolve(false);
+  try { if (sealedInfo(buf)) return Promise.resolve(true); } catch { return Promise.resolve(false); }
   return new Promise((resolve) => {
     yauzl.fromBuffer(buf, { lazyEntries: true, strictFileNames: true }, (error, archive) => {
       if (error) return resolve(false);
@@ -58,9 +86,7 @@ function validateModel(buf, kind) {
       archive.on('error', fail);
       archive.on('entry', (entry) => {
         size += entry.uncompressedSize;
-        const modelDirectory = entry.fileName.endsWith('/') && entry.uncompressedSize === 0 &&
-          gear.validName(entry.fileName.slice(0, -1));
-        if (++count > 501 || size > MAX_FILE || (!modelDirectory && !modelFile(entry.fileName, kind)) || entry.generalPurposeBitFlag & 1) return fail();
+        if (++count > 5000 || size > 2 * MAX_FILE || !safeEntry(entry.fileName) || entry.generalPurposeBitFlag & 1) return fail();
         if (/\.edf$/i.test(entry.fileName)) mesh = true;
         archive.readEntry();
       });

@@ -922,7 +922,8 @@ function checkFile(me, sha, buf) {
   if (!owned || owned.size !== buf.length) return [400, 'file is not in your equipped loadout'];
   const plainPaint = buf.length >= 108 && buf.toString('latin1', 0, 4) === 'PNT\0' && buf.readUInt32LE(104) <= 256;
   const sealedPaint = buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL' && buf.readUInt32LE(buf.length - 6) === buf.length - 62;
-  const model = buf.length >= 22 && buf.readUInt32LE(0) === 0x04034b50;
+  // A model: a zip, or the creator's own encrypted package (KCOL footer), sent as installed.
+  const model = buf.length >= 22 && (buf.readUInt32LE(0) === 0x04034b50 || buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL');
   if (owned.modelKind ? !model : !plainPaint && !sealedPaint) return [400, 'not a supported equipped paint or model file'];
   return null;
 }
