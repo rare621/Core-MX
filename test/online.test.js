@@ -37,7 +37,7 @@ test('Friends refresh notices new shared gear before automatic download and rech
   let items = [first], notices = 0, requests = 0;
   t.mock.method(globalThis, 'fetch', async (url) => {
     requests++;
-    assert.match(url, /\/v1\/loadouts$/);
+    assert.match(url, /\/v1\/loadouts\?pending=1$/);
     return new Response(JSON.stringify({ loadouts: [{ id: 'friend', name: 'Friend', bike: 'Fixture', items, equipped: [], unavailable: [] }] }));
   });
   const cfg = { url: 'https://example.test', token: 'fixture-token', received: {} };

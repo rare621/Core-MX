@@ -235,15 +235,29 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
   await ac('POST', '/v1/friends', { ids: [a.id, b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 20);
-  const shared = await sync.share({ call: ac, upload: async (hash, bytes) => {
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 21);
+  const uploaded = [];
+  const shareA = () => sync.share({ call: ac, upload: async (hash, bytes) => {
+    uploaded.push(hash);
     const res = await fetch(url + '/v1/files/' + hash, { method: 'PUT', headers: { authorization: `Bearer ${a.token}` }, body: bytes });
     assert.ok(res.ok, (await res.json()).error);
   }, modsDir: f.source, prof: f.prof, bike: 'Fixture' });
+  const shared = await shareA();
   assert.equal(shared.items.length, 4);
+  assert.equal(uploaded.length, 0, 'nothing is uploaded until someone needs it');
   assert.equal((await bc('GET', '/v1/loadouts')).loadouts.length, 0);
   await bc('POST', '/v1/friends', { ids: [a.id] });
-  const report = await sync.fetchFriends({ call: bc, download: async (hash) => Buffer.from(await (await fetch(url + '/v1/files/' + hash, { headers: { authorization: `Bearer ${b.token}` } })).arrayBuffer()), modsDir: f.receiver, received: {}, have: () => true });
+  const fetchB = () => sync.fetchFriends({ call: bc, download: async (hash) => Buffer.from(await (await fetch(url + '/v1/files/' + hash, { headers: { authorization: `Bearer ${b.token}` } })).arrayBuffer()), modsDir: f.receiver, received: {}, have: () => true });
+  // B needs them: asks; A's CoreMX is offline (no report yet), so they wait for it.
+  const first = await fetchB();
+  assert.deepEqual(first[0].items.map((it) => it.state), ['offline', 'offline', 'offline', 'offline']);
+  // A's next report is told what to upload; A shares again and uploads exactly those files.
+  const told = await ac('POST', '/v1/presence', { state: { inGame: false } });
+  assert.equal(told.upload.length, 4);
+  await shareA();
+  assert.equal(uploaded.length, 4);
+  assert.equal((await ac('POST', '/v1/presence', { state: { inGame: false } })).upload.length, 0, 'nothing left to upload');
+  const report = await fetchB();
   assert.equal(report[0].items.filter((it) => it.state === 'downloaded').length, 4);
   assert.ok(report[0].equipped.some((entry) => entry.slot === 'bootsPaint'), 'the server must retain the final outfit slots for the full 3D preview');
   await ac('POST', '/v1/presence', { state: { inGame: false } });
@@ -287,4 +301,26 @@ test('merging old gear handles existing folders, recycles identical duplicates a
   assert.equal(await fs.readFile(path.join(modern, 'different.pnt'), 'utf8'), 'new');
   assert.deepEqual(await fs.readdir(old), ['different.pnt']);
   assert.equal(summary(['rider/paints/Kit.pnt', 'rider/gloves/Glove.pnt', 'rider/helmets/Helmet/paints/Blue.pnt']), '1 rider kit paints, 1 gloves, 1 helmet paints');
+});
+
+// Files that come with the bike are not uploaded: its OEM tyres (oem_mx ships with the OEM bike packs)
+// and a livery inside the bike's own package. A receiver with the bike has them.
+test('OEM tyres and liveries packed in the bike are not shared; riders with the bike have them', async (t) => {
+  const f = await fixture(t);
+  await f.write(f.source, 'bikes/Fixture/gfx.cfg', 'tyres = oem_mx');
+  await f.write(f.source, 'tyres/oem_mx.pkz', zip({ 'gfx.cfg': 'front_wheel\n{\nmodel = front.hrc\n}', 'model.edf': model('wheel'), 'front.tyre': 'physics' }));
+  await fs.rm(path.join(f.source, 'bikes/Fixture/paints/Livery.pnt'));
+  await f.write(f.source, 'bikes/Fixture.pkz', zip({ 'Fixture/paints/Livery.pnt': paint('bike') }));
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
+  assert.ok(!outfit.items.some((it) => it.modelKind === 'tyres' || it.slot === 'bikePaint'), 'nothing uploaded for them');
+  assert.deepEqual(outfit.unavailable.map((u) => [u.slot, u.error, u.included]).sort(), [['bikePaint', 'Comes with the bike', 'bike'], ['tyres', 'Comes with the bike', 'bike']]);
+  // The receiver with the bike has them; without it, it is told it needs the bike.
+  const lo = { id: 'friend', bike: 'Fixture', bikeName: 'Fixture bike', items: [], equipped: [], unavailable: outfit.unavailable };
+  const without = await sync.listFriends({ call: async () => ({ loadouts: [lo] }), modsDir: f.receiver });
+  assert.deepEqual(without[0].unavailable.map((u) => u.state), ['unavailable', 'unavailable']);
+  assert.match(without[0].unavailable[0].error, /Comes with the bike \(Fixture bike\), which you don't have/);
+  await fs.mkdir(path.join(f.receiver, 'bikes', 'Fixture'), { recursive: true });
+  await f.write(f.receiver, 'bikes/Fixture/bike.ini', 'x');
+  const withBike = await sync.listFriends({ call: async () => ({ loadouts: [lo] }), modsDir: f.receiver });
+  assert.deepEqual(withBike[0].unavailable.map((u) => u.state), ['have', 'have']);
 });

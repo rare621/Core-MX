@@ -21,6 +21,7 @@ fs.mkdirSync(FILES, { recursive: true });
 // Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
 const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
 const R2 = (() => { const c = require('./r2').loadConfig(R2_FILE); return c ? require('./r2').createR2(c) : null; })();
+const SWEEP_EVERY = (Number(arg('sweepminutes', 60)) > 0 ? Number(arg('sweepminutes', 60)) : 60) * 60 * 1000; // untracked R2 objects
 const R2_GRACE = (Number(arg('unusedseconds', 120)) > 0 ? Number(arg('unusedseconds', 120)) : 120) * 1000; // an R2 file nobody wears is deleted after 2 minutes
 // Synced files of users who haven't opened CoreMX for this long are removed (R2 and this PC); their
 // app uploads them again when they come back. --inactivedays N (default 5).
@@ -34,7 +35,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 20;
+const VERSION = 21;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -126,6 +127,41 @@ function storeSize() {
 }
 // A synced file is available when it's on this PC or (checked) in R2.
 const haveFile = (sha) => !!(db.r2 && db.r2[sha]) || fs.existsSync(path.join(FILES, sha));
+
+// ---------- on-demand uploads ----------
+// A synced file is uploaded only when someone needs it. A rider missing a file asks for it
+// (POST /v1/want); the owner's app learns this from its next presence report (`upload`) and uploads
+// it. Apps from before on-demand (no `onDemand`/`pending` flags) still upload everything, and their
+// downloads count as asking, so they keep working. Every R2 file records when it was last needed.
+const WANT_TTL = 10 * 60 * 1000;                  // a request lasts 10 minutes (asked again while needed)
+const KEEP_UNUSED = (Number(arg('keepdays', 3)) > 0 ? Number(arg('keepdays', 3)) : 3) * 24 * 60 * 60 * 1000; // an R2 file nobody has needed for 3 days is deleted
+const wants = new Map();                          // sha -> when it was last asked for
+function noteUse(sha) {
+  const rec = db.r2 && db.r2[sha];
+  if (rec && Date.now() - (rec.used || 0) > 60 * 1000) { rec.used = Date.now(); save(); }
+}
+function want(sha) { wants.set(sha, Date.now()); noteUse(sha); }
+const wanted = (sha) => { const t = wants.get(sha); return !!t && Date.now() - t < WANT_TTL; };
+setInterval(() => { for (const [sha, t] of wants) if (Date.now() - t > WANT_TTL) wants.delete(sha); }, 60 * 1000).unref();
+// Owners of a file (users wearing it) who are online now and can upload it.
+function ownerOnline(sha) {
+  for (const [id, u] of Object.entries(db.users)) {
+    if (!(u.loadout?.items || []).some((it) => it.sha256 === sha)) continue;
+    const p = presence.get(id);
+    if (p && Date.now() - p.at < ONLINE_TTL) return true;
+  }
+  return false;
+}
+// A loadout's items for a viewer: new apps (pending) see every item with `available`, older apps only
+// the available ones, and what they can't get yet counts as asked for (so the owner uploads it).
+function itemsFor(u, pending) {
+  const items = (u.loadout && u.loadout.items) || [];
+  if (pending) return items.map((it) => ({ ...it, available: haveFile(it.sha256) }));
+  for (const it of items) if (!haveFile(it.sha256)) want(it.sha256);
+  return items.filter((it) => haveFile(it.sha256));
+}
+// Files this user wears that someone asked for and that aren't uploaded yet.
+const toUpload = (u) => ((u && u.loadout && u.loadout.items) || []).filter((it) => !haveFile(it.sha256) && wanted(it.sha256)).map((it) => it.sha256);
 
 // Only real HTTP status numbers; a connection that is already gone or answered is left alone
 // (an upload cut off mid-way used to pass "ECONNRESET" here and crash the service).
@@ -234,7 +270,7 @@ function presenceView(id, viewer = []) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'on-demand', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // First run of an app: claim a Steam ID and get a token. A claimed ID can't be re-claimed.
   'POST /v1/register': async (req, body) => {
@@ -354,7 +390,7 @@ const routes = {
       cleanServers();
     }
     save();
-    return [200, { ok: true, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length }];
+    return [200, { ok: true, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, upload: toUpload(me.user) }];
   },
 
   'GET /v1/servers': async (req, body, me) => {
@@ -481,7 +517,7 @@ const routes = {
     })).filter((it) => /^[a-f0-9]{64}$/.test(it.sha256) && safeRel(it.path) && it.size > 0 && it.size <= MAX_FILE && !!it.modelKind === /\.pkz$/i.test(it.path));
     const equipped = (Array.isArray(body.equipped) ? body.equipped : []).slice(0, 24).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), value: str(it && it.value, 100), state: str(it && it.state, 20) }));
     const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 24).map((it) => {
-      const u = { slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200) };
+      const u = { slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200), ...(it && it.included === 'bike' ? { included: 'bike' } : {}) };
       // A free MXB Mods post the item can be installed from (it can't be copied: too large or locked).
       const src = it && it.source;
       if (src && Number.isSafeInteger(src.postId) && src.postId > 0 && /^https:\/\/mxb-mods\.com\/[^\s"<>]*$/i.test(String(src.link || '')) && String(src.link).length <= 300)
@@ -492,16 +528,20 @@ const routes = {
     });
     me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };
     save();
-    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256)).map((it) => it.sha256) }];
+    // Apps with on-demand uploads get only the files someone asked for; older apps everything missing.
+    const onDemand = body.onDemand === true;
+    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256) && (!onDemand || wanted(it.sha256))).map((it) => it.sha256) }];
   },
   // Outfits of mutual friends.
   'GET /v1/loadouts': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
+    const pending = new URL(req.url, 'http://x').searchParams.get('pending') === '1';
     const out = [];
     for (const id of me.user.friends || []) {
       const u = db.users[id];
       if (!u || !(u.friends || []).includes(me.id) || !u.loadout || u.sharePaints === false) continue;
-      out.push({ id, name: u.name, ...u.loadout, items: u.loadout.items.filter((it) => haveFile(it.sha256)) });
+      const p = presence.get(id);
+      out.push({ id, name: u.name, ...u.loadout, items: itemsFor(u, pending), online: !!(p && Date.now() - p.at < ONLINE_TTL) });
     }
     return [200, { loadouts: out }];
   },
@@ -522,10 +562,25 @@ const routes = {
       const here = !!(p && now - p.at < ONLINE_TTL && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
       const byName = !here && nameOnList(u.name, riderNames);
       if (!here && !byName) continue;
-      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: u.loadout.items.filter((it) => haveFile(it.sha256)) });
+      out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: itemsFor(u, body.pending === true), online: !!(p && now - p.at < ONLINE_TTL) });
       if (out.length >= 32) break;
     }
     return [200, { loadouts: out }];
+  },
+  // Files a rider is missing: their owners upload them on their next report. Only files some sharing
+  // user wears can be asked for. Answers each file's state: ready, uploading (owner online), offline.
+  'POST /v1/want': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const shas = [...new Set((Array.isArray(body.shas) ? body.shas : []).filter((x) => /^[a-f0-9]{64}$/.test(String(x))))].slice(0, 64);
+    const worn = new Set();
+    for (const u of Object.values(db.users)) if (u.sharePaints !== false) for (const it of (u.loadout?.items || [])) worn.add(it.sha256);
+    const states = {};
+    for (const sha of shas) {
+      if (!worn.has(sha)) { states[sha] = 'gone'; continue; }
+      want(sha);
+      states[sha] = haveFile(sha) ? 'ready' : ownerOnline(sha) ? 'uploading' : 'offline';
+    }
+    return [200, { states }];
   },
   'POST /v1/servershare': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
@@ -576,6 +631,7 @@ async function fileRoute(req, res, sha) {
   const file = path.join(FILES, sha);
   if (req.method === 'GET' || req.method === 'HEAD') {
     if (!auth(req)) return send(res, 401, { error: 'not signed in' });
+    noteUse(sha);
     if (R2 && db.r2[sha]) {
       // A link that works for 5 minutes. The app's fetch drops its sign-in header when it follows this.
       res.writeHead(302, { location: R2.getUrl(sha, 300), 'cache-control': 'no-store', 'content-length': 0 });
@@ -647,7 +703,7 @@ async function uploadCheck(req, res, sha) {
   if (!buf) return send(res, 404, { error: 'upload not found' });
   const bad = checkFile(me, sha, buf);
   if (bad) { R2.remove(sha).catch(() => {}); return send(res, bad[0], { error: bad[1] }); }
-  db.r2[sha] = { size: buf.length, at: Date.now() }; save();
+  db.r2[sha] = { size: buf.length, at: Date.now(), used: Date.now() }; save();
   return send(res, 200, { ok: true });
 }
 
@@ -671,14 +727,32 @@ async function r2Upkeep() {
       }
     }
     for (const [sha, rec] of Object.entries(db.r2)) {
-      if (live.has(sha)) { if (rec.unusedSince) { delete rec.unusedSince; save(); } continue; }
+      // Kept while someone active wears it and someone needed it in the last 3 days (asked again if needed later).
+      const needed = Date.now() - (rec.used || rec.at || 0) < KEEP_UNUSED || wanted(sha);
+      if (live.has(sha) && needed) { if (rec.unusedSince) { delete rec.unusedSince; save(); } continue; }
+      if (live.has(sha) && !needed) { await R2.remove(sha); delete db.r2[sha]; save(); console.log(`R2: removed ${sha.slice(0, 12)}… (not needed for 3 days)`); continue; }
       if (!rec.unusedSince) { rec.unusedSince = Date.now(); save(); continue; }
       if (Date.now() - rec.unusedSince < R2_GRACE) continue;
       await R2.remove(sha); delete db.r2[sha]; save();
       console.log(`R2: removed unused ${sha.slice(0, 12)}…`);
     }
+    await sweepUntracked();
   } catch (e) { console.warn('R2 upkeep:', e.message); }
   finally { r2Busy = false; }
+}
+// Objects in the bucket the service doesn't track (an upload whose check never arrived, a crash
+// between upload and check, files from before a reset): deleted once they're an hour old. Hourly.
+let sweptAt = 0;
+async function sweepUntracked() {
+  if (!R2.list || Date.now() - sweptAt < SWEEP_EVERY) return;
+  sweptAt = Date.now();
+  let removed = 0, bytes = 0;
+  for (const obj of await R2.list()) {
+    const sha = (obj.key.match(/^files\/([a-f0-9]{64})$/) || [])[1];
+    if (!sha || db.r2[sha] || Date.now() - obj.modified < 60 * 60 * 1000) continue;
+    await R2.remove(sha); removed++; bytes += obj.size || 0;
+  }
+  if (removed) console.log(`R2: removed ${removed} untracked file${removed === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`);
 }
 if (R2) { setTimeout(r2Upkeep, 5000).unref(); setInterval(r2Upkeep, Math.min(30000, R2_GRACE)).unref(); }
 

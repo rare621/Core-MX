@@ -1,0 +1,74 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
+const { looksText } = require('../src/lib/online');
+
+// Synced files are uploaded only when someone needs them. Apps from before (no onDemand / pending
+// flags) keep working: they upload everything, and what they list counts as asked for.
+async function service(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-ondemand-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const url = `http://127.0.0.1:${port}`;
+  const call = (token) => async (method, route, body) => {
+    const res = await fetch(url + route, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    const data = await res.json(); assert.ok(res.ok, data.error); return data;
+  };
+  const reg = async (n, name) => { const r = await call()('POST', '/v1/register', { steamId: `765611980000003${n}0`, name }); return { ...r, c: call(r.token), put: (sha, buf) => fetch(`${url}/v1/files/${sha}`, { method: 'PUT', headers: { authorization: `Bearer ${r.token}` }, body: buf }) }; };
+  return { reg };
+}
+const paint = (fill) => { const b = Buffer.alloc(512, fill); b.write('PNT\0', 0, 'latin1'); b.writeUInt32LE(1, 104); return b; };
+const item = (buf, slot) => ({ slot, label: slot, value: slot, path: `rider/riders/default_mx/paints/${slot}.pnt`, sha256: crypto.createHash('sha256').update(buf).digest('hex'), size: buf.length });
+
+test('files are uploaded once someone needs them; older apps keep working', async (t) => {
+  const { reg } = await service(t);
+  const owner = await reg(1, 'Owner'), rider = await reg(2, 'Rider'), oldRider = await reg(3, 'OldRider');
+  for (const u of [owner, rider, oldRider]) await u.c('POST', '/v1/friends', { ids: [owner.id, rider.id, oldRider.id] });
+  const a = paint(1), b = paint(2);
+  const loadout = { bike: 'B', items: [item(a, 'suitPaint'), item(b, 'glovesPaint')], equipped: [], unavailable: [{ slot: 'tyres', label: 'Tyres: oem_mx', error: 'Comes with the bike', included: 'bike' }], onDemand: true };
+  assert.deepEqual((await owner.c('POST', '/v1/loadout', loadout)).missing, [], 'nobody needs them yet: nothing to upload');
+  assert.ok((await owner.c('GET', '/v1/health')).features.includes('on-demand'));
+
+  // A new app sees every item with whether it is uploaded, and whether the owner is online.
+  const seen = (await rider.c('GET', '/v1/loadouts?pending=1')).loadouts.find((l) => l.id === owner.id);
+  assert.deepEqual(seen.items.map((it) => it.available), [false, false]);
+  assert.equal(seen.online, false);
+  assert.deepEqual(seen.unavailable[0].included, 'bike', 'files that come with the bike stay marked');
+  // It asks for the one it needs: the owner is offline.
+  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256, 'f'.repeat(64)] })).states, { [item(a).sha256]: 'offline', ['f'.repeat(64)]: 'gone' });
+  // The owner comes online: told to upload exactly that file, and the rider now sees "uploading".
+  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [item(a).sha256]);
+  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256] })).states, { [item(a).sha256]: 'uploading' });
+  assert.deepEqual((await owner.c('POST', '/v1/loadout', loadout)).missing, [item(a).sha256]);
+  assert.ok((await owner.put(item(a).sha256, a)).ok);
+  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [], 'nothing left to upload');
+  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256] })).states, { [item(a).sha256]: 'ready' });
+
+  // An app from before on-demand lists only uploaded files, and the rest counts as asked for.
+  const old = (await oldRider.c('GET', '/v1/loadouts')).loadouts.find((l) => l.id === owner.id);
+  assert.deepEqual(old.items.map((it) => it.slot), ['suitPaint']);
+  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [item(b).sha256]);
+  // And an older owner app (no onDemand) is still asked for everything missing.
+  const legacy = await reg(4, 'LegacyOwner');
+  assert.equal((await legacy.c('POST', '/v1/loadout', { ...loadout, items: [item(paint(3), 'suitPaint')], onDemand: undefined })).missing.length, 1);
+});
+
+test('the overlay is told why a rider\'s item is not there yet', () => {
+  const text = looksText([{ id: 'r1', num: 2, bikeId: 'MX2OEM_2023_Kawasaki_KX250', name: 'Rare621', equipped: [{ slot: 'helmet', value: '2018_astars_sm_10' }] }], [], 1, {
+    r1: { items: [{ state: 'uploading', value: '2018_astars_sm_10' }, { state: 'offline', value: 'Black' }, { state: 'have', value: 'Kit' }],
+      unavailable: [{ included: 'bike', state: 'unavailable', label: 'Tyres: oem_mx' }, { included: 'bike', state: 'have', label: 'Bike paint: Stock' }, { error: 'This file is tied to your account. Your friend needs their own copy.', state: 'unavailable', label: 'Helmet: Locked' }] },
+  });
+  assert.deepEqual(text.trim().split('\n').filter((l) => l.startsWith('wait')), [
+    'wait\t2\tMX2OEM_2023_Kawasaki_KX250\tuploading\t2018_astars_sm_10',
+    'wait\t2\tMX2OEM_2023_Kawasaki_KX250\toffline\tBlack',
+    'wait\t2\tMX2OEM_2023_Kawasaki_KX250\tbike\toem_mx',
+    'wait\t2\tMX2OEM_2023_Kawasaki_KX250\tpaid\tLocked',
+  ]);
+});

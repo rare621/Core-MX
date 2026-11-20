@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', raceNumber: 526, bikeId: 'MX2OEM_2023_Kawasaki_KX250', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 20);
+  assert.equal(health.version, 21);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -156,5 +156,5 @@ test('an upload cut off mid-way does not crash the service', async (t) => {
   });
   assert.equal(child.exitCode, null, 'the service is still running');
   const health = await (await fetch(url + '/v1/health')).json();
-  assert.equal(health.version, 20);
+  assert.equal(health.version, 21);
 });
