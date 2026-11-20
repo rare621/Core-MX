@@ -519,6 +519,17 @@ function friendProgressHtml() {
   return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? 'Installing equipped files' : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
 }
 
+// A friend's Steam profile photo, or their first letter.
+function friendFace(f) {
+  const letter = esc((f.name || '?').slice(0, 1).toUpperCase());
+  return /^(https:\/\/avatars\.steamstatic\.com\/[0-9a-f]{40}_full\.jpg|data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+)$/.test(f.avatar || '') ? `<img class="fr-photo" src="${esc(f.avatar)}" alt="" data-letter="${letter}">` : letter;
+}
+// A photo that doesn't load shows the letter instead (inline handlers are blocked by the page policy).
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.classList.contains('fr-photo')) img.replaceWith(document.createTextNode(img.dataset.letter || '?'));
+}, true);
+
 function paidModsSummary(items) {
   const missing = items.filter((it) => it.state !== 'have' && /paid|store-protected/i.test(it.error || ''));
   if (!missing.length) return '';
@@ -538,17 +549,6 @@ function unsharedLabel(slot, equipped) {
   if (['helmet', 'boots', 'protection', 'rider'].includes(slot.slot) && value && !/^(default|default_mx|default_sm|full|neck|none)$/i.test(value)) return 'Not uploaded yet — still sharing';
   return value && /Paint$/.test(slot.slot) ? 'Not uploaded yet — still sharing' : 'Included with the game';
 }
-// A friend's Steam profile photo, or their first letter.
-function friendFace(f) {
-  const letter = esc((f.name || '?').slice(0, 1).toUpperCase());
-  return /^(https:\/\/avatars\.steamstatic\.com\/[0-9a-f]{40}_full\.jpg|data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+)$/.test(f.avatar || '') ? `<img class="fr-photo" src="${esc(f.avatar)}" alt="" data-letter="${letter}">` : letter;
-}
-// A photo that doesn't load shows the letter instead (inline handlers are blocked by the page policy).
-document.addEventListener('error', (e) => {
-  const img = e.target;
-  if (img instanceof HTMLImageElement && img.classList.contains('fr-photo')) img.replaceWith(document.createTextNode(img.dataset.letter || '?'));
-}, true);
-
 // MX2OEM_2023_Kawasaki_KX250 -> 2023 Kawasaki KX250
 function prettyBikeId(id) { return String(id || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' '); }
 async function openFriendDetails(friend) {
