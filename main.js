@@ -2145,7 +2145,13 @@ async function debugShots() {
   for (const s of steps) {
     if (s.js) { try { const v = await mainWin.webContents.executeJavaScript(s.js); if (v !== undefined) fs.appendFileSync(path.join(outDir, 'console.log'), `[js] ${JSON.stringify(v).slice(0, 4000)}\n`); } catch (e) { fs.appendFileSync(path.join(outDir, 'console.log'), `[js error] ${e.message}\n`); } }
     if (s.wait) await new Promise((r) => setTimeout(r, s.wait));
-    if (s.shot) { const img = await mainWin.webContents.capturePage(); fs.writeFileSync(path.join(outDir, s.shot + '.png'), img.toPNG()); }
+    if (s.shot) {
+      // rect: crop {x, y, width, height}; width: scale down; jpeg: quality (onboarding pictures).
+      let img = await mainWin.webContents.capturePage(s.rect || undefined);
+      if (s.width) img = img.resize({ width: s.width, quality: 'best' });
+      if (s.jpeg) fs.writeFileSync(path.join(outDir, s.shot + '.jpg'), img.toJPEG(s.jpeg));
+      else fs.writeFileSync(path.join(outDir, s.shot + '.png'), img.toPNG());
+    }
   }
   if (!process.env.MXB_DEBUG_KEEP) app.quit();
 }

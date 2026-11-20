@@ -529,7 +529,7 @@ async function renderFriends(c) {
     <div class="scroller">${tab === 'board' ? `<div class="fr-page">${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
       <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
       <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
-      ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
+      ${S.live.friendsErr && connected ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length
         ? `<div class="friends-list-toolbar"><div class="section-title">Friends · ${S.friends.length}</div><div class="search">${icon('search')}<input id="friendSearch" placeholder="Search friends…" aria-label="Search friends" value="${esc(S.live.friendQuery || '')}"></div></div><div class="fr-list">${visible.map(friendCard).join('') || '<div class="set-card muted">No friends match your search.</div>'}</div>${rows.length > pageSize ? `<button class="btn friends-show-all" data-friends-expand>${S.live.showAllFriends ? 'Show less' : `Show all ${rows.length} friends`}</button>` : ''}`
         : `<div class="fr-empty"><div class="fr-empty-ico">${icon('user')}</div><h3>Ride with your friends</h3>

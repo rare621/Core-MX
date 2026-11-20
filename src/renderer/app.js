@@ -140,6 +140,7 @@ function renderRail() {
     + `<span class="top-active-users" id="activeUsersCount" title="People active in CoreMX in the last two minutes"><i></i><span>${Number.isInteger(activeUsers) ? `${activeUsers} online` : 'Online —'}</span></span>`
     + `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
     + `<button class="top-icon ${S.view === 'settings' ? 'active' : ''}" data-view="settings" title="Settings">${icon('settings')}</button>`
+    + `<button class="top-icon" data-help title="Help for this page">${icon('info')}</button>`
     + `<button class="top-icon" data-notifications title="Mod notifications">${icon('bell')}${S.notifications.unread ? `<span class="rail-badge">${S.notifications.unread}</span>` : ''}</button>`
     + `<button class="top-avatar" data-view="friends" title="${esc((steam?.name || 'Steam account') + ' — friends, sync & status')}">${steam?.avatarData ? `<img src="${esc(steam.avatarData)}" alt="">` : icon('steam')}</button>`;
 }
@@ -195,6 +196,7 @@ function go(view) {
   closeDrawer();
   renderRail();
   render();
+  if (typeof maybeShowTip === 'function' && previousView !== view) maybeShowTip(view);
 }
 
 function render() {
@@ -2936,11 +2938,14 @@ document.addEventListener('click', async (e) => {
 });
 
 // ---------- first-run setup ----------
-const SETUP_STEPS = ['welcome', 'game', 'accounts', 'prefs', 'done'];
+// Setup: the welcome, your game folders, a short look at each part of CoreMX (onboarding.js), online
+// features, shop accounts and a couple of choices.
+const SETUP_STEPS = ['welcome', 'game', 'get', 'library', 'rider', 'play', 'friends', 'online', 'accounts', 'prefs', 'done'];
 let setupStep = 0;
 
 async function openSetup(start = 0) {
   setupStep = start;
+  try { if (S.live) S.live.status = await api.invoke('online:status'); } catch {}
   let el = $('#setup');
   if (!el) { el = document.createElement('div'); el.id = 'setup'; el.className = 'setup-overlay'; document.body.appendChild(el); }
   await refreshAccounts();
@@ -2969,6 +2974,10 @@ function drawSetup() {
       ${row('Mods folder', env.modsDir, env.modsFound, 'user', 'Where your mods live (Documents\\PiBoSo\\MX Bikes)')}
       ${row('Game install', s.gameInstallDir, !!env.gameExe, 'install', 'Used for the Launch button (your Steam library)')}
       ${env.modsFound ? `<div class="notice ok">${icon('check')}<div>Found <b>${S.items.length.toLocaleString()}</b> installed mods.</div></div>` : `<div class="notice warn">${icon('alert')}<div>Couldn't find your mods folder. Start MX Bikes once, or choose the folder.</div></div>`}`;
+  } else if (typeof OB_PAGES !== 'undefined' && OB_PAGES[step]) {
+    body = obPageHtml(step);
+  } else if (step === 'online') {
+    body = obOnlineHtml();
   } else if (step === 'accounts') {
     body = `<h2 class="setup-h">Link your accounts</h2><p class="setup-p">Optional — link the shops you buy mods from so your purchases show up ready to install. You can do this later in Settings.</p>
       <div data-accounts>${accountCardsHtml()}</div>`;
@@ -2977,10 +2986,10 @@ function drawSetup() {
       <div class="set-card" style="margin-bottom:10px"><label class="toggle"><input type="checkbox" data-pref="autoInstall" ${s.autoInstall ? 'checked' : ''}><span class="sw"></span><span><b>Install mods automatically</b><br><span class="muted">When the app is sure where a mod goes, it installs it straight away. Otherwise it asks.</span></span></label></div>
       <div class="set-card"><label class="toggle"><input type="checkbox" data-pref="autoImages" ${s.autoImages !== false ? 'checked' : ''}><span class="sw"></span><span><b>Find pictures for my mods</b><br><span class="muted">Fetch pictures for bikes and tracks from mxb-mods.com.</span></span></label></div>`;
   } else {
-    body = `<div class="setup-hero">${icon('check').replace('class="ico ', 'style="width:64px;height:64px;color:var(--ok)" class="ico ')}<h1>You're all set</h1><p>Your library is ready. Have fun out there.</p></div>`;
+    body = `<div class="setup-hero">${icon('check').replace('class="ico ', 'style="width:64px;height:64px;color:var(--ok)" class="ico ')}<h1>You're all set</h1><p>Your library is ready. Have fun out there.</p><p class="muted" style="margin-top:14px">Want a 30-second tour of where everything is? You can also click ${icon('info')} at the top any time for help on the page you're on.</p><button class="btn" data-setup="tour" style="margin-top:14px">${icon('sparkle')}Show me around</button></div>`;
     next = 'Open my library';
   }
-  el.innerHTML = `<div class="setup-card"><div class="setup-top">${dots}${setupStep < SETUP_STEPS.length - 1 ? '<button class="btn btn-ghost btn-sm" data-setup="skip">Skip setup</button>' : ''}</div>
+  el.innerHTML = `<div class="setup-card${typeof OB_PAGES !== 'undefined' && (OB_PAGES[step] || step === 'online') ? ' wide' : ''}"><div class="setup-top">${dots}${setupStep < SETUP_STEPS.length - 1 ? '<button class="btn btn-ghost btn-sm" data-setup="skip">Skip setup</button>' : ''}</div>
     <div class="setup-body">${body}</div>
     <div class="setup-foot">${setupStep > 0 && step !== 'done' ? '<button class="btn" data-setup="back">Back</button>' : '<span></span>'}<button class="btn btn-primary" data-setup="next">${next}</button></div></div>`;
 }
@@ -2995,10 +3004,11 @@ document.addEventListener('click', async (e) => {
   const a = b.dataset.setup;
   if (a === 'back') { setupStep = Math.max(0, setupStep - 1); drawSetup(); return; }
   if (a === 'next' && setupStep < SETUP_STEPS.length - 1) { setupStep++; drawSetup(); return; }
-  // finish or skip
-  S.env = await api.invoke('settings:set', { setupDone: true });
+  // finish or skip (a tour or tip starts on the library afterwards)
+  S.env = await api.invoke('settings:set', { setupDone: true, tipsSeen: { ...(S.env.settings.tipsSeen || {}), library: a === 'tour' || (S.env.settings.tipsSeen || {}).library } });
   $('#setup').remove();
   go('library');
+  if (a === 'tour' && typeof startTour === 'function') setTimeout(startTour, 400);
   if (S.env.modsFound) { await rescan(true); setTimeout(backgroundImages, 1000); }
 });
 
