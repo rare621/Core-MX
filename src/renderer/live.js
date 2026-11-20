@@ -358,10 +358,10 @@ async function renderFriends(c) {
   const displayKey = JSON.stringify([
     c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
     S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
-    (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address, f.avatar]),
+    (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.online ? 0 : f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address, f.avatar]),
     st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.defaultUrl, st?.service?.share,
     st?.serverShare, st?.plugin?.available, st?.plugin?.installed, st?.plugin?.needsUpdate,
-    st?.paintSync?.enabled, st?.paintSync?.busy, st?.paintSync?.at, st?.paintSync?.error,
+    st?.paintSync?.enabled, st?.paintSync?.error,
     st?.paintSync?.received, st?.paintSync?.friends, steam.name, steam.avatarData,
   ]);
   // Skip a redraw only while this exact Friends page is still on screen: #content is shared by
@@ -371,6 +371,9 @@ async function renderFriends(c) {
       const friend = S.friends[Number(label.dataset.friendStatus)];
       if (friend) label.textContent = statusOf(friend)[1];
     });
+    const ps = st?.paintSync || {}, syncText = $('[data-sync-label]', c), syncNow = $('[data-sync-now]', c);
+    if (syncText) syncText.textContent = syncLabel(ps);
+    if (syncNow) syncNow.disabled = !st?.service?.connected || !!ps.busy;
     return;
   }
   const scrollTop = $('.scroller', c)?.scrollTop || 0;
@@ -416,9 +419,12 @@ async function renderSync(c) {
   $('#serverShare', c)?.addEventListener('change', async (e) => { S.live.status = await api.invoke('online:serverShare', e.target.checked); renderSync(c); });
 }
 
+// The outfit sync status line; also updated in place, without redrawing the Friends page.
+function syncLabel(ps) { return ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${timeAgo(ps.at)}` : 'No sync completed yet'; }
+
 function friendSettingsHtml(st) {
   const ps = st?.paintSync || {}, connected = !!st?.service.connected;
-  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b>${ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${esc(timeAgo(ps.at))}` : 'No sync completed yet'}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
+  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b data-sync-label>${esc(syncLabel(ps))}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" data-sync-now ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
 }
 
 async function toggleFriendsPanel() {
