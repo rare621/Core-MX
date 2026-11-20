@@ -17,8 +17,8 @@ async function service(t) {
     child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
   });
   const url = `http://127.0.0.1:${port}`;
-  const call = (token) => async (method, route, body) => {
-    const res = await fetch(url + route, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+  const call = (token) => async (method, route, body, extra = {}) => {
+    const res = await fetch(url + route, { method, headers: { 'content-type': 'application/json', ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
     const data = await res.json(); assert.ok(res.ok, data.error); return data;
   };
   const reg = async (n, name) => { const r = await call()('POST', '/v1/register', { steamId: `765611980000003${n}0`, name }); return { ...r, c: call(r.token), put: (sha, buf) => fetch(`${url}/v1/files/${sha}`, { method: 'PUT', headers: { authorization: `Bearer ${r.token}` }, body: buf }) }; };
@@ -123,4 +123,19 @@ test('name-matched riders who left or cannot share are not offered', async (t) =
   const names = (await viewer.c('POST', '/v1/server-riders', { server: 'Busy', pending: true })).loadouts.map((l) => l.name);
   assert.ok(!names.includes('AwayRider'), 'their CoreMX shows them on another server');
   assert.ok(!names.includes('GoneRider'), 'CoreMX closed and nothing uploaded: could never be sent');
+});
+
+// A home-hosted game ends when its host leaves it, even while another player's game (stuck on a
+// "connection lost" screen) still reports it.
+test('a hosted game leaves the list when its host closes it', async (t) => {
+  const { reg } = await service(t);
+  const host = await reg(1, 'Host'), stuck = await reg(2, 'Stuck'), viewer = await reg(3, 'Viewer');
+  const on = (extra = {}) => ({ state: { inGame: true, inEvent: true, server: 'What!', trackId: 'Echo', riders: [{ name: 'Host' }], ...extra } });
+  await host.c('POST', '/v1/presence', on({ hosting: true, hostPort: 54210 }), { 'x-forwarded-for': '203.0.113.9' });
+  await stuck.c('POST', '/v1/presence', on());
+  const listed = async () => (await viewer.c('GET', '/v1/servers')).servers.some((s) => s.name === 'What!');
+  assert.equal(await listed(), true);
+  await host.c('POST', '/v1/presence', { state: { inGame: true, inEvent: false } });
+  await stuck.c('POST', '/v1/presence', on());
+  assert.equal(await listed(), false, 'host closed it: gone, whatever the stuck player reports');
 });

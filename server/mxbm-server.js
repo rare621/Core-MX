@@ -423,6 +423,8 @@ const routes = {
               observedAddress: observed, observedAt: fromGame ? Date.now() : observed ? prev.observedAt : null,
             };
           }
+          // Its host left (the game is closed): stays marked as theirs, so the list leaves it out.
+          if (prev.hosted && prev.hostedBy && prev.hostedBy !== me.id) return { address: null, hosted: true, hostedBy: prev.hostedBy, guessedAddress: prev.guessedAddress || null, observedAddress: null, observedAt: null };
           return { address: state.serverAddress || null, hosted: false };
         })(),
         name: state.server,
@@ -440,7 +442,10 @@ const routes = {
   'GET /v1/servers': async (req, body, me) => {
     const viewer = viewerIps(req, me);
     const now = Date.now();
-    const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL)
+    // A home-hosted game ends when its host leaves it: other players' games can sit on a 'connection
+    // lost' screen and keep reporting it, so the host's own report decides.
+    const hostGone = (s) => { if (!s.hosted || !s.hostedBy) return false; const p = presence.get(s.hostedBy); return !(p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name)); };
+    const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL && !hostGone(s))
       .map((s) => {
         const reporters = (s.seenBy || []).map((id) => ({ id, user: db.users[id], presence: presence.get(id) }))
           .filter(({ user, presence: p }) => user && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name));
