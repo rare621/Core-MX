@@ -2,7 +2,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const PAINT = /^bikes\/[^/]+\/paints\/(.+\.pnt)$/i;
 function previousOptions(record) {
-  const first = (record.files || []).find((f) => !f.startsWith('game:')) || '';
+  const first = (record.files || []).find((f) => !/^(game|user):/.test(f)) || '';
   const rider = first.match(/^rider\/riders\/([^/]+)\//i)?.[1];
   let kind = record.kind, paintTarget;
   if (PAINT.test(first)) { kind = 'bikePaint'; paintTarget = first.split('/')[1]; }
