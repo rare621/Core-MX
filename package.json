@@ -6,6 +6,7 @@
   "main": "main.js",
   "private": true,
   "author": "rare621",
+  "license": "MIT",
   "homepage": "https://coremx.app/",
   "repository": {
     "type": "git",
