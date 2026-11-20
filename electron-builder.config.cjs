@@ -17,6 +17,8 @@ module.exports = {
   extraResources: [
     { from: 'build/generated/online.config.json', to: 'online.config.json' },
     { from: 'plugin', to: 'plugin', filter: ['mxbm_presence.dlo', 'README.md'] },
+    // 7-Zip 26.06 (x64) from 7-zip.org, for unpacking .zip/.rar/.7z mods; License.txt is its licence.
+    { from: 'vendor/7zip', to: '7zip', filter: ['7z.exe', '7z.dll', 'License.txt'] },
   ],
   protocols: [{ name: 'CoreMX website and join links', schemes: ['mxbm'] }],
   win: {

@@ -30,8 +30,18 @@ function findExe(list) {
   return null;
 }
 
+// 7-Zip ships with CoreMX (vendor/7zip: 7z.exe + 7z.dll, packaged as resources/7zip), so .zip, .rar
+// and .7z mods unpack without installing anything. A 7-Zip the player installed is the fallback.
+function bundledSevenZip() {
+  return findExe([
+    process.resourcesPath && path.join(process.resourcesPath, '7zip', '7z.exe'),
+    path.join(__dirname, '..', '..', 'vendor', '7zip', '7z.exe'),
+  ]);
+}
+
 function detectSevenZip() {
   return findExe([
+    bundledSevenZip(),
     'C:\\Program Files\\7-Zip\\7z.exe',
     'C:\\Program Files (x86)\\7-Zip\\7z.exe',
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', '7-Zip', '7z.exe'),
@@ -116,4 +126,4 @@ function modsFolderFromGlobalIni(text) {
   return '';
 }
 
-module.exports = { modsFolderFromGlobalIni, steamRoot, detectGameUserDir, userDirScore, userDirCandidates, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };
+module.exports = { bundledSevenZip, modsFolderFromGlobalIni, steamRoot, detectGameUserDir, userDirScore, userDirCandidates, detectGameInstallDir, findGameExe, detectSevenZip, detectUnrar, detectTar, MXB_APPID };
