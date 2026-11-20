@@ -33,6 +33,13 @@ async function liveStatus(refresh) {
 api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
+  // Hosting while Windows Firewall drops MX Bikes: say so once per hosting session.
+  const fw = st?.upnp;
+  if (fw?.hosting && fw.firewall?.state === 'blocked' && !S.firewallWarned) {
+    S.firewallWarned = true;
+    toast(`<b>Windows Firewall is blocking MX Bikes</b>: riders joining your game will time out. Open <b>Settings → Plugins</b> and click <b>Allow MX Bikes</b>.`, 'err', 12000);
+  }
+  if (!fw?.hosting) S.firewallWarned = false;
   const activeCount = $('#activeUsersCount span');
   if (activeCount) activeCount.textContent = Number.isInteger(st?.service?.activeUsers) ? `${st.service.activeUsers} online` : 'Online —';
   if (S.friendDialog) S.friendDialog.progress();

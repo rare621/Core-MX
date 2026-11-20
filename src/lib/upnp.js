@@ -12,6 +12,8 @@ const SEARCH_TARGETS = ['urn:schemas-upnp-org:device:InternetGatewayDevice:1', '
 const IGD_ST = /InternetGatewayDevice|WAN(IP|PPP)Connection/i;
 const SERVICE_TYPES = ['urn:schemas-upnp-org:service:WANIPConnection:2', 'urn:schemas-upnp-org:service:WANIPConnection:1', 'urn:schemas-upnp-org:service:WANPPPConnection:1'];
 const DESCRIPTION = 'CoreMX hosting';
+// Home-network, carrier-shared (CGNAT) and link-local IPv4 ranges.
+const PRIVATE_IP = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)/;
 
 // The LOCATION header of an SSDP answer.
 function parseSsdp(text) {
@@ -138,7 +140,11 @@ function create({ location = null, lease = 3600 } = {}) {
       if (e.upnpCode === 725) await soap(gw, 'AddPortMapping', { ...args, NewLeaseDuration: 0 });
       else throw e;
     }
-    mapped = { port, localAddress: gw.localAddress, at: Date.now() };
+    // The router's own outside address: a home-network one means a second router (or the ISP's
+    // modem) sits in front, and the port must be opened there too.
+    let externalIp = null;
+    try { externalIp = (await soap(gw, 'GetExternalIPAddress', {})).match(/<NewExternalIPAddress>\s*([^<]*?)\s*<\/NewExternalIPAddress>/i)?.[1] || null; } catch {}
+    mapped = { port, localAddress: gw.localAddress, externalIp, doubleNat: !!externalIp && PRIVATE_IP.test(externalIp), at: Date.now() };
     return mapped;
   }
   async function close() {

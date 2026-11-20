@@ -28,7 +28,7 @@ function looksText(loadouts, reload, stamp) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -63,9 +63,30 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (upnp.state === 'open' && Date.now() - upnp.at < UPNP_RENEW) return;
     if (upnp.state === 'failed' && Date.now() - upnp.at < 5 * 60 * 1000) return;
     upnp.busy = true;
-    try { mapper = mapper || require('./upnp').create(); await mapper.open(HOST_PORT); upnp.state = 'open'; upnp.error = null; }
+    try { mapper = mapper || require('./upnp').create(); const m = await mapper.open(HOST_PORT); upnp.state = 'open'; upnp.error = null; upnp.doubleNat = !!(m && m.doubleNat); }
     catch (e) { upnp.state = 'failed'; upnp.error = e.message; mapper = portMapper; }
     upnp.busy = false; upnp.at = Date.now(); onChange(status());
+  }
+  // While hosting: is Windows Firewall letting riders in? (Checked when hosting starts, then every
+  // 5 minutes; Settings > Plugins can check any time.) A blocked game times out for everyone.
+  const fw = () => firewall || require('./firewall');
+  const gameExe = () => require('./paths').findGameExe(installDir());
+  async function checkFirewall() {
+    upnp.firewall = { ...(await fw().check(gameExe()).catch(() => ({ state: 'unknown', detail: 'Windows Firewall could not be read' }))), at: Date.now() };
+    onChange(status());
+    return upnp.firewall;
+  }
+  async function hostChecks(hosting) {
+    if (!hosting) { upnp.hostingSince = 0; return; }
+    if (!upnp.hostingSince) upnp.hostingSince = Date.now();
+    if (!upnp.firewall || upnp.firewall.at < upnp.hostingSince || Date.now() - upnp.firewall.at > 5 * 60 * 1000) await checkFirewall();
+  }
+  async function allowFirewall() {
+    const exe = gameExe();
+    if (!exe) throw new Error('Set the MX Bikes install folder in Settings first.');
+    await fw().allow(exe);
+    await checkFirewall();
+    return status();
   }
   async function setUpnp(on) {
     setCfg({ upnp: !!on });
@@ -213,6 +234,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     else if (!next?.inEvent && looksKey) clearLooks();
     if (changed) onChange(status());
     await syncPortMapping(!!stateForReport().hosting).catch(() => {});
+    await hostChecks(!!stateForReport().hosting).catch(() => {});
     await report();
   }
 
@@ -335,7 +357,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       presence: current,
       service: { url: c.url || '', defaultUrl: defaultUrl || '', connected: !!c.token, id: c.id || null, name: steamName() || c.name || '', share: c.share !== false, error: lastError, activeUsers },
       serverShare: c.serverShare !== false,
-      upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT },
+      upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT, doubleNat: !!upnp.doubleNat, firewall: upnp.firewall || null, hosting: !!upnp.hostingSince },
       paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length },
     };
   }
@@ -603,7 +625,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

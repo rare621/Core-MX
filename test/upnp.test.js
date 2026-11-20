@@ -77,3 +77,22 @@ test('the usual router addresses of home networks are asked directly', () => {
   assert.deepEqual(upnp.likelyRouters(nets), ['192.168.0.1', '192.168.0.254', '172.30.176.1', '172.30.176.254']);
   assert.deepEqual(upnp.likelyRouters({ x: [{ family: 'IPv4', address: '1921.168.0.5', internal: false }, { family: 'IPv4', address: '172.32.0.5', internal: false }] }), []);
 });
+
+test('a router behind another router or modem is reported (double NAT)', async () => {
+  const http2 = require('http');
+  const server = http2.createServer((req, res) => {
+    let body = ''; req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (req.method === 'GET') { res.writeHead(200); return res.end(DESC); }
+      const action = (req.headers.soapaction || '').replace(/"/g, '').split('#')[1];
+      if (action === 'GetSpecificPortMappingEntry') { res.writeHead(500); return res.end('<errorCode>714</errorCode>'); }
+      if (action === 'GetExternalIPAddress') { res.writeHead(200); return res.end('<s:Envelope><s:Body><u:R><NewExternalIPAddress>192.168.1.1</NewExternalIPAddress></u:R></s:Body></s:Envelope>'); }
+      res.writeHead(200); res.end('<s:Envelope><s:Body/></s:Envelope>');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const m = await upnp.create({ location: `http://127.0.0.1:${server.address().port}/desc.xml` }).open(54210);
+    assert.deepEqual([m.externalIp, m.doubleNat], ['192.168.1.1', true]);
+  } finally { server.close(); }
+});
