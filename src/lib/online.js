@@ -245,7 +245,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       raceNumber: s.inEvent ? (Number(s.raceNumber) || profileNumber || null) : null, bikeId: s.inEvent ? s.bikeId || '' : '',
       // (The plugin's server type is not a host flag: seen as 1 and 2 while hosting. Host World has
       // no port setting, so the game's default port 54210 is used.)
-      ...(hosting ? { hosting: true, hostPort: 54210, ...publicAddress() } : {}),
+      ...(hosting ? { hosting: true, hostPort: 54210, ...publicAddress(), ...(lanAddress ? { hostLan: `${lanAddress}:54210` } : {}) } : {}),
       riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
     };
   }
@@ -262,6 +262,15 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // MX Bikes servers are IPv4. When this PC reaches the service over IPv6, the service can't see
   // the IPv4 address friends must join, so a hosting app makes one request forced over IPv4.
   let hostIpAt = 0;
+  // This PC's address on its home network (the route a UDP socket would take; nothing is sent).
+  let lanAddress = null, lanAt = 0;
+  function localAddress() {
+    return new Promise((resolve, reject) => {
+      const socket = require('dgram').createSocket('udp4');
+      socket.on('error', (e) => { try { socket.close(); } catch {} reject(e); });
+      socket.connect(53, '1.1.1.1', () => { const { address } = socket.address(); socket.close(); resolve(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address) ? address : null); });
+    });
+  }
   function postOverIPv4(route) {
     const base = (cfg().url || '').replace(/\/+$/, '');
     if (!base || !cfg().token) return Promise.resolve(null);
@@ -282,7 +291,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const key = JSON.stringify(state);
     // The manager stays online even with MX Bikes closed. Keep its heartbeat alive.
     if (!force && key === lastSent && Date.now() - lastSentAt < REPORT_EVERY) return;
-    if (state.hosting && Date.now() - hostIpAt > 5 * 60 * 1000) { hostIpAt = Date.now(); await postOverIPv4('/v1/hostip').catch(() => {}); }
+    // Every app tells the service its IPv4 now and then (hosts for their address; riders so a host on
+    // their own home network can be joined at its local address), even when it talks over IPv6.
+    if (Date.now() - hostIpAt > 5 * 60 * 1000) { hostIpAt = Date.now(); await postOverIPv4('/v1/hostip').catch(() => {}); }
+    if (state.hosting && Date.now() - lanAt > 5 * 60 * 1000) { lanAt = Date.now(); lanAddress = await localAddress().catch(() => null); }
     try {
       const result = await call('POST', '/v1/presence', { name: steamName() || c.name || '', share: c.share !== false, state });
       activeUsers = Number.isInteger(result.activeUsers) ? result.activeUsers : null;

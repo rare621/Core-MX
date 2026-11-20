@@ -26,7 +26,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
   await plugin.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Test Server', trackId: 't', riderName: 'GameAlias', raceNumber: 526, bikeId: 'MX2OEM_2023_Kawasaki_KX250', riders: [{ name: 'GameAlias' }, { name: 'CaptiveDuck | CRMX' }, { name: 'Shy' }] } });
   await shy.c('POST', '/v1/servershare', { share: false });
   const health = await me.c('GET', '/v1/health');
-  assert.equal(health.version, 19);
+  assert.equal(health.version, 20);
   assert.equal(health.activeUsers, 1);
   const listed = await me.c('GET', '/v1/servers');
   assert.equal(listed.servers[0].riders[0].coremxName, 'PluginRider');
@@ -82,6 +82,22 @@ test('a Host World session gets the host public IP and the game port as its addr
   const hosted = (await call(host.token)('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
   assert.equal(hosted.address, '203.0.113.9:54210');
   assert.equal(hosted.addressObserved, false);
+  // Riders on the host's own home network (same public IP) get the host's local address: their router
+  // usually can't connect them to its own public address. Everyone else gets the public one.
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210, hostLan: '192.168.0.37:54210' } });
+  const housemate = await call()('POST', '/v1/register', { steamId: '76561198000000014', name: 'Housemate' });
+  const atHome = (await call(housemate.token, { 'x-forwarded-for': '203.0.113.9' })('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
+  assert.deepEqual([atHome.address, atHome.sameNetwork], ['192.168.0.37:54210', true]);
+  const away = (await call(housemate.token, { 'x-forwarded-for': '198.51.100.80' })('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee');
+  assert.deepEqual([away.address, away.sameNetwork], ['203.0.113.9:54210', false]);
+  // A housemate whose app talks over IPv6 is matched by the IPv4 it reported on /v1/hostip.
+  await call(housemate.token, { 'x-forwarded-for': '203.0.113.9' })('POST', '/v1/hostip', {});
+  assert.equal((await call(housemate.token, { 'x-forwarded-for': '2001:db8::9' })('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee').address, '192.168.0.37:54210');
+  // Only home-network addresses are accepted as the local one.
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210, hostLan: '8.8.8.8:54210' } });
+  assert.equal((await call(housemate.token, { 'x-forwarded-for': '203.0.113.9' })('GET', '/v1/servers')).servers.find((s) => s.name === 'joeeeee').address, '203.0.113.9:54210');
+  // A carrier-shared address is never a server address.
+  await viaProxy('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', hosting: true, hostPort: 54210 } });
   const rider = await call()('POST', '/v1/register', { steamId: '76561198000000013', name: 'JoinedRider' });
   const riderCall = call(rider.token);
   const riderState = { inGame: true, inEvent: true, server: 'joeeeee', trackId: 'ZD - Echo Valley MX', serverAddress: '198.51.100.22:61234' };
@@ -140,5 +156,5 @@ test('an upload cut off mid-way does not crash the service', async (t) => {
   });
   assert.equal(child.exitCode, null, 'the service is still running');
   const health = await (await fetch(url + '/v1/health')).json();
-  assert.equal(health.version, 19);
+  assert.equal(health.version, 20);
 });
