@@ -35,7 +35,7 @@ What happens then:
 - Downloads get a link to R2 that works for 5 minutes. Older app versions follow it too.
 - A file in R2 that nobody has equipped for two minutes is deleted (`--unusedseconds`, default 120). A rider who has not opened CoreMX for 5 days (`--inactivedays`, default 5) no longer counts, so their files are deleted too. When they come back, or equip an old paint again, the app uploads it again by itself.
 - Files are uploaded only when someone needs them (service v21 with app 1.0.47+): a rider missing a file asks for it, and the owner's CoreMX uploads it on its next check-in (within about 30 seconds). Older apps still upload everything and receive everything.
-- A file nobody has needed for 3 days is deleted even while it is worn (`--keepdays`, default 3); it is asked for and uploaded again when someone needs it.
+- A file nobody has needed for a day is deleted even while it is worn (`--keepdays`, default 1); it is asked for and uploaded again when someone needs it.
 - Every hour (`--sweepminutes`, default 60) the service lists the bucket and deletes objects it does not track (an upload whose check never arrived) once they are an hour old.
 - Files that come with a bike (its OEM tyres, liveries inside the bike's package) are not uploaded.
 - The storage safety cap (`--maxstore`) is 100 GB with R2 (4 GB without). Only equipped files count, so normal use stays far below it. The service window warns at 80% full. At most, 100 GB costs about $1.35 a month in R2.
