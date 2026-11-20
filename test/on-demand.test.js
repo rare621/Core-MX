@@ -93,3 +93,34 @@ test('a server rider list does not jump between reports', async (t) => {
   await b.c('POST', '/v1/presence', join(['Second']));
   assert.deepEqual((await other.c('GET', '/v1/servers')).servers.find((s) => s.name === 'Public').riders.map((r) => r.name), ['First', 'X', 'Y']);
 });
+
+// Nothing waits forever: a file asked for that its owner's CoreMX never sends becomes 'stalled' after
+// 3 minutes (no more fast re-checks; the normal sync keeps asking), and an owner with CoreMX closed
+// shows as 'offline' (not waited for).
+test('uploads that never come stop being waited for', async () => {
+  const { requestMissing } = require('../src/lib/paintsync');
+  const sha = 'c'.repeat(64), other = 'd'.repeat(64);
+  const report = () => [{ items: [{ sha256: sha, state: 'waiting' }, { sha256: other, state: 'waiting' }] }];
+  const call = async () => ({ states: { [sha]: 'uploading', [other]: 'offline' } });
+  const t0 = Date.parse('2026-11-20T10:00:00Z');
+  const first = report(); await requestMissing(call, first, t0);
+  assert.deepEqual(first[0].items.map((it) => it.state), ['uploading', 'offline']);
+  const later = report(); await requestMissing(call, later, t0 + 2 * 60 * 1000);
+  assert.equal(later[0].items[0].state, 'uploading', 'still within 3 minutes');
+  const stalled = report(); await requestMissing(call, stalled, t0 + 4 * 60 * 1000);
+  assert.equal(stalled[0].items[0].state, 'stalled');
+});
+
+// Riders matched only by name on a server's rider list (no plugin) are left out when their CoreMX shows
+// them on another server, or is closed with files not uploaded (nobody could send them).
+test('name-matched riders who left or cannot share are not offered', async (t) => {
+  const { reg } = await service(t);
+  const reporter = await reg(1, 'Reporter'), gone = await reg(2, 'GoneRider'), away = await reg(3, 'AwayRider'), viewer = await reg(4, 'Viewer');
+  const kit = item(paint(9), 'suitPaint');
+  for (const u of [gone, away]) await u.c('POST', '/v1/loadout', { bike: 'B', items: [kit], equipped: [], unavailable: [], onDemand: true });
+  await away.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Elsewhere', trackId: 'T', riders: [] } });
+  await reporter.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Busy', trackId: 'T', riders: [{ name: 'GoneRider' }, { name: 'AwayRider' }, { name: 'Reporter' }] } });
+  const names = (await viewer.c('POST', '/v1/server-riders', { server: 'Busy', pending: true })).loadouts.map((l) => l.name);
+  assert.ok(!names.includes('AwayRider'), 'their CoreMX shows them on another server');
+  assert.ok(!names.includes('GoneRider'), 'CoreMX closed and nothing uploaded: could never be sent');
+});

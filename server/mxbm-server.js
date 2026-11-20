@@ -603,8 +603,12 @@ const routes = {
     for (const [id, u] of Object.entries(db.users)) {
       if (id === me.id || !u.loadout || u.sharePaints === false || u.shareServer === false) continue;
       const p = presence.get(id);
-      const here = !!(p && now - p.at < ONLINE_TTL && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
-      const byName = !here && nameOnList(u.name, riderNames);
+      const online = !!(p && now - p.at < ONLINE_TTL);
+      const here = !!(online && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
+      // Matched only by name on the server's rider list (no plugin): skipped when their CoreMX shows
+      // them on another server, or is closed with files not uploaded (they could never be sent).
+      const elsewhere = online && p.state && p.state.inEvent && serverKey(p.state.server || '') !== key;
+      const byName = !here && !elsewhere && nameOnList(u.name, riderNames) && (online || (u.loadout.items || []).every((it) => haveFile(it.sha256)));
       if (!here && !byName) continue;
       out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: itemsFor(u, body.pending === true), online: !!(p && now - p.at < ONLINE_TTL) });
       if (out.length >= 32) break;
