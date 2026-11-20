@@ -285,6 +285,13 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // hostsetup_name in the profile). The service then uses the host's public IP; any address the
     // plugin read from the game is not the address friends need, so it is not sent.
     const hosting = !!(s.inEvent && s.server && hostName && hostName.toLowerCase() === String(s.server).trim().toLowerCase());
+    // On a server you didn't host and the game has received nothing for 30 seconds: the server closed or
+    // dropped you (the game may sit on a "connection lost" screen, still in the event). Reported as off
+    // the server so it doesn't stay on the Online list. Hosting is left out: an empty lobby is quiet.
+    if (!hosting && s.inEvent && s.server && connectionLost()) {
+      return { inGame: gameRunning, inEvent: false, server: null, serverAddress: null, serverAddressSource: null, trackId: '', trackName: '', category: '', bikeName: '', type: 0, session: null,
+        riderName, riderProfile, gameName: '', raceNumber: null, bikeId: '', riders: [], connectionLost: true };
+    }
     return {
       inGame: gameRunning, inEvent: !!s.inEvent,
       server: s.server || null, serverAddress: hosting ? null : s.serverAddress || null,
@@ -304,6 +311,14 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     };
   }
 
+  // The plugin's network status (mxbm_stun.json, written every 10 s): rxAgo = ms since the game last
+  // received anything. Only a fresh status from a plugin that reports it counts.
+  function connectionLost() {
+    try {
+      const st = JSON.parse(fs.readFileSync(path.join(userDir(), 'mxbm_stun.json'), 'utf8'));
+      return Number.isFinite(st.rxAgo) && st.rxAgo >= 30000 && Date.now() - st.at < 30000;
+    } catch { return false; }
+  }
   // The game's outside IP:port as seen by a STUN server (the plugin asks from the game's own socket
   // while hosting); routers often map 54210 to another outside port, which is what friends must use.
   function publicAddress() {

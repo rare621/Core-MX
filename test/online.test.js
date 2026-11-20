@@ -298,3 +298,28 @@ test('hosting opens the router port; leaving the game or turning it off closes i
   await f.client.stop();
   assert.deepEqual(log, ['open 54210', 'close', 'open 54210', 'close'], 'closing CoreMX removes it');
 });
+
+// A server that closed or dropped you: the game can sit on a "connection lost" screen, still in the
+// event, but it receives nothing. After 30 seconds of silence CoreMX reports you as off the server.
+test('a player whose game stopped receiving is reported off the server', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-lost-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'profiles', 'Rider'), { recursive: true });
+  await fs.writeFile(path.join(root, 'global.ini'), '[profile]\nlastprofile=Rider\n');
+  await fs.writeFile(path.join(root, 'profiles', 'Rider', 'profile.ini'), '[ui]\nhostsetup_name=My Track Day\n');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => { if (String(url).endsWith('/v1/presence')) sent.push(JSON.parse(options.body).state); return new Response('{}'); });
+  const net = (rxAgo) => fs.writeFile(path.join(root, 'mxbm_stun.json'), JSON.stringify({ v: 1, at: Date.now(), rxAgo }));
+  const on = (server) => fs.writeFile(path.join(root, 'mxbm_presence.json'), JSON.stringify({ inEvent: 1, server, rider: 'Rider' }));
+  const f = fixture({ userDir: () => root, isGameRunning: async () => true, portMapper: { open: async () => {}, close: async () => {} }, firewall: { check: async () => ({ state: 'allowed' }) }, resolveServerAddress: async () => null });
+  await on('Public server'); await net(200);
+  await f.client.refresh();
+  assert.equal(sent.at(-1).server, 'Public server', 'receiving: on the server');
+  await net(45000);
+  await f.client.refresh();
+  assert.deepEqual([sent.at(-1).inEvent, sent.at(-1).server, sent.at(-1).connectionLost], [false, null, true], 'silent for 45 s: off it');
+  // Hosting: an empty lobby is quiet, so silence doesn't count.
+  await on('My Track Day');
+  await f.client.refresh();
+  assert.equal(sent.at(-1).server, 'My Track Day');
+});

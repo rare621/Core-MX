@@ -595,6 +595,24 @@ static int stunReply(const unsigned char *b, int n) {
 /* For mxbm_stun.json: local ports the game received on, and what the STUN thread did. */
 static volatile unsigned g_stunPorts[6]; static volatile LONG g_stunPortN = 0;
 static volatile LONG g_stunSends = 0, g_stunReplies = 0, g_stunCalls = 0; static volatile int g_stunSendResult = 0;
+/* When the game last received anything over the network. Connected to a server, it receives many
+ * packets a second, even standing still in the pits; when the server closes or drops you, they stop.
+ * CoreMX uses this (rxAgo in mxbm_stun.json) to stop listing a server you are no longer on. */
+static volatile unsigned long long g_lastRx = 0;
+/* Only packets from the server you are on count (the game may also hear from the master server):
+ * its IPv4 (as 4 bytes in a uint32, from the game's connection record), and when one last came. */
+static volatile unsigned g_serverIp = 0;
+static volatile unsigned long long g_lastServerRx = 0;
+static unsigned ipOf(const struct sockaddr *a) {
+  if (!a) return 0;
+  if (a->sa_family == AF_INET) { unsigned v; memcpy(&v, &((const struct sockaddr_in *)a)->sin_addr, 4); return v; }
+  if (a->sa_family == AF_INET6) {
+    const unsigned char *b = ((const struct sockaddr_in6 *)a)->sin6_addr.s6_addr; unsigned v; static const unsigned char pre[12] = { 0,0,0,0,0,0,0,0,0,0,0xff,0xff };
+    if (memcmp(b, pre, 12) != 0) return 0;
+    memcpy(&v, b + 12, 4); return v;
+  }
+  return 0;
+}
 static int WINAPI hk_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen) {
   InterlockedIncrement(&g_stunCalls);
   for (;;) {
@@ -610,6 +628,7 @@ static int WINAPI hk_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
       }
     }
     if (r >= 20 && g_stunPending && s == g_gameSock && stunReply((const unsigned char *)buf, r)) { InterlockedIncrement(&g_stunReplies); continue; }
+    if (r > 0) { g_lastRx = nowMs(); if (g_serverIp && from && ipOf(from) == g_serverIp) g_lastServerRx = g_lastRx; }
     return r;
   }
 }
@@ -620,13 +639,20 @@ static DWORD WINAPI stunThread(LPVOID unused) {
   unsigned long long lastStatus = 0;
   while (!g_hookStop) {
     Sleep(1000);
+    {
+      /* The server you are on (refreshed every second; 0 when not on one or unknown). */
+      char nm[64], ad[32]; unsigned a, b, c, d, ip = 0;
+      if (S.inEvent && connectedServer(nm, sizeof nm, ad, sizeof ad) && sscanf(ad, "%u.%u.%u.%u", &a, &b, &c, &d) == 4 && a < 256 && b < 256 && c < 256 && d < 256)
+        ip = a | (b << 8) | (c << 16) | (d << 24);
+      if (ip != g_serverIp) { g_serverIp = ip; g_lastServerRx = ip ? nowMs() : 0; }   /* a new server: count from now */
+    }
     if (nowMs() - lastStatus >= 10000) {
       /* Status for diagnosing hosting addresses on a player's PC (no addresses in it). */
-      char o[400], ports[80] = ""; LONG i;
+      char o[480], ports[80] = ""; LONG i;
       lastStatus = nowMs();
       for (i = 0; i < g_stunPortN && i < 6; i++) sprintf(ports + strlen(ports), "%s%u", i ? "," : "", g_stunPorts[i]);
-      sprintf(o, "{\"v\":1,\"at\":%llu,\"hooked\":%s,\"receives\":%ld,\"ports\":[%s],\"gameSocket\":%s,\"inEvent\":%d,\"sends\":%ld,\"lastSend\":%d,\"replies\":%ld}",
-              nowMs(), g_iatRecv ? "true" : "false", (long)g_stunCalls, ports, g_gameSock ? "true" : "false", S.inEvent, (long)g_stunSends, g_stunSendResult, (long)g_stunReplies);
+      sprintf(o, "{\"v\":1,\"at\":%llu,\"rxAgo\":%lld,\"hooked\":%s,\"receives\":%ld,\"ports\":[%s],\"gameSocket\":%s,\"inEvent\":%d,\"sends\":%ld,\"lastSend\":%d,\"replies\":%ld}",
+              nowMs(), g_serverIp && g_lastServerRx ? (long long)(nowMs() - g_lastServerRx) : -1LL, g_iatRecv ? "true" : "false", (long)g_stunCalls, ports, g_gameSock ? "true" : "false", S.inEvent, (long)g_stunSends, g_stunSendResult, (long)g_stunReplies);
       writeSmall("mxbm_stun.json", o);
     }
     if (!g_gameSock || !S.inEvent || nowMs() - last < 120000) continue;
@@ -1365,6 +1391,28 @@ static const GameList *ovModelList(int row) {
   }
 }
 
+/* The first reason code CoreMX gave for this rider's missing items (uploading first), or NULL. */
+static const char *riderWaitCode(const LookStatus *st) {
+  static const char *const ORDER[5] = { "uploading", "offline", "bike", "paid", "failed" };
+  int k, i;
+  lock();
+  for (k = 0; k < 5; k++) for (i = 0; i < g_waitCount; i++)
+    if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { unlock(); return ORDER[k]; }
+  unlock();
+  return NULL;
+}
+/* The rider's vehicle record in your game (0 if they aren't on track). */
+static unsigned char *riderRecord(unsigned char *base, const LookStatus *st) {
+  int v;
+  for (v = 0; v < 50; v++) {
+    unsigned char *c = base + 0xF4EE20 + (size_t)v * 0x5B24; char b2[33];
+    if (*(const int *)c != 1 || *(const int *)(c + 0x0C) != st->num) continue;
+    memcpy(b2, c + 0x30, 32); b2[32] = 0;
+    if (_stricmp(b2, st->bike) == 0) return c;
+  }
+  return 0;
+}
+
 /* The most useful reason CoreMX gave for this rider's missing items (uploading first). */
 static int riderWait(const LookStatus *st, char *line) {
   static const char *const ORDER[5] = { "uploading", "offline", "bike", "paid", "failed" };
@@ -1473,8 +1521,8 @@ static void ovSave(unsigned char *r) {
 
 
 static char g_ovMsg[100], g_fontName[64];
-static SPluginQuad_t g_quads[96];
-static SPluginString_t g_strings[64];
+static SPluginQuad_t g_quads[160];
+static SPluginString_t g_strings[128];
 static int g_nq, g_ns;
 
 /* Copies the game's font next to the plugin (once) and registers it. */
@@ -1674,7 +1722,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       else if (r && !locked) {
         if (h->kind == 2) {
           int row = cards[h->value].row;
-          g_ovCard = h->value; g_ovPicker = g_ovPicker == row ? -1 : row;
+          g_ovCard = h->value; g_ovPicker = g_ovPicker == row ? -1 : row; g_ovRiderNum = 0;
           g_ovScroll = g_ovSel[row] > OV_PICKER_ROWS / 2 ? g_ovSel[row] - OV_PICKER_ROWS / 2 : 0;
         }
         else if (h->kind == 3 && g_ovPicker >= 0) ovSetValue(base, r, g_ovPicker, h->value);
@@ -1794,8 +1842,35 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     sprintf(line, "Click or Up/Down, Left/Right   Tab switch   Enter save   F%d close", g_ovKey - VK_F1 + 1);
     ovText(line, x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
 
-    /* Riders tab: the chosen rider's gear beside the panel (view only). */
-    if (g_ovTab == 2 && g_ovRiderNum) {
+    /* Outfit and Bike tabs: a compact Riders window under the panel, to see at a glance who is
+     * synced. A click shows that rider's gear beside the panel. */
+    if (g_ovTab != 2) {
+      int list[6], n = presentRiders(list, 6), q;
+      const float wy0 = y1 + 0.012f, rowH = 0.032f;
+      float wy1 = wy0 + 0.042f + (n ? n * rowH : 0.030f) + 0.008f, ry = wy0 + 0.040f;
+      ovQuad(x0 + 0.004f, wy0 + 0.007f, x1 + 0.004f, wy1 + 0.007f, 0x55000000);
+      ovQuad(x0, wy0, x1, wy1, 0xEE141418);
+      ovBox(x0, wy0, x1, wy1, 0.0015f, 0x30FFFFFF);
+      ovText("RIDERS", x0 + 0.014f, wy0 + 0.012f, 0.0135f, 0, 0xFF8C8C8C);
+      if (!n) ovText("No other CoreMX riders here yet.", x0 + 0.014f, ry, 0.0135f, 0, 0xFFB0B0B0);
+      for (q = 0; q < n; q++, ry += rowH) {
+        LookStatus *st = &g_lookStatus[list[q]];
+        unsigned char *vr = riderRecord(base, st);
+        int waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
+        const char *code = st->missing ? riderWaitCode(st) : NULL;
+        const char *status = !vr ? "Not on track" : waiting ? "Pits & back to apply" : st->missing ? (code && !strcmp(code, "uploading") ? "Uploading..." : "Missing items") : "Up to date";
+        unsigned long dot = !vr ? 0xFF707070 : waiting ? 0xFFFFB46C : st->missing ? 0xFF4FC3FF : 0xFF6CE07A;
+        int open = g_ovRiderNum == st->num && _stricmp(g_ovRiderBike, st->bike) == 0;
+        if (open) ovQuad(x0 + 0.008f, ry - 0.004f, x1 - 0.008f, ry + rowH - 0.006f, 0x24FFFFFF);
+        ovQuad(x0 + 0.014f, ry + 0.006f, x0 + 0.020f, ry + 0.016f, dot);
+        if (st->name[0]) sprintf(line, "%.24s  #%d", st->name, st->num); else sprintf(line, "#%d", st->num);
+        ovText(line, x0 + 0.026f, ry + 0.002f, 0.0140f, 0, 0xFFFFFFFF);
+        ovText(status, x1 - 0.014f, ry + 0.003f, 0.0130f, 2, dot);
+        ovHit(x0 + 0.008f, ry - 0.004f, x1 - 0.008f, ry + rowH - 0.006f, 7, list[q]);
+      }
+    }
+    /* A rider's gear beside the panel (view only), from the Riders tab or the Riders window. */
+    if (g_ovRiderNum && g_ovPicker < 0) {
       Look L;
       if (!riderLook(g_ovRiderNum, g_ovRiderBike, &L)) g_ovRiderNum = 0;   /* they left */
       else {
