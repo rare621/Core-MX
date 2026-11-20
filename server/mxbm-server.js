@@ -147,7 +147,7 @@ const WANT_TTL = 10 * 60 * 1000;                  // an older app's implicit req
 // the file is never deleted while they still need it (an interrupted download, a restart). It ends
 // by itself after PENDING_MAX if they never come back. Kept in the database across restarts.
 const PENDING_MAX = 2 * 24 * 60 * 60 * 1000;
-const KEEP_UNUSED = (Number(arg('keepdays', 3)) > 0 ? Number(arg('keepdays', 3)) : 3) * 24 * 60 * 60 * 1000; // an R2 file nobody has needed for 3 days is deleted
+const KEEP_UNUSED = (Number(arg('keepdays', 1)) > 0 ? Number(arg('keepdays', 1)) : 1) * 24 * 60 * 60 * 1000; // an R2 file nobody has needed for a day is deleted (--keepdays)
 // db.wants: sha -> { <rider id or "*" for older apps>: until }
 function noteUse(sha) {
   const rec = db.r2 && db.r2[sha];
