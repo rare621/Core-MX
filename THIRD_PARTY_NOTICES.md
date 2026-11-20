@@ -55,3 +55,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+## 7-Zip (www.7-zip.org)
+
+CoreMX includes 7-Zip 26.06 (x64), unchanged (`7z.exe` and `7z.dll`, installed as `resources/7zip`),
+to unpack .zip, .rar and .7z mods. Copyright (C) 1999-2026 Igor Pavlov. 7-Zip is free software under
+the GNU LGPL, with the BSD 3-clause license for some parts and the unRAR license restriction for the
+RAR decompression code: that code may not be used to create a RAR (WinRAR) compatible archiver.
+The full license is in `resources/7zip/License.txt`. Source code: https://www.7-zip.org/

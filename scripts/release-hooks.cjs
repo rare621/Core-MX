@@ -29,6 +29,7 @@ async function prepareResources(context) {
 async function verifyPackage({ appOutDir, packager }) {
   if (!fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'mxbm_presence.dlo'))) throw new Error('Release is missing the CoreMX game plugin');
   if (fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'frostmod'))) throw new Error('Release must not bundle FrostMod');
+  for (const name of ['7z.exe', '7z.dll', 'License.txt']) if (!fs.existsSync(path.join(appOutDir, 'resources', '7zip', name))) throw new Error(`Release is missing the bundled 7-Zip (${name})`);
   const archive = path.join(appOutDir, 'resources', 'app.asar');
   const files = asar.listPackage(archive).map((name) => name.replace(/\\/g, '/').replace(/^\//, ''));
   const forbidden = files.filter((name) => /^(?:\.git|\.tmp|test|scripts|server|dist|docs|build|CODEX_NOTES\.md|MODDING_PLAN\.md|online\.config\.json)(?:\/|$)/i.test(name)

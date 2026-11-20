@@ -3119,7 +3119,7 @@ async function renderSettings(c) {
       <label class="toggle"><input type="checkbox" id="autoImages" ${s.autoImages !== false ? 'checked' : ''}><span class="sw"></span><span>Automatically find pictures for my mods</span></label></div>
     <div class="set-card"><h3>Extraction tools</h3><p>Used to unpack .zip / .rar / .7z downloads.</p>
       <div class="tool-list">
-        <div>${t.sevenZip ? `<span style="color:var(--ok)">${icon('check')}</span>7-Zip <span class="muted mono">${esc(t.sevenZip)}</span>` : `<span style="color:var(--warn)">${icon('alert')}</span>7-Zip not found — <a href="#" data-open="https://www.7-zip.org/">get 7-Zip</a> for best .rar/.7z support`}</div>
+        <div>${t.sevenZip ? `<span style="color:var(--ok)">${icon('check')}</span>7-Zip ${/[\\/](?:resources|vendor)[\\/]7zip[\\/]7z\.exe$/i.test(t.sevenZip) ? '<span class="muted">(built into CoreMX)</span>' : `<span class="muted mono">${esc(t.sevenZip)}</span>`}` : `<span style="color:var(--warn)">${icon('alert')}</span>7-Zip not found — <a href="#" data-open="https://www.7-zip.org/">get 7-Zip</a> for best .rar/.7z support`}</div>
         <div>${t.unrar ? `<span style="color:var(--ok)">${icon('check')}</span>WinRAR UnRAR <span class="muted mono">${esc(t.unrar)}</span>` : `<span class="muted">${icon('info')}</span><span class="muted">WinRAR not installed (optional)</span>`}</div>
         <div>${t.tar ? `<span style="color:var(--ok)">${icon('check')}</span>Windows built-in tar <span class="muted mono">${esc(t.tar)}</span>` : ''}</div>
       </div></div>
