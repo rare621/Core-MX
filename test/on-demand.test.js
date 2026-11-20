@@ -139,3 +139,34 @@ test('a hosted game leaves the list when its host closes it', async (t) => {
   await stuck.c('POST', '/v1/presence', on());
   assert.equal(await listed(), false, 'host closed it: gone, whatever the stuck player reports');
 });
+
+// A home-hosted game closed and started again under the same name: a player stuck on the old game's
+// "connection lost" screen (an older CoreMX keeps reporting it) doesn't mix into the new game.
+test('a restarted hosted game is not mixed with players stuck on the old one', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-restart-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--hostgraceseconds', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = (token) => async (method, route, body, extra = {}) => {
+    const res = await fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { 'content-type': 'application/json', ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    return (await res.json());
+  };
+  const reg = async (n, name) => { const r = await call()('POST', '/v1/register', { steamId: `7656119800000006${n}`, name }); return call(r.token); };
+  const host = await reg(1, 'Host'), stuck = await reg(2, 'Stuck'), viewer = await reg(3, 'Viewer');
+  const game = (riders, extra = {}) => ({ state: { inGame: true, inEvent: true, server: 'What!', trackId: 'Echo', riders: riders.map((name) => ({ name })), ...extra } });
+  const ip = { 'x-forwarded-for': '203.0.113.9' };
+  await host('POST', '/v1/presence', game(['Host', 'Stuck'], { hosting: true, hostPort: 54210 }), ip);
+  await stuck('POST', '/v1/presence', game(['Host', 'Stuck'], { serverAddress: '203.0.113.9:54210', serverAddressSource: 'game' }));
+  // The host closes the game (stuck stays "in" it) and starts a new one with the same name.
+  await host('POST', '/v1/presence', { state: { inGame: true, inEvent: false } }, ip);
+  await new Promise((r) => setTimeout(r, 50));
+  await host('POST', '/v1/presence', game(['Host', 'NewRider'], { hosting: true, hostPort: 54210 }), ip);
+  await stuck('POST', '/v1/presence', game(['Host', 'Stuck'], { serverAddress: '198.51.100.1:61000', serverAddressSource: 'game' }));
+  const what = (await viewer('GET', '/v1/servers')).servers.find((s) => s.name === 'What!');
+  assert.deepEqual(what.riders.map((r) => r.name), ['Host', 'NewRider'], 'the new game\'s riders');
+  assert.equal(what.address, '203.0.113.9:54210', 'not the stuck player\'s old address');
+});
