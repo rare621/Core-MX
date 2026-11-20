@@ -1,11 +1,18 @@
 /*
- * MX Bikes Manager presence plugin (mxbm_presence.dlo)
+ * CoreMX game plugin (mxbm_presence.dlo). Optional: installed from the app (Online > Servers).
  *
- * Uses PiBoSo's official plugin interface. It only listens: when you enter an event it writes
- * what the game reports (server name, track, your bike, riders on the server) to
- *   <MX Bikes user folder>\mxbm_presence.json
- * which MX Bikes Manager reads. It draws nothing, changes nothing in the game and opens no network
- * connections.
+ * Loaded by MX Bikes through PiBoSo's official plugin interface. What it does (details in
+ * README.md next to this file):
+ *  - writes the session the game reports (server, track, bike, rider list) to
+ *    <MX Bikes user folder>\mxbm_presence.json for the CoreMX app;
+ *  - swaps one game UI function pointer and the game's recvfrom import for its own (only on the
+ *    game build it knows), to run its work on the game's thread and to pick out STUN replies;
+ *  - reads the server name/address, your race number and the server list from the game's memory;
+ *  - every 2 minutes in a session sends a STUN request to stun.cloudflare.com from the game's socket;
+ *  - live looks: writes other CoreMX riders' gear into their vehicle records and has the game
+ *    rebuild them, on your screen only;
+ *  - draws an overlay (F8) through the plugin interface;
+ *  - adds an exception handler that switches the plugin off if it crashes.
  *
  * Build (64-bit DLL, renamed to .dlo):
  *   zig cc -target x86_64-windows-gnu -shared -O2 -o mxbm_presence.dlo mxbm_presence.c

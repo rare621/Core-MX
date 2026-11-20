@@ -40,6 +40,8 @@ module.exports = {
     runAfterFinish: true,
     packElevateHelper: false,
     differentialPackage: false,
+    // Removes the CoreMX game plugin and its steam_appid.txt on uninstall (not on updates).
+    include: 'build/installer.nsh',
   },
   beforePack: prepareResources,
   afterPack: verifyPackage,

@@ -542,6 +542,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
     }
     for (const id of gearKeys.keys()) if (!seen.has(id)) gearKeys.delete(id);
+    markNeeded(next);
     if (changed) { paint.report = next; onChange(status()); }
     return changed ? next : paint.report || [];
   }
@@ -571,6 +572,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
+      paintsync.touchReceived(received, results);
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       noteWaiting(paint.report);
       setCfg({ received });
@@ -603,6 +605,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (on) syncPaints().catch(() => {});
     return status();
   }
+  function markNeeded(reports) {
+    const received = { ...(cfg().received || {}) };
+    if (paintsync.touchReceived(received, reports)) setCfg({ received });
+  }
   async function removeReceived() {
     const received = { ...(cfg().received || {}) };
     const n = await paintsync.removeReceived(modsDir(), received);
@@ -621,6 +627,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   async function serverRiders(server, where) {
     const loadouts = await serverRiderLoadouts(server, where);
     const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
+    markNeeded(report);
     await paintsync.requestMissing(call, report); // their owners start uploading now
     return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
   }
@@ -633,6 +640,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     try {
       const received = { ...(cfg().received || {}) };
       const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
+      paintsync.touchReceived(received, results);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
       noteDownloads(results);
@@ -660,6 +668,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
+    paintsync.touchReceived(received, results);
     setCfg({ received });
     const reload = new Set(pendingReload);
     pendingReload.clear();

@@ -3060,7 +3060,7 @@ document.addEventListener('click', async (e) => {
 S.appUpdate = { phase: 'idle' };
 function appUpdateHtml() {
   const update = S.appUpdate;
-  const text = { idle: 'Checks GitHub releases every time you open the app.', checking: 'Checking GitHub…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, available: 'An update is available. Choose Install update in the dialog.', ready: 'The update is downloaded and ready to install.', error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
+  const text = { idle: 'Checks GitHub releases quietly every 5 minutes while the app is open.', checking: 'Checking GitHub…', current: 'You have the latest version.', downloading: `Downloading ${esc(update.version || '')} · ${Math.round(update.percent || 0)}%`, available: 'An update is available. Choose Install update in the dialog.', ready: 'The update is downloaded and ready to install.', error: esc(update.error || 'Could not check for updates.'), development: 'Startup update checks run in the installed app.' }[update.phase];
   return `<p>${text || ''}</p>${update.phase === 'downloading' ? `<progress max="100" value="${Number(update.percent) || 0}" style="width:100%"></progress>` : ''}<button class="btn" data-act="app-update-check" ${['checking', 'downloading'].includes(update.phase) ? 'disabled' : ''}>${icon('refresh')}Check now</button>${update.phase === 'ready' ? '<button class="btn btn-primary" data-act="app-update-install">Restart to update</button>' : ''}`;
 }
 let updateDialog = null, skippedUpdate = '', updateAccepted = false, updateRestarting = false;
@@ -3087,6 +3087,19 @@ async function restartForUpdate() {
   catch (err) { updateAccepted = false; updateRestarting = false; toast(esc(cleanErr(err)), 'err', 6000); }
 }
 api.on('app:update', (state) => { S.appUpdate = state; drawAppUpdate(); });
+api.on('synced:pruned', ({ removed, days }) => toast(`Removed ${removed} synced file${removed === 1 ? '' : 's'} no one has needed for ${days >= 30 ? Math.round(days / 30) + ' month' + (days >= 60 ? 's' : '') : Math.round(days / 7) + ' week' + (days >= 14 ? 's' : '')} (in the Recycle Bin)`, 'info', 6000));
+// FrostMod (MXB App's game plugin) found: CoreMX never touches it, only says it can interfere.
+api.on('frostmod:found', () => {
+  if ($('#frostmodNote')) return;
+  const m = modal({ title: 'FrostMod is installed', size: 'sm', body: `<div id="frostmodNote"><p>Your MX Bikes plugins folder has <b>FrostMod</b>, a game plugin from the maker of MXB App.</p><p>The CoreMX plugin works on some of the same things (the server list and the game's network), so the two can get in each other's way. If you see crashes, missing server addresses or overlay problems, try turning one of them off in <b>My Mods → Plugins</b>.</p><p class="muted">CoreMX won't change or remove FrostMod.</p></div>`,
+    foot: `<button class="btn btn-ghost" data-frostmod="off">Don't show again</button><span class="grow"></span><button class="btn" data-close>Later</button><button class="btn btn-primary" data-frostmod="plugins">${icon('box')}Open Plugins</button>` });
+  m.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-frostmod]'); if (!b) return;
+    if (b.dataset.frostmod === 'off') { try { S.env = await api.invoke('settings:set', { frostmodWarningOff: true }); } catch {} }
+    else { S.lib.scope = 'mods'; S.lib.tab = 'plugins'; go('library'); }
+    m.close();
+  });
+});
 document.addEventListener('click', async (e) => {
   const action = e.target.closest('[data-act]')?.dataset.act;
   if (action === 'app-update-check') { skippedUpdate = ''; S.appUpdate = { ...S.appUpdate, phase: 'checking' }; drawAppUpdate(); try { S.appUpdate = await api.invoke('app:checkUpdates'); drawAppUpdate(); } catch (err) { toast(esc(cleanErr(err)), 'err'); } }
