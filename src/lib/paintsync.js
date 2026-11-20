@@ -241,9 +241,11 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
 // Asks the service for files you need that aren't uploaded yet; their owners upload them on their
 // next report. Each becomes 'uploading' (owner online), 'offline' (owner's CoreMX is closed) or, if it
 // arrived meanwhile, 'ready' again. Older services have no /v1/want: those items stay 'waiting'.
+const asked = new Set(); // files this app asked for (confirmed once installed)
 async function requestMissing(call, report) {
   const waiting = report.flatMap((lo) => lo.items.filter((it) => it.state === 'waiting'));
   if (!waiting.length) return;
+  for (const it of waiting) asked.add(it.sha256);
   let states = {};
   try { states = (await call('POST', '/v1/want', { shas: [...new Set(waiting.map((it) => it.sha256))] })).states || {}; } catch { return; }
   for (const it of waiting) {
@@ -259,7 +261,7 @@ async function fetchFriends({ call, download, modsDir, received, have, friendId,
   const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
   let completed = 0;
   for (const { lo, it } of pending) {
-    const progress = (loaded) => onProgress({ phase: 'downloading', friendId: lo.id, label: it.label, completed, total: pending.length, loaded, size: it.size });
+    const progress = (loaded) => onProgress({ phase: 'downloading', friendId: lo.id, friendName: lo.name || '', label: it.label, completed, total: pending.length, loaded, size: it.size });
     progress(0);
     try {
       const buf = await download(it.sha256, progress);
@@ -282,6 +284,10 @@ async function fetchFriends({ call, download, modsDir, received, have, friendId,
     completed++;
     onProgress({ phase: 'downloading', friendId: lo.id, label: it.label, completed, total: pending.length, loaded: 0, size: 0 });
   }
+  // Tell the service which asked-for files are installed now, so it may let them go (it keeps them
+  // until then, even across an interrupted download). Older services have no /v1/received.
+  const done = [...new Set(report.flatMap((lo) => lo.items.filter((it) => it.state === 'downloaded' || (it.state === 'have' && asked.has(it.sha256))).map((it) => it.sha256)))];
+  if (done.length) { try { await call('POST', '/v1/received', { shas: done.slice(0, 64) }); for (const sha of done) asked.delete(sha); } catch {} }
   // Refresh requirements after models have been installed.
   for (const lo of report) for (const it of lo.items) {
     it.needs = [];

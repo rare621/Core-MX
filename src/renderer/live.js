@@ -318,13 +318,15 @@ function friendGearSummary(items) {
   const files = items || [];
   const got = files.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
   const queued = files.filter((it) => it.state === 'ready').length;
-  const uploading = files.filter((it) => ['waiting', 'uploading'].includes(it.state)).length;
+  const uploading = files.filter((it) => it.state === 'uploading').length;
+  const notUploaded = files.filter((it) => it.state === 'waiting').length;
   const offline = files.filter((it) => it.state === 'offline').length;
   const attention = files.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
   const count = `${got} of ${files.length} free files synced`;
   return { got, queued: queued + uploading, attention, complete: got === files.length,
     text: queued ? `${queued} update${queued === 1 ? '' : 's'} queued · ${count}`
-      : uploading ? `${uploading} file${uploading === 1 ? '' : 's'} uploading from their CoreMX · ${count}`
+      : uploading ? `Waiting for ${uploading} file${uploading === 1 ? '' : 's'} to upload from their CoreMX… · ${count}`
+      : notUploaded ? `${notUploaded} file${notUploaded === 1 ? '' : 's'} not uploaded yet (Sync to get ${notUploaded === 1 ? 'it' : 'them'}) · ${count}`
       : offline ? `${offline} file${offline === 1 ? '' : 's'} download when their CoreMX is online · ${count}`
       : attention ? `${attention} file${attention === 1 ? '' : 's'} need attention · ${count}` : count };
 }
@@ -402,8 +404,10 @@ async function renderFriends(c) {
     <div class="me-name">${esc(steam.name || st?.service?.name || 'You')}</div><div class="me-sub">${connected ? 'Online' : 'Offline'}</div>
     <div class="me-stats"><div><b>${S.friends.length}</b><small>Friends</small></div><div><b>${counts.ride}</b><small>Riding</small></div><div><b>${counts.on}</b><small>Online</small></div></div>
     <button class="btn btn-primary" data-act="friends-add">${icon('users')}Add friends</button></div>` : '';
+  // Friends view tabs: the list, or the sync settings (so neither needs scrolling past the other).
+  const tab = c.id === 'content' && S.live.friendsTab === 'sync' ? 'sync' : 'friends';
   const displayKey = JSON.stringify([
-    c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
+    tab, c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
     S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
     (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.online ? 0 : f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address, f.avatar]),
     st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.defaultUrl, st?.service?.share,
@@ -427,11 +431,11 @@ async function renderFriends(c) {
   const searchFocused = document.activeElement?.id === 'friendSearch';
   const selection = searchFocused ? document.activeElement.selectionStart : 0;
   c.innerHTML = `<div class="view"><div class="main">
-    <div class="toolbar"><h2>Friends</h2><div class="grow"></div>
+    <div class="toolbar"><h2>Friends</h2>${c.id === 'content' ? `<div class="seg-tabs"><button class="${tab === 'friends' ? 'active' : ''}" data-friends-tab="friends">${icon('users')}Friends</button><button class="${tab === 'sync' ? 'active' : ''}" data-friends-tab="sync">${icon('settings')}Sync settings</button></div>` : ''}<div class="grow"></div>
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
       ${c.id === 'content' ? '' : `<button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button>`}</div>
-    <div class="scroller"><div class="fr-page fr-layout">
-      <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' ? friendSettingsHtml(st) : ''}</aside>
+    <div class="scroller">${tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
+      <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
       <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
       ${S.live.friendsErr ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length
@@ -439,7 +443,7 @@ async function renderFriends(c) {
         : `<div class="fr-empty"><div class="fr-empty-ico">${icon('user')}</div><h3>Ride with your friends</h3>
             <p>Add the people you ride with. You'll see which server and track they're on, join them in one click, and see each other's liveries and gear in game.</p>
             <button class="btn btn-primary" data-act="friends-add">${icon('steam')}Add from Steam friends</button></div>`}
-    </section></div></div></div></div>`;
+    </section></div></div></div></div>`}`;
   if (c.firstElementChild) c.firstElementChild._friendsDisplayKey = displayKey;
   const scroll = $('.scroller', c); if (scroll) scroll.scrollTop = scrollTop;
   const search = $('#friendSearch');
@@ -448,6 +452,7 @@ async function renderFriends(c) {
     if (searchFocused) { search.focus({ preventScroll: true }); search.setSelectionRange(selection, selection); }
   }
   $('[data-friends-expand]', c)?.addEventListener('click', () => { S.live.showAllFriends = !S.live.showAllFriends; renderFriends(c); });
+  c.querySelectorAll?.('[data-friends-tab]').forEach((b) => b.addEventListener('click', () => { S.live.friendsTab = b.dataset.friendsTab; renderFriends(c); }));
 
   const ps2 = $('#paintSync');
   if (ps2) ps2.addEventListener('change', async () => { S.live.status = await api.invoke('online:paintSync', ps2.checked); renderFriends($('#content')); });
@@ -470,8 +475,15 @@ async function renderSync(c) {
 function syncLabel(ps) { return ps.busy ? 'Checking equipped files…' : ps.at ? `Last synced ${timeAgo(ps.at)}` : 'No sync completed yet'; }
 
 function friendSettingsHtml(st) {
+  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}${friendSettingsList(st)}`;
+}
+// Friends page, Sync settings tab: the setup card and the switches next to each other.
+function friendSyncTabHtml(st) {
+  return `<div class="fr-sync-tab"><div>${setupCardHtml(st, 'friends')}</div><div>${friendSettingsList(st)}</div></div>`;
+}
+function friendSettingsList(st) {
   const ps = st?.paintSync || {}, connected = !!st?.service.connected;
-  return `<div class="section-title" style="margin-top:26px">Sync settings</div>${setupCardHtml(st, 'friends')}<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b data-sync-label>${esc(syncLabel(ps))}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" data-sync-now ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
+  return `<div class="fr-settings"><label class="fr-set"><span><b>Automatic outfit sync</b><span class="muted">Checks every minute for changes to equipped free gear and bike paint. Identical files are skipped.</span></span><span class="toggle"><input type="checkbox" id="paintSync" ${ps.enabled ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my riding status</b><span class="muted">Friends who added you back can see your game and server.</span></span><span class="toggle"><input type="checkbox" id="liveShare" ${st?.service.share !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><label class="fr-set"><span><b>Share my gear with riders on my server</b><span class="muted">Other app users on the same server can download your free gear and livery when they join, so they see you as you are. Paid items are never shared.</span></span><span class="toggle"><input type="checkbox" id="serverShare" ${st?.serverShare !== false ? 'checked' : ''} ${connected ? '' : 'disabled'}><span class="sw"></span></span></label><div class="fr-set"><span><b data-sync-label>${esc(syncLabel(ps))}</b><span class="muted">${ps.error ? esc(ps.error) : 'Paid or shop-protected items are never copied to friends.'}</span></span><button class="btn" data-act="paint-now" data-sync-now ${!connected || ps.busy ? 'disabled' : ''}>Sync now</button></div>${ps.received ? `<div class="fr-set"><span><b>Files downloaded from friends</b><span class="muted">${ps.received} managed files</span></span><button class="btn btn-danger" data-act="paint-remove">Remove downloaded files…</button></div>` : ''}</div>`;
 }
 
 async function toggleFriendsPanel() {
@@ -566,10 +578,15 @@ function findMod(name) {
 function friendProgressHtml() {
   const ps = S.live.status && S.live.status.paintSync;
   const p = ps && ps.progress;
+  // Between syncs: files you need that a friend's CoreMX is still uploading (they download once there).
+  if (ps && !(ps.busy && p) && ps.waiting?.length) {
+    const files = ps.waiting.reduce((n, w) => n + w.files, 0);
+    return `<div class="friend-sync-progress" role="status"><div><b>Waiting for uploads</b><span>${files} file${files === 1 ? '' : 's'}</span></div><progress aria-label="Waiting for friends' uploads"></progress><div class="muted">${ps.waiting.map((w) => `${esc(w.name || 'A friend')}'s CoreMX is uploading ${w.files} file${w.files === 1 ? '' : 's'}…`).join(' · ')}</div></div>`;
+  }
   if (!ps || !ps.busy || !p) return '';
   const ratio = p.size ? Math.min(1, p.loaded / p.size) : 0;
   const pct = p.total ? Math.min(100, (p.completed + ratio) / p.total * 100) : 0;
-  return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? 'Installing equipped files' : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
+  return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? (p.friendName ? `Downloading ${esc(p.friendName)}'s files` : 'Downloading equipped files') : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
 }
 
 // Saved friends ({ code, name }) get their photo from the online friend list ({ id, avatar }).
@@ -643,7 +660,7 @@ async function openFriendDetails(friend) {
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     const track = l && (l.trackName || l.trackId);
     const missing = track && !trackHave(l);
-    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Uploading from their CoreMX…', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
+    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Not uploaded yet — Sync equipped gear to get it', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
     const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
