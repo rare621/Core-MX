@@ -138,3 +138,7 @@ Links are queued until app startup finishes. Purchase/login, dependency checks a
 CoreMX keeps the original Windows application ID, internal package ID, `mxbm://` protocol, data directory and disabled-mod folder so upgrades preserve user data and installed files. The Windows display name, executable, shortcuts and primary setup filename are CoreMX.
 
 Versions through 1.0.27 still check Google Drive. To deliver the first GitHub-updater release to them automatically, upload that release's `latest.yml` and matching **CoreMX-Setup-…-x64.exe** to the shared Drive folder once. The 1.0.27 updater accepts the CoreMX filename. After they install it, updates come from GitHub. Users on much older builds may need to run the CoreMX installer manually.
+
+## Licence
+
+CoreMX is released under the [MIT License](LICENSE). Bundled third-party code and programs keep their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
