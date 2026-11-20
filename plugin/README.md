@@ -35,7 +35,10 @@ players reach you on (`mxbm_stun.json`). This is how hosting and joining work th
 **Draws an overlay.** Press F8 (you can change the key) for the CoreMX overlay: your gear, the riders
 on your server and their gear. It draws through the plugin interface. It reads keys only while the
 game window is in front, and frees the mouse from the game window while the overlay is open; the
-game still gets your keys. It uses the game's font, `ui\main.fnt`, copied to `plugins\mxbm_data\`.
+game still gets your keys. It uses the game's font, `ui\main.fnt`, copied to `plugins\mxbm_data\`,
+and five small textures it makes itself the first time (rounded corners and a dot, `ov_*.tga` in the
+same folder) for the rounded panels. Beside the main panel, a Riders panel lists the other CoreMX
+riders on your server and what is still needed for their gear to show.
 
 **Handles its own crashes.** It adds an exception handler for the whole game that acts only on a
 crash inside the plugin: it switches the plugin's hooks off and lets the game carry on.
@@ -50,15 +53,14 @@ get around any of the game's checks.
 
 ## Building
 
-The released `mxbm_presence.dlo` is built with Microsoft's compiler:
+The released `mxbm_presence.dlo` is built with Zig:
 
 ```
-cl /LD /O2 mxbm_presence.c /Fe:mxbm_presence.dlo
+zig cc -target x86_64-windows-gnu -shared -O2 -s -o mxbm_presence.dlo mxbm_presence.c
 ```
 
-It also builds with `zig cc -target x86_64-windows-gnu -shared -O2 -o mxbm_presence.dlo mxbm_presence.c`
-or `x86_64-w64-mingw32-gcc -shared -O2 -s -o mxbm_presence.dlo mxbm_presence.c`. Those builds work
-the same but are not byte-for-byte identical to the released file.
+It also builds with `x86_64-w64-mingw32-gcc -shared -O2 -s -o mxbm_presence.dlo mxbm_presence.c` or
+`cl /LD /O2 mxbm_presence.c /Fe:mxbm_presence.dlo`.
 
 `Startup` must return `3` (10 Hz), not `-1`, which disables the plugin.
 
