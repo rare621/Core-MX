@@ -186,4 +186,11 @@ async function assertShareableFile(file) {
   finally { if (handle) await handle.close(); }
 }
 
-module.exports = { decodeBlob, openArchive, withLocalPreview, localPreviewEnabled, assertShareableFile };
+// A PiBoSo-encrypted container (KCOL footer)? Throws for account-bound content. Reads only the footer;
+// nothing is decrypted.
+function sealedInfo(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < FOOTER_SIZE || buf.toString('ascii', buf.length - FOOTER_SIZE, buf.length - FOOTER_SIZE + 4) !== 'KCOL') return null;
+  const info = previewContext.run(false, () => footerInfo(buf.subarray(-FOOTER_SIZE), buf.length));
+  return info ? { size: info.size, start: info.start } : null;
+}
+module.exports = { decodeBlob, openArchive, withLocalPreview, localPreviewEnabled, assertShareableFile, sealedInfo };
