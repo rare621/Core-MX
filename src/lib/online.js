@@ -599,6 +599,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     deleteNotification: (id) => call('POST', '/v1/notifications/delete', { id }),
     unlockAdmin,
     adminStatus: () => { requireAdmin(); return call('POST', '/v1/admin/status', { key: adminKey }); },
+    adminActivity: (days) => { requireAdmin(); return call('POST', '/v1/admin/activity', { key: adminKey, days }); },
     createAnnouncement: (title, message) => { requireAdmin(); return call('POST', '/v1/admin/announcements', { key: adminKey, title, message }); },
   };
 }
