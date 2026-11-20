@@ -235,7 +235,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
   await ac('POST', '/v1/friends', { ids: [a.id, b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 22);
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 23);
   const uploaded = [];
   const shareA = () => sync.share({ call: ac, upload: async (hash, bytes) => {
     uploaded.push(hash);

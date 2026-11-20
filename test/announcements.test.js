@@ -72,3 +72,43 @@ test('the admin sees each account once with its activity', async (t) => {
   assert.equal(data.daily.at(-1).count, 3, 'today: each account counted once');
   assert.deepEqual(data.summary, { accounts: 3, onlineNow: 1, inGame: 1, today: 3, last5Days: 3, last30Days: 3, newThisWeek: 3 });
 });
+
+// Admins: the owner adds and removes them by friend code; they unlock Admin with the same server key
+// and can use it, but only the owner manages the list.
+test('the owner adds admins by friend code; they use the server key; only the owner manages them', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-admins-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((resolve) => child.once('exit', resolve)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (chunk) => { const match = chunk.toString().match(/on port (\d+)/); if (match) { clearTimeout(timeout); resolve(match[1]); } });
+  });
+  const call = async (token, route, body) => {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    return { status: response.status, data: await response.json() };
+  };
+  const register = async (steamId, name) => (await call(null, '/v1/register', { steamId, name })).data;
+  const owner = await register('76561198098586128', 'Rare621'), friend = await register('76561198000000201', 'Uhh_sal'), other = await register('76561198000000202', 'Other');
+  const key = (await fs.readFile(path.join(root, 'admin.key'), 'utf8')).trim();
+  assert.deepEqual((await call(owner.token, '/v1/admin/role')).data, { admin: true, owner: true });
+  assert.deepEqual((await call(friend.token, '/v1/admin/role')).data, { admin: false, owner: false });
+  assert.equal((await call(friend.token, '/v1/admin/status', { key })).status, 403, 'not an admin yet');
+  // The owner adds them (and someone not on CoreMX yet).
+  assert.equal((await call(owner.token, '/v1/admin/admins/add', { key, id: 'nope' })).status, 400);
+  await call(owner.token, '/v1/admin/admins/add', { key, id: '76561198000000201' });
+  const added = (await call(owner.token, '/v1/admin/admins/add', { key, id: '76561198000000299' })).data.admins;
+  assert.deepEqual(added.map((a) => [a.id, a.name, a.registered]), [['76561198000000201', 'Uhh_sal', true], ['76561198000000299', '', false]]);
+  assert.deepEqual((await call(friend.token, '/v1/admin/role')).data, { admin: true, owner: false });
+  assert.equal((await call(friend.token, '/v1/admin/status', { key })).status, 200, 'same server key');
+  assert.equal((await call(friend.token, '/v1/admin/status', { key: 'wrong' })).status, 403);
+  assert.equal((await call(friend.token, '/v1/admin/activity', { key })).status, 200);
+  // Only the owner manages admins.
+  assert.equal((await call(friend.token, '/v1/admin/admins/add', { key, id: '76561198000000202' })).status, 403);
+  assert.equal((await call(friend.token, '/v1/admin/admins', { key })).status, 403);
+  assert.equal((await call(other.token, '/v1/admin/role')).data.admin, false);
+  // Removed: no more access.
+  assert.deepEqual((await call(owner.token, '/v1/admin/admins/remove', { key, id: '76561198000000201' })).data.admins.map((a) => a.id), ['76561198000000299']);
+  assert.equal((await call(friend.token, '/v1/admin/status', { key })).status, 403);
+  assert.equal((await call(owner.token, '/v1/admin/admins/add', { key, id: '76561198098586128' })).status, 400, 'the owner is always an admin');
+});

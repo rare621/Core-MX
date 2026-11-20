@@ -802,6 +802,11 @@ select option { background: var(--panel); }
 .announcement-message { color: var(--text); line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
 /* Admin: riders using CoreMX */
 .admin-settings { max-width: 1040px; }
+.admin-settings .admin-tabs { margin: 0 0 14px; }
+/* Admins list: name, when added, Remove (always visible, also in a narrow window). */
+.admin-user.admin-row, .admin-user.admin-row:hover { grid-template-columns: 38px minmax(0, 1fr) auto auto; }
+.admin-user.admin-row .admin-user-joined { display: flex; justify-content: flex-end; }
+.admin-user.admin-row .admin-user-days { white-space: nowrap; }
 .admin-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .admin-head h3 { margin: 0; }
 .admin-head p { margin: 2px 0 0; font-size: 12px; }

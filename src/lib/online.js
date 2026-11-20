@@ -683,12 +683,24 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // name: the server the user clicked Join on, so a failed join can't label the next server.
   function noteJoin(address, name) { setCfg({ lastJoin: { address, name: typeof name === 'string' ? name.slice(0, 64) : '', at: Date.now() } }); }
 
-  function requireAdmin() {
-    if (steamId() !== ADMIN_STEAM_ID || cfg().id !== ADMIN_STEAM_ID || !adminKey) throw new Error('Unlock Admin with your Steam account and server admin key first.');
+  // Admin: the owner and admins the owner adds (by friend code) on the service. The role comes from
+  // the service (GET /v1/admin/role); older services only know the owner.
+  let role = { admin: false, owner: false, at: 0 };
+  async function adminRole(force = false) {
+    const c = cfg();
+    if (!c.token || !c.id || c.id !== steamId()) { role = { admin: false, owner: false, at: Date.now() }; return role; }
+    if (!force && Date.now() - role.at < 60 * 1000) return role;
+    try { const r = await call('GET', '/v1/admin/role'); role = { admin: !!r.admin, owner: !!r.owner, at: Date.now() }; }
+    catch { const owner = c.id === ADMIN_STEAM_ID; role = { admin: owner, owner, at: Date.now() }; }
+    return role;
+  }
+  function requireAdmin(ownerOnly = false) {
+    if (!role.admin || cfg().id !== steamId() || !adminKey) throw new Error('Unlock Admin with your admin account and the server admin key first.');
+    if (ownerOnly && !role.owner) throw new Error('Only the owner can manage admins.');
     if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
   }
   async function unlockAdmin(key) {
-    if (steamId() !== ADMIN_STEAM_ID || cfg().id !== ADMIN_STEAM_ID) throw new Error('Admin is available only to the registered Steam account.');
+    if (!(await adminRole(true)).admin) throw new Error('Admin is only for admin accounts. Ask the owner to add your friend code.');
     if (!defaultUrl?.startsWith('https://') || cfg().url !== defaultUrl) throw new Error('Connect to the official HTTPS CoreMX service before using Admin.');
     const value = String(key || '').trim();
     if (!value) throw new Error('Enter the server admin key.');
@@ -706,6 +718,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     unlockAdmin,
     adminStatus: () => { requireAdmin(); return call('POST', '/v1/admin/status', { key: adminKey }); },
     adminActivity: (days) => { requireAdmin(); return call('POST', '/v1/admin/activity', { key: adminKey, days }); },
+    adminRole: (force) => adminRole(force).then(({ admin, owner }) => ({ admin, owner })),
+    adminList: () => { requireAdmin(true); return call('POST', '/v1/admin/admins', { key: adminKey }); },
+    adminAdd: (id) => { requireAdmin(true); return call('POST', '/v1/admin/admins/add', { key: adminKey, id }); },
+    adminRemove: (id) => { requireAdmin(true); return call('POST', '/v1/admin/admins/remove', { key: adminKey, id }); },
     createAnnouncement: (title, message) => { requireAdmin(); return call('POST', '/v1/admin/announcements', { key: adminKey, title, message }); },
   };
 }

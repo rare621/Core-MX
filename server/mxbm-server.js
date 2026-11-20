@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 22;
+const VERSION = 23;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -54,11 +54,11 @@ const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {} }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [] }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [], ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const { liveFiles } = require('./cache-cleanup');
@@ -272,8 +272,14 @@ function auth(req) {
   }
   return null;
 }
+// Admins: the owner (ADMIN_STEAM_ID) and the friend codes (Steam IDs) the owner adds (db.admins).
+// Everyone unlocks Admin with this server's admin key; only the owner manages the list.
+const MAX_ADMINS = 50;
+const isOwner = (me) => !!me && me.id === ADMIN_STEAM_ID;
+const isAdmin = (me) => !!me && (isOwner(me) || (db.admins || []).some((a) => a.id === me.id));
+const adminList = () => (db.admins || []).map((a) => ({ id: a.id, name: db.users[a.id]?.name || '', registered: !!db.users[a.id], addedAt: a.at || null }));
 function adminAllowed(me, key) {
-  if (!me || me.id !== ADMIN_STEAM_ID || !ADMIN_KEY || typeof key !== 'string') return false;
+  if (!isAdmin(me) || !ADMIN_KEY || typeof key !== 'string') return false;
   return crypto.timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(ADMIN_KEY)));
 }
 function announcementInbox(user) {
@@ -578,17 +584,45 @@ const routes = {
     else return [404, { error: 'Notification not found.' }];
     save(); return [200, { ok: true }];
   },
+  // Whether this account may use Admin (the app shows the tab), and whether it is the owner. No key needed.
+  'GET /v1/admin/role': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    return [200, { admin: isAdmin(me), owner: isOwner(me) }];
+  },
+  // The owner adds and removes admins by friend code (Steam ID).
+  'POST /v1/admin/admins': async (req, body, me) => {
+    if (!isOwner(me) || !adminAllowed(me, body.key)) return [403, { error: 'Only the owner can manage admins.' }];
+    return [200, { admins: adminList() }];
+  },
+  'POST /v1/admin/admins/add': async (req, body, me) => {
+    if (!isOwner(me) || !adminAllowed(me, body.key)) return [403, { error: 'Only the owner can manage admins.' }];
+    const id = String(body.id || '').trim();
+    if (!isSteamId(id)) return [400, { error: 'A friend code is a 17-digit number starting with 7656119.' }];
+    if (id === ADMIN_STEAM_ID) return [400, { error: 'That is you: the owner is always an admin.' }];
+    db.admins = db.admins || [];
+    if (!db.admins.some((a) => a.id === id)) {
+      if (db.admins.length >= MAX_ADMINS) return [400, { error: `At most ${MAX_ADMINS} admins.` }];
+      db.admins.push({ id, at: Date.now() }); save();
+    }
+    return [200, { admins: adminList() }];
+  },
+  'POST /v1/admin/admins/remove': async (req, body, me) => {
+    if (!isOwner(me) || !adminAllowed(me, body.key)) return [403, { error: 'Only the owner can manage admins.' }];
+    const id = String(body.id || '').trim();
+    db.admins = (db.admins || []).filter((a) => a.id !== id); save();
+    return [200, { admins: adminList() }];
+  },
   'POST /v1/admin/status': async (req, body, me) => {
-    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin needs an admin account and the server admin key.' }];
     return [200, { accounts: Object.keys(db.users).length, announcements: (db.announcements || []).length }];
   },
   // Who used CoreMX: one row per account, daily active counts and totals (Admin tab).
   'POST /v1/admin/activity': async (req, body, me) => {
-    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin needs an admin account and the server admin key.' }];
     return [200, adminActivity(body.days)];
   },
   'POST /v1/admin/announcements': async (req, body, me) => {
-    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin access requires the registered Steam account and server admin key.' }];
+    if (!adminAllowed(me, body.key)) return [403, { error: 'Admin needs an admin account and the server admin key.' }];
     const title = str(body.title, 100);
     const message = String(body.message || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '').trim().slice(0, 2000);
     if (title.length < 3 || message.length < 5) return [400, { error: 'Enter a title and a description.' }];
