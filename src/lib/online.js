@@ -396,7 +396,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // While on a server, other riders' changes are picked up every 20 seconds.
     looksTimer = setInterval(() => { if (current?.inEvent && current.server) syncLooks(); }, 20 * 1000);
     readState().catch(() => {});
-    paintTimer = setInterval(() => syncPaints().catch(() => {}), PAINT_EVERY);
+    paintTimer = setInterval(() => { syncPaints().catch(() => {}); syncLaps().catch(() => {}); }, PAINT_EVERY);
     // Not signed in yet (service was down): try again every minute, quietly.
     retryTimer = setInterval(() => { const c = cfg(); if (defaultUrl && !c.token && !c.optedOut && !needsSignIn && !signing) connect().then(() => { lastError = null; onChange(status()); }).catch(() => {}); }, 60 * 1000);
     // A built-in service address (online.config.json): connect to it without asking.
@@ -470,6 +470,24 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (await isGameRunning()) throw new Error('Close MX Bikes first.');
     if (dst && fs.existsSync(dst)) await fsp.rm(dst);
     return status();
+  }
+
+  // ---------- Friends leaderboard ----------
+  // Your best laps (from MX Bikes' records) are sent when they change, at most every few minutes.
+  let lapsSent = '', lapsAt = 0;
+  async function syncLaps(force = false) {
+    const c = cfg();
+    if (!c.token || c.share === false || (!force && Date.now() - lapsAt < 4 * 60 * 1000)) return;
+    lapsAt = Date.now();
+    const laps = require('./laps').readBestLaps(userDir());
+    const key = JSON.stringify(laps);
+    if (!force && key === lapsSent) return;
+    try { await call('POST', '/v1/laps', { laps }); lapsSent = key; } catch {}
+  }
+  async function leaderboard() {
+    if (!cfg().token) throw new Error('Sign in with Steam to see your friends\' lap times.');
+    await syncLaps(true).catch(() => {});
+    return call('GET', '/v1/leaderboard');
   }
 
   // ---------- Sign in with Steam ----------
@@ -773,7 +791,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

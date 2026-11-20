@@ -944,3 +944,17 @@ select option { background: var(--panel); }
 .coremx-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .02em; vertical-align: 1px; }
 /* Status text that needs attention (e.g. Windows Firewall blocking MX Bikes). */
 .warn-text { color: var(--warn); }
+
+/* Friends leaderboard */
+.lap-card { margin-bottom: 12px; }
+.lap-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lap-class { margin-top: 10px; }
+.lap-class-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.lap-row { display: grid; grid-template-columns: 26px minmax(0, 1.2fr) minmax(0, 1fr) 84px 70px; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; }
+.lap-row:nth-child(odd) { background: rgba(255, 255, 255, .03); }
+.lap-row.me { background: color-mix(in srgb, var(--accent, #e8572a) 14%, transparent); }
+.lap-pos { font-weight: 700; text-align: center; }
+.lap-name, .lap-bike { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lap-time { text-align: right; font-weight: 600; }
+.lap-gap { text-align: right; font-size: 12px; }
+@media (max-width: 760px) { .lap-row { grid-template-columns: 22px minmax(0, 1fr) 78px 60px; } .lap-bike { display: none; } }
