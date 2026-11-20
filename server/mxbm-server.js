@@ -120,6 +120,23 @@ function addressFor(srv, viewerIps = []) {
 const viewerIps = (req, me) => { const h = me && hostIps.get(me.id); return [clientIp(req), h && Date.now() - h.at < 30 * 60 * 1000 ? h.ip : null].filter(Boolean); };
 const hash = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const serverKey = (name) => str(name, 64).toLowerCase();
+// One server list row per server: its name and the server's IPv4, since two servers can share a name
+// (another host, another track). The port is left out: a router may show a host's port differently to
+// different players. A report without a known address joins the row of that name it was already on, or
+// the newest one, so one server is never split in two.
+const ROW_SEP = '\u0001';
+// Servers only reported by apps without the disconnect check (CoreMX 1.0.47 and earlier, or an older
+// plugin) are left off the Online list: a player stuck on a closed game would keep it there.
+// --oldapps show lists them too.
+const SHOW_OLD_APPS = arg('oldapps', 'hide') === 'show';
+const ipOfAddress = (addr) => (isAddress(addr) ? String(addr).split(':')[0] : '');
+function rowKey(name, address, current) {
+  const base = serverKey(name), ip = ipOfAddress(address);
+  if (ip) return base + ROW_SEP + ip;
+  if (current && (current === base || current.startsWith(base + ROW_SEP)) && db.servers[current]) return current;
+  const rows = Object.entries(db.servers).filter(([k]) => k === base || k.startsWith(base + ROW_SEP)).sort((a, b) => b[1].lastSeen - a[1].lastSeen);
+  return rows.length ? rows[0][0] : base;
+}
 // Rider names in game often carry team tags ("CaptiveDuck | CRMX"); compare on words.
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function nameOnList(steamName, riderNames) {
@@ -288,7 +305,7 @@ function presenceView(id, viewer = []) {
   const u = db.users[id];
   if (!p || Date.now() - p.at > ONLINE_TTL) return { id, name: u ? u.name : '', online: false, lastSeen: u ? u.lastSeen || null : null };
   const s = p.state || {};
-  const srv = s.server ? db.servers[serverKey(s.server)] : null;
+  const srv = s.server && s.key ? db.servers[s.key] : null;
   return {
     id, name: u ? u.name : '', online: true, inGame: !!s.inGame, inEvent: !!s.inEvent,
     server: s.inEvent ? s.server || null : null, address: s.inEvent ? addressFor(srv, viewer).address || s.serverAddress || null : null,
@@ -335,6 +352,8 @@ const routes = {
       serverAddressSource: s.serverAddressSource === 'game' ? 'game' : null,
       trackId: str(s.trackId), trackName: str(s.trackName), category: str(s.category), bikeName: str(s.bikeName), type: Number(s.type) || 0,
       riderName: str(s.riderName, 40), riderProfile: str(s.riderProfile, 64), gameName: str(s.gameName, 64),
+      // The app and its plugin notice when the server is gone (see /v1/servers).
+      connCheck: s.connCheck === true,
       // Race number and bike in game: other CoreMX users on the server find this rider by them (live looks).
       raceNumber: Number.isInteger(s.raceNumber) && s.raceNumber > 0 && s.raceNumber < 100000 ? s.raceNumber : null, bikeId: str(s.bikeId, 64),
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
@@ -364,8 +383,25 @@ const routes = {
     // until the normal 20-minute server TTL expires.
     const previousPresence = presence.get(me.id);
     const previous = previousPresence?.state;
-    if (previous?.server && (!state.inEvent || previous.server !== state.server)) {
-      const oldKey = serverKey(previous.server), old = db.servers[oldKey];
+    if (state.inEvent && state.server) {
+      // The server's address as this player's game connected to it (or the host's own address).
+      const known = s.hosting === true || state.serverAddressSource === 'game' ? state.serverAddress : null;
+      state.key = rowKey(state.server, known, previous && previous.server && serverKey(previous.server) === serverKey(state.server) ? previous.key : null);
+      // A player's game can see a home-hosted game at another IP than the host's own (a VPN, a provider's
+      // shared address): with no row at that IP, a live hosted game of that name is the one they're on.
+      if (s.hosting !== true && !db.servers[state.key]) {
+        const hostedRow = Object.entries(db.servers).find(([key, r]) => serverKey(r.name || '') === serverKey(state.server) && r.hosted && r.hostedBy && (() => { const hp = presence.get(r.hostedBy); return hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && hp.state.key === key; })());
+        if (hostedRow) state.key = hostedRow[0];
+      }
+      // The first report that knows the address takes over a row that was only known by name.
+      const base = serverKey(state.server);
+      if (state.key !== base && db.servers[base] && !db.servers[state.key]) {
+        db.servers[state.key] = db.servers[base]; delete db.servers[base];
+        for (const p of presence.values()) if (p.state && p.state.key === base) p.state.key = state.key;
+      }
+    }
+    if (previous?.server && (!state.inEvent || previous.key !== state.key)) {
+      const oldKey = previous.key || serverKey(previous.server), old = db.servers[oldKey];
       if (old) {
         old.seenBy = (old.seenBy || []).filter((id) => id !== me.id);
         if (!old.seenBy.length) delete db.servers[oldKey];
@@ -375,7 +411,7 @@ const routes = {
     me.user.lastSeen = Date.now();
     presence.set(me.id, { at: Date.now(), share: body.share !== false, state });
     if (state.inEvent && state.server && (state.trackId || state.trackName)) {
-      const k = serverKey(state.server);
+      const k = state.key;
       const prev = db.servers[k] || { seenBy: [] };
       const reported = (Array.isArray(s.riders) ? s.riders : []).slice(0, MAX_RIDERS).map((r) => ({ name: str(r && r.name, 64), bike: str(r && r.bike, 64), category: str(r && r.category, 40) })).filter((r) => r.name);
       // Every CoreMX user on the server reports the riders their own game knows. A game that joined
@@ -385,15 +421,15 @@ const routes = {
       const now = Date.now(), reports = {};
       for (const [id, r] of Object.entries(prev.reports || {})) {
         const p = presence.get(id);
-        if (id !== me.id && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === k) reports[id] = r;
+        if (id !== me.id && p && now - p.at < ONLINE_TTL && p.state?.inEvent && p.state.key === k) reports[id] = r;
       }
-      const stayed = prev.reports && prev.reports[me.id] && previous?.inEvent && serverKey(previous.server || '') === k;
+      const stayed = prev.reports && prev.reports[me.id] && previous?.inEvent && previous.key === k;
       reports[me.id] = { riders: reported, since: stayed ? prev.reports[me.id].since : now };
       // A home-hosted game started again under the same name: players still "on" it since before this
       // session began (stuck on a closed game's "connection lost" screen) belong to the old game. Their
       // reports don't count for the new one (2 minutes' grace for reports arriving just before the host's).
       const continuingHost = s.hosting === true && prev.hosted && prev.hostedBy === me.id && previous?.inEvent &&
-        serverKey(previous.server || '') === k && now - previousPresence.at < ONLINE_TTL;
+        previous.key === k && now - previousPresence.at < ONLINE_TTL;
       const hostSince = s.hosting === true ? (continuingHost ? prev.hostSince || now : now) : prev.hosted ? prev.hostSince || 0 : 0;
       const hostId = s.hosting === true ? me.id : prev.hosted ? prev.hostedBy : null;
       const staleFor = (id) => !!(hostSince && id !== hostId && reports[id] && reports[id].since < hostSince - HOST_GRACE);
@@ -409,7 +445,7 @@ const routes = {
         ...(() => {
           if (s.hosting === true && state.serverAddress) {
             const continuing = prev.hosted && prev.hostedBy === me.id && previous?.inEvent &&
-              serverKey(previous.server || '') === k && Date.now() - previousPresence.at < ONLINE_TTL;
+              previous.key === k && Date.now() - previousPresence.at < ONLINE_TTL;
             // Keep the real address for the whole hosting session. It used to expire 2 minutes after the last
             // rider's report, which put the public-IP:54210 guess back and made later joins time out.
             const observed = continuing && prev.observedAddress;
@@ -422,7 +458,7 @@ const routes = {
             };
           }
           const hp = prev.hosted && prev.hostedBy !== me.id ? presence.get(prev.hostedBy) : null;
-          const hostStillThere = hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && serverKey(hp.state.server || '') === k;
+          const hostStillThere = hp && Date.now() - hp.at < ONLINE_TTL && hp.state?.inEvent && hp.state.key === k;
           if (hostStillThere) {
             const sameTrack = !prev.trackId || !state.trackId || prev.trackId === state.trackId;
             const fromGame = !meStale && state.serverAddress && state.serverAddressSource === 'game' && sameTrack;
@@ -438,7 +474,7 @@ const routes = {
           if (prev.hosted && prev.hostedBy && prev.hostedBy !== me.id) return { address: null, hosted: true, hostedBy: prev.hostedBy, hostSince: prev.hostSince || 0, guessedAddress: prev.guessedAddress || null, observedAddress: null, observedAt: null };
           return { address: state.serverAddress || null, hosted: false };
         })(),
-        name: state.server,
+        name: state.server, key: k,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',
         riders, reports, categories: [...new Set(riders.map((r) => r.category).filter(Boolean))],
         session: state.session,
@@ -455,11 +491,11 @@ const routes = {
     const now = Date.now();
     // A home-hosted game ends when its host leaves it: other players' games can sit on a 'connection
     // lost' screen and keep reporting it, so the host's own report decides.
-    const hostGone = (s) => { if (!s.hosted || !s.hostedBy) return false; const p = presence.get(s.hostedBy); return !(p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name)); };
-    const list = Object.values(db.servers).filter((s) => now - s.lastSeen < SERVER_TTL && !hostGone(s))
+    const hostGone = (s) => { if (!s.hosted || !s.hostedBy) return false; const p = presence.get(s.hostedBy); return !(p && now - p.at < ONLINE_TTL && p.state?.inEvent && p.state.key === s.key); };
+    const list = Object.entries(db.servers).map(([key, s]) => { s.key = key; return s; }).filter((s) => now - s.lastSeen < SERVER_TTL && !hostGone(s))
       .map((s) => {
         const reporters = (s.seenBy || []).map((id) => ({ id, user: db.users[id], presence: presence.get(id) }))
-          .filter(({ user, presence: p }) => user && p && now - p.at < ONLINE_TTL && p.state?.inEvent && serverKey(p.state.server || '') === serverKey(s.name));
+          .filter(({ user, presence: p }) => user && p && now - p.at < ONLINE_TTL && p.state?.inEvent && p.state.key === s.key);
         const riders = s.riders.map((r) => {
           const matchingRows = s.riders.filter((other) => normName(other.name) === normName(r.name));
           const matchingUsers = reporters.filter(({ presence: p }) => [p.state.gameName, p.state.riderName, p.state.riderProfile].some((n) => n && normName(n) === normName(r.name)));
@@ -467,8 +503,10 @@ const routes = {
             ? { ...r, coremxName: matchingUsers[0].user.name } : r;
         });
         const at = addressFor(s, viewer);
-        return { name: s.name, address: at.address, sameNetwork: at.sameNetwork, hosted: !!s.hosted, addressObserved: !!(s.hosted && s.observedAddress), trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
+        // id: this row (servers can share a name); the app finds the same row again by it.
+        return { checked: SHOW_OLD_APPS || reporters.some(({ presence: p }) => p.state.connCheck), id: s.key, name: s.name, address: at.address, sameNetwork: at.sameNetwork, hosted: !!s.hosted, addressObserved: !!(s.hosted && s.observedAddress), trackId: s.trackId, trackName: s.trackName, session: s.session ?? null, riders, categories: s.categories, lastSeen: s.lastSeen, reporters: (s.seenBy || []).length };
       })
+      .filter((row) => row.checked).map(({ checked, ...row }) => row)
       .sort((a, b) => b.riders.length - a.riders.length || b.lastSeen - a.lastSeen);
     return [200, { servers: list, at: now }];
   },
@@ -612,7 +650,11 @@ const routes = {
     if (!me) return [401, { error: 'not signed in' }];
     const name = str(body.server, 64);
     if (!name) return [400, { error: 'server name required' }];
-    const key = serverKey(name), now = Date.now();
+    const mine = presence.get(me.id)?.state;
+    let key = mine && mine.inEvent && mine.key && serverKey(mine.server || '') === serverKey(name) ? mine.key : null;
+    if (!key && typeof body.id === 'string' && db.servers[body.id] && serverKey(db.servers[body.id].name) === serverKey(name)) key = body.id;
+    if (!key) { key = rowKey(name, isAddress(body.address) ? body.address : null); if (!db.servers[key]) key = rowKey(name, null); }
+    const now = Date.now();
     const srv = db.servers[key] && now - db.servers[key].lastSeen < SERVER_TTL ? db.servers[key] : null;
     const riderNames = (srv?.riders || []).map((r) => normName(r.name)).filter(Boolean);
     const out = [];
@@ -620,10 +662,10 @@ const routes = {
       if (id === me.id || !u.loadout || u.sharePaints === false || u.shareServer === false) continue;
       const p = presence.get(id);
       const online = !!(p && now - p.at < ONLINE_TTL);
-      const here = !!(online && p.state && p.state.inEvent && serverKey(p.state.server || '') === key);
+      const here = !!(online && p.state && p.state.inEvent && p.state.key === key);
       // Matched only by name on the server's rider list (no plugin): skipped when their CoreMX shows
       // them on another server, or is closed with files not uploaded (they could never be sent).
-      const elsewhere = online && p.state && p.state.inEvent && serverKey(p.state.server || '') !== key;
+      const elsewhere = online && p.state && p.state.inEvent && p.state.key !== key;
       const byName = !here && !elsewhere && nameOnList(u.name, riderNames) && (online || (u.loadout.items || []).every((it) => haveFile(it.sha256)));
       if (!here && !byName) continue;
       out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: itemsFor(u, body.pending === true), online: !!(p && now - p.at < ONLINE_TTL) });

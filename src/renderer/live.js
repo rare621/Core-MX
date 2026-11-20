@@ -173,7 +173,8 @@ async function joinLiveServer(s) {
     // observed by a rider who joined in-game. Use the current endpoint, not the card's copy.
     try {
       const latest = await api.invoke('online:servers');
-      const current = (latest.servers || []).find((row) => row.name?.toLowerCase() === s.name?.toLowerCase());
+      // The same row (servers can share a name): by its id, else by name.
+      const current = (latest.servers || []).find((row) => s.id && row.id ? row.id === s.id : row.name?.toLowerCase() === s.name?.toLowerCase());
       if (!current || (s.trackId && current.trackId && s.trackId.toLowerCase() !== current.trackId.toLowerCase())) {
         toast('This server changed or went offline. Refresh the list before joining.', 'info', 6000);
         return;
@@ -190,7 +191,7 @@ async function joinLiveServer(s) {
   toast('Checking riders on this server…', 'info', 2500);
   let riders;
   try {
-    riders = await Promise.race([api.invoke('online:serverRiders', s.name), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000))]);
+    riders = await Promise.race([api.invoke('online:serverRiders', s.name, { id: s.id, address: s.address }), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000))]);
   } catch (e) {
     if (!/timeout/.test(e.message || '')) toast(esc(cleanErr(e)), 'info', 5000);
     return join();
@@ -235,7 +236,7 @@ async function joinLiveServer(s) {
     const started = Date.now();
     try {
       for (;;) {
-        const results = await api.invoke('online:syncServerRiders', s.name, ids);
+        const results = await api.invoke('online:syncServerRiders', s.name, ids, { id: s.id, address: s.address });
         if (joinNow) return;
         got += results.reduce((n, r) => n + count(r, ['downloaded']), 0);
         failed = results.reduce((n, r) => n + count(r, ['failed']), 0);

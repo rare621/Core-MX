@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 test('riders on the same server share gear by plugin report or Steam name match', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-riders-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -64,7 +64,7 @@ test('riders on the same server share gear by plugin report or Steam name match'
 test('a Host World session gets the host public IP and the game port as its address', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-host-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -139,7 +139,7 @@ test('an upload cut off mid-way does not crash the service', async (t) => {
   const http = require('node:http');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-abort-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
