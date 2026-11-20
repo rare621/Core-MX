@@ -1585,8 +1585,8 @@ async function openPost(summary, { install = false, file = null } = {}) {
       : p.paid ? `<button class="btn" data-open="${esc(d.url)}">${icon('external')}Open</button>`
       : hasUpdate ? `<button class="btn btn-primary" data-dl="${i}">${icon('refresh')}Update</button>`
       : (d.installed ?? installed) ? `<span class="have">${icon('check')}${p.missingModelTextures?.length ? 'Paint files installed' : 'Installed'}</span>`
-      : `<button class="btn btn-primary" data-dl="${i}">${icon('download')}${mode === 'folder' ? 'Choose file' : 'Install'}</button>`;
-    return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
+      : `<button class="btn ${isServerDownload(d) ? '' : 'btn-primary'}" data-dl="${i}">${icon('download')}${mode === 'folder' ? 'Choose file' : isServerDownload(d) ? 'Install server copy' : 'Install'}</button>`;
+    return `<div class="dl" data-download-url="${esc(d.url)}"><div class="info">${d.flag ? `<div class="flag">${esc(d.flag)}</div>` : ''}${isServerDownload(d) ? '<div class="dl-server-note">For running a dedicated server, not for riding</div>' : ''}<div class="label">${esc(d.label || (d.host === 'mxb-mods.com' ? decodeURIComponent(d.url.split('/').pop()) : d.host) || 'Download')}</div>
       <div class="host">${esc(d.host)}<span class="host-pill ${mode}">${d.shop ? 'Shop' : mode === 'auto' ? 'Auto-install' : mode === 'folder' ? 'Choose file' : 'Via browser'}</span></div>${mode === 'folder' && /mediafire\.com/i.test(d.host) ? '<small class="muted">MediaFire requires Premium for whole-folder ZIPs. Open the folder and choose each file individually.</small>' : ''}</div>
       ${action}${d.modelDependencies?.length ? `<div class="download-requirements">${d.modelDependencies.map((dep) => `<div><b>${esc(dep.label)}</b><span class="${dep.installed ? 'ok-text' : 'muted'}">${dep.installed ? 'Installed' : 'Required model not installed'}</span>${dep.installed || !dep.url ? '' : dependencyButton(dep)}</div>`).join('')}</div>` : ''}<div class="download-inline" data-download-progress hidden></div></div>`;
   }).join('') : `<div class="notice warn">${icon('alert')}<div>No download links found on this page. Open it on the site to check.</div></div>`;
@@ -1721,7 +1721,20 @@ function warnBeforePaintInstall(p, staged = false) {
   });
 }
 
+// A track's "Server Version" download: a cut-down copy for running a dedicated server (little or no
+// scenery). Ridden, the track looks empty or black, and when it has the player file's name it
+// replaces the player track. It is labelled, asked about, and never replaces an installed track.
+function isServerDownload(d) {
+  const flag = String(d?.flag || ''), label = String(d?.label || '');
+  // The download's flag (Default, Recommended, Server Version…) decides; the label only when there
+  // is no flag ("Default: … Server versions for both in the zip too" is the normal download).
+  if (flag.trim()) return /\bserver\b/i.test(flag) && !/\bplayer\b/i.test(flag);
+  return /\bserver\b/i.test(label) && !/\bplayer\b/i.test(label);
+}
+
 async function startDownload(p, dl) {
+  const serverVersion = isServerDownload(dl);
+  if (serverVersion && !await confirmBox('Install the server version?', '<p>This is the <b>server version</b> of the track: a cut-down copy for running a dedicated server, with little or no scenery. If you ride it, the track looks empty or black.</p><p>To ride, install the player version (Recommended / Default) instead. CoreMX never lets the server version replace a player track you have installed.</p>', 'Install server version')) return false;
   p = { ...p, modelDependencies: dl.modelDependencies ?? p.modelDependencies, dependencies: dl.modelDependencies?.length ? dl.modelDependencies : p.dependencies };
   const modelWarning = needsModelWarning(p);
   if (modelWarning && !await warnBeforePaintInstall(p)) return false;
@@ -1730,7 +1743,7 @@ async function startDownload(p, dl) {
   const requireReview = modelWarning || animation;
   const id = await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
-    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview, modelWarningAccepted: modelWarning, animationLocation,
+    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview: requireReview || serverVersion, modelWarningAccepted: modelWarning, animationLocation, serverVersion,
   });
   if (id && !S.jobs.has(id)) S.jobs.set(id, { id, title: p.title, url: dl.url, status: 'queued', createdAt: Date.now() });
   refreshInlineDownloads();
@@ -3011,7 +3024,7 @@ document.addEventListener('click', async (e) => {
     u.disabled = true;
     try {
       const p = await api.invoke('site:post', Number(u.dataset.update));
-      const dl = p.downloads.find((d) => /default|recommended/i.test(d.flag)) || p.downloads[0];
+      const dl = p.downloads.find((d) => /default|recommended/i.test(d.flag) && !isServerDownload(d)) || p.downloads.find((d) => !isServerDownload(d)) || p.downloads[0];
       if (!dl) throw new Error('No download link on the mod page');
       if (!await startDownload(p, dl)) { u.disabled = false; return; }
       S.updates = (S.updates || []).filter((x) => x.id !== p.id);
