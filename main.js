@@ -80,13 +80,13 @@ async function dependencyStatus(dependency, records, catalog) {
   }
   if (dependency.unidentified) return { installed: null };
   const key = dependencyKey(dependency.url);
-  const recorded = key && records.some((record) => dependencyKey(record.link) === key && record.files.some((file) => /\.(pkz|edf)$/i.test(file) && !file.startsWith('game:') && fs.existsSync(path.join(modsDir(), file))));
+  const recorded = key && records.some((record) => dependencyKey(record.link) === key && record.files.some((file) => /\.(pkz|edf)$/i.test(file) && !/^(game|user):/.test(file) && fs.existsSync(path.join(modsDir(), file))));
   const kind = dependency.kind || dependencyModelKind(dependency);
   if (recorded) return { installed: true, kind };
   if (!kind || !catalog) return { installed: null, kind };
   const name = matchingModel(catalog[({ helmets: 'helmet', protections: 'protection' })[kind] || kind] || [], dependency);
   // A model folder named differently from the listing can still be the right one when this app installed it.
-  if (!name) { const byTitle = records.find((r) => r.title && matchingModel([r.title], dependency) && r.files.some((f) => /\.(pkz|edf)$/i.test(f) && !f.startsWith('game:') && fs.existsSync(path.join(modsDir(), f)))); if (byTitle) return { installed: true, kind, matchedName: byTitle.title }; }
+  if (!name) { const byTitle = records.find((r) => r.title && matchingModel([r.title], dependency) && r.files.some((f) => /\.(pkz|edf)$/i.test(f) && !/^(game|user):/.test(f) && fs.existsSync(path.join(modsDir(), f)))); if (byTitle) return { installed: true, kind, matchedName: byTitle.title }; }
   return { installed: name ? true : false, kind, matchedName: name || '' };
 }
 function onlineConfig() {
@@ -319,6 +319,20 @@ function insideRoots(p) {
   const n = path.resolve(p).toLowerCase();
   return [modsDir(), disabledDir()].some((r) => n === path.resolve(r).toLowerCase() || n.startsWith(path.resolve(r).toLowerCase() + path.sep));
 }
+// Where a plan installs: 'mods' (default), 'game' (MX Bikes install folder, recorded as game:...) or
+// 'user' (the MX Bikes documents folder: profile setups, plugin textures; recorded as user:...).
+function planPrefix(plan) { return plan?.root === 'game' ? 'game:' : plan?.root === 'user' ? 'user:' : ''; }
+function planRootDir(plan) { return plan?.root === 'game' ? store.get('settings').gameInstallDir : plan?.root === 'user' ? profUserDir() : modsDir(); }
+function recordedPath(file) {
+  if (file.startsWith('game:')) return path.resolve(store.get('settings').gameInstallDir || '', file.slice(5));
+  if (file.startsWith('user:')) return path.resolve(profUserDir() || '', file.slice(5));
+  return path.resolve(modsDir(), file);
+}
+// Strictly inside the documents-folder places CoreMX installs to (never the folders themselves).
+function insideUser(p) {
+  const n = path.resolve(p).toLowerCase(), base = profUserDir();
+  return !!base && ['profiles', 'mxbmrp3'].some((d) => n.startsWith(path.resolve(base, d).toLowerCase() + path.sep));
+}
 // Strictly below a root: never the mods or disabled folder itself (used before deleting).
 function insideRootsStrict(p) {
   const n = path.resolve(p).toLowerCase();
@@ -544,7 +558,7 @@ function jobView(j) {
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
     createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.equipCandidates, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
-      kind: p.kind, kindLabel: p.kindLabel, base: p.base, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
+      kind: p.kind, kindLabel: p.kindLabel, base: p.base, root: p.root, variants: p.variants || [], needsVariant: !!p.needsVariant, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable, bikeCompatibility: p.bikeCompatibility,
       needsSoundBike: p.needsSoundBike, soundBikes: p.soundBikes,
       paintModelInfo: p.paintModelsBase === 'bikes' ? p.paintModels.map((name) => ({ name, brand: scanner.detectBrand(name), cc: scanner.detectCC(name), bikeClass: scanner.detectClass(name) })) : [],
@@ -596,6 +610,38 @@ function fail(j, e) {
   cleanupStage(j);
 }
 
+// Programs in an archive and files for making mods (fonts, paint templates, 3D models) are not
+// game files: they are saved to Downloads/CoreMX/<title> and listed in My Mods → Apps. CoreMX never
+// runs a program itself; the player starts it from Apps.
+async function saveToDownloads(j, pkg) {
+  const parent = path.join(app.getPath('downloads'), 'CoreMX');
+  const base = String(j.title || path.basename(j.file, path.extname(j.file))).replace(/<[^>]*>/g, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 100) || 'Download';
+  let target = path.join(parent, base), n = 2;
+  while (fs.existsSync(target)) target = path.join(parent, `${base} (${n++})`);
+  const tops = new Set(j.files.map((f) => f.rel.split('/')[0].toLowerCase()));
+  const strip = tops.size === 1 && j.files.every((f) => f.rel.includes('/')) ? 1 : 0;
+  const placed = [];
+  for (const f of j.files) {
+    if (j.abort.signal.aborted) throw new Error('Cancelled');
+    const to = path.join(target, ...f.rel.split('/').slice(strip));
+    if (!path.resolve(to).toLowerCase().startsWith(path.resolve(target).toLowerCase() + path.sep)) continue;
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.copyFile(f.abs, to);
+    placed.push({ to, size: f.size, rel: f.rel });
+  }
+  if (!placed.length) throw new Error('The download had no files to save.');
+  const exes = placed.filter((p) => /\.exe$/i.test(p.to) && !/unins|uninstall/i.test(path.basename(p.to)));
+  const exe = pkg === 'app' ? (exes.sort((a, b) => b.size - a.size)[0] || placed.find((p) => /\.exe$/i.test(p.to)))?.to : null;
+  const appId = crypto.randomUUID();
+  store.update('apps', (all) => [{ id: appId, title: j.title, path: exe || target, folder: target, files: pkg === 'files', link: j.link, downloadedAt: Date.now() }, ...(all || [])].slice(0, 100));
+  const where = `Downloads\\CoreMX\\${path.basename(target)}`;
+  const fonts = placed.some((p) => /\.(ttf|otf)$/i.test(p.to));
+  j.status = 'done'; j.appId = appId; j.installed = [];
+  j.note = pkg === 'app' ? `Program saved to ${where}. Open My Mods → Apps to run it.`
+    : `These are files for making mods (${fonts ? 'fonts for paint designs' : 'templates, textures or 3D models'}), not files the game loads. Saved to ${where}${fonts ? '; double-click a font to install it in Windows' : ''}. Find it in My Mods → Apps.`;
+  emitJob(j); cleanupStage(j); send('library:changed', {});
+}
+
 async function afterDownload(j, file) {
   if (j.abort.signal.aborted) { fail(j, new Error('Cancelled')); return; }
   j.file = file;
@@ -615,17 +661,22 @@ async function afterDownload(j, file) {
       return;
     }
     j.files = await archive.stage(file, j.stageDir, store.get('settings'));
+    const pkg = !j.serverVersion && !j.relocateKey && !j.opts?.kind ? installer.packageKind(j.files, j.categories || []) : null;
+    if (pkg) { await saveToDownloads(j, pkg); return; }
     j.ctx = {
       modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, categories: j.categories || [], categoryNames: j.categoryNames || [], title: j.title,
       // A track's server version never counts as a reinstall: it must not replace the player track.
       reinstall: !j.serverVersion && !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [], animationLocation: j.animationLocation,
       serverVersion: !!j.serverVersion,
+      userDir: profUserDir(), profile: await profile.listProfiles(profUserDir()).then((p) => p.last).catch(() => null),
     };
-    if (!j.ctx.categories.length) {
+    if (!j.ctx.categories.length || installer.kindFromCategories(j.ctx.categories) === 'custom') {
       // Uploaded from the computer: no site category, so look inside the files.
       const d = await detectKind(j.files);
-      j.ctx.local = !j.postId;
-      j.ctx.kindHint = d.kind;
+      j.ctx.local = !j.postId && !j.ctx.categories.length;
+      // A post in a category without a type (Other, Modpacks, Bikelife...) can hold several kinds of
+      // mod: only kinds with one clear place are taken from its files.
+      j.ctx.kindHint = j.ctx.local || !j.ctx.categories.length || ['setup', 'translation', 'bikeFont', 'riderFont', 'stand', 'pitboard', 'tyre', 'sound'].includes(d.kind) ? d.kind : null;
       j.ctx.detectReason = d.reason;
     }
     const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories));
@@ -636,10 +687,10 @@ async function afterDownload(j, file) {
     if (j.plan.requiresModelWarning) j.requireReview = true;
     // Already have exactly these files? Don't install a second copy.
     const placed = j.plan.entries.filter((e) => e.dest);
-    const targetRoot = j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
+    const targetRoot = planRootDir(j.plan);
     if (j.plan.kind !== 'bikeSwap' && j.plan.root !== 'game' && !j.plan.counts.unresolved && await filesMatch(placed, targetRoot)) {
       if (j.abort.signal.aborted) throw new Error('Cancelled');
-      await recordInstall(j, placed.map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest));
+      await recordInstall(j, placed.map((e) => planPrefix(j.plan) + e.dest));
       j.status = 'done'; j.installed = []; j.note = 'Already installed — you have these exact files, nothing was changed.';
       await recycleSourceArchive(j);
       emitJob(j); cleanupStage(j); send('library:changed', {});
@@ -656,7 +707,9 @@ async function doInstall(j, opts) {
     j.status = 'installing'; emitJob(j);
     j.plan = installer.plan(j.files, j.ctx, opts);
     if (j.plan.needsSoundBike) throw new Error('Choose a compatible installed bike for every sound file before installing.');
-    if (j.plan.root === 'game' && !store.get('settings').gameInstallDir) throw new Error('Set your MX Bikes install folder in Settings first.');
+    if ((j.plan.root === 'game' || j.plan.entries.some((e) => e.dest && e.fromGame)) && !store.get('settings').gameInstallDir) throw new Error('Set your MX Bikes install folder in Settings first.');
+    if (j.plan.root === 'user' && !profUserDir()) throw new Error('Set your MX Bikes documents folder in Settings first.');
+    if (j.plan.needsVariant) throw new Error('Choose which version to install first.');
     if (['plugin', 'animation', 'animationGame'].includes(j.plan.kind) && await profile.isGameRunning()) throw new Error('Close MX Bikes before installing or changing animations and plugins.');
     if (j.plan.kind === 'bikeSwap') {
       if (j.plan.counts.unresolved || !j.plan.installable) throw new Error('Choose the exact base bike for this model swap first.');
@@ -674,6 +727,7 @@ async function doInstall(j, opts) {
     if (j.relocateKey) {
       if (await profile.isGameRunning()) throw new Error('Close MX Bikes before moving installed files');
       if (j.plan.root === 'game') throw new Error('Graphics packages stay in the game folder; manage them in Graphics');
+      if (j.plan.root === 'user') throw new Error('Setups and plugin textures stay where they are installed; uninstall and install again to change them.');
       if (!j.plan.installable || j.plan.needsPaintTarget || j.plan.needsRiderTarget || j.plan.bikeCompatibility?.blocked) throw new Error('Choose a compatible destination first');
       const changes = await recentInstalls.relocatePlan(j.plan, modsDir(), j.abort.signal);
       store.update('installs', (all) => Object.fromEntries(Object.entries(all).map(([key, rec]) => [key, { ...rec, ...(key === j.relocateKey ? { kind: j.plan.kind, installOptions: j.plan.options } : {}), files: rec.files.map((rel) => changes.get(rel) || rel) }])));
@@ -681,7 +735,7 @@ async function doInstall(j, opts) {
       j.status = 'done'; j.note = `Moved ${changes.size} installed files`; j.installed = []; emitJob(j); cleanupStage(j); await scan(); send('library:changed', {}); return;
     }
     const applyAndRecord = async () => {
-      const written = (await installer.apply(j.plan, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir(), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') })).map((w) => (j.plan.root === 'game' ? 'game:' : '') + w);
+      const written = (await installer.apply(j.plan, planRootDir(j.plan), { signal: j.abort.signal, rollbackDir: path.join(j.stageDir, 'rollback') })).map((w) => planPrefix(j.plan) + w);
       if (!written.length) throw new Error('Nothing was installed: no file had a destination.');
       await recordInstall(j, written);
       j.installed = written; j.equipCandidates = await equipInstalled.choicesFromFiles(written, modsDir());
@@ -691,11 +745,11 @@ async function doInstall(j, opts) {
     const written = j.plan.kind === 'graphics' ? await graphicsManager.install(j.plan, installKey(j, j.plan.entries.filter((e) => e.dest).map((e) => 'game:' + e.dest)), applyAndRecord) : await applyAndRecord();
     j.installed = written;
     if (j.sourceArchive) {
-      const entries = j.plan.entries.filter((e) => written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest));
-      j.sourceVerified = !j.plan.counts.unresolved && await filesMatch(entries, j.plan.root === 'game' ? store.get('settings').gameInstallDir : modsDir());
+      const entries = j.plan.entries.filter((e) => written.includes(planPrefix(j.plan) + e.dest));
+      j.sourceVerified = !j.plan.counts.unresolved && await filesMatch(entries, planRootDir(j.plan));
     }
     const dirs = [...new Set(written.map((w) => path.posix.dirname(w)))];
-    j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}${dirs.length === 1 ? ` to ${j.plan.root === 'game' ? 'game' : 'mods'}/${dirs[0]}` : ` across ${dirs.length} folders`}`;
+    j.status = 'done'; j.note = `Installed ${installSummary.summary(written)}${dirs.length === 1 ? ` to ${j.plan.root === 'game' ? 'game' : j.plan.root === 'user' ? 'documents' : 'mods'}/${dirs[0]}` : ` across ${dirs.length} folders`}`;
     await recycleSourceArchive(j);
     emitJob(j);
     cleanupStage(j);
@@ -708,8 +762,8 @@ function installKey(j, written) { return j.postId ? String(j.postId) : j.shopKey
 async function recordInstall(j, written) {
   const key = installKey(j, written);
   const hashes = {};
-  if (['plugin', 'animation', 'animationGame'].includes(j.plan?.kind)) for (const entry of j.plan.entries.filter((e) => e.dest && written.includes((j.plan.root === 'game' ? 'game:' : '') + e.dest))) {
-    hashes[(j.plan.root === 'game' ? 'game:' : '') + entry.dest] = await pluginFiles.digest(entry.abs);
+  if (['plugin', 'animation', 'animationGame'].includes(j.plan?.kind)) for (const entry of j.plan.entries.filter((e) => e.dest && written.includes(planPrefix(j.plan) + e.dest))) {
+    hashes[planPrefix(j.plan) + entry.dest] = await pluginFiles.digest(entry.abs);
   }
   store.update('installs', (all) => {
     const prev = all[key];
@@ -1134,7 +1188,7 @@ function registerIpc() {
     if (site.standalone(post.categories)) post.dependencies = (post.dependencies || []).filter((d) => d.declared || d.kind === 'bikeSwap');
     if (rec) {
       const files = [];
-      for (const rel of rec.files.filter((f) => /\.pnt$/i.test(f) && !f.startsWith('game:'))) {
+      for (const rel of rec.files.filter((f) => /\.pnt$/i.test(f) && !/^(game|user):/.test(f))) {
         const abs = path.resolve(modsDir(), rel);
         if (!insideRoots(abs)) continue;
         try { files.push({ rel, abs, size: (await fsp.stat(abs)).size }); } catch {}
@@ -1214,8 +1268,7 @@ function registerIpc() {
       return;
     }
     const installed = (j.installed && j.installed[0]) || (j.status === 'done' && j.plan?.entries.find((e) => e.dest)?.dest);
-    const root = j.plan?.root === 'game' ? store.get('settings').gameInstallDir : modsDir();
-    const candidates = j.status === 'done' ? [installed && path.resolve(root, installed.replace(/^game:/, ''))] : [j.file, j.sourceArchive];
+    const candidates = j.status === 'done' ? [installed && (/^(game|user):/.test(installed) ? recordedPath(installed) : path.resolve(planRootDir(j.plan), installed))] : [j.file, j.sourceArchive];
     const file = candidates.filter(Boolean).find((p) => fs.existsSync(p));
     if (file) shell.showItemInFolder(file);
     else if (j.stageDir && fs.existsSync(j.stageDir)) shell.openPath(j.stageDir);
@@ -1228,8 +1281,9 @@ function registerIpc() {
       const item = (store.get('apps') || []).find((entry) => entry.id === j.appId);
       if (item) {
         const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
-        if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
-        if (fs.existsSync(item.path)) await shell.trashItem(item.path);
+        const target = item.folder && path.resolve(item.folder).toLowerCase().startsWith(root) ? item.folder : item.path;
+        if (!path.resolve(target).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
+        if (fs.existsSync(target)) await shell.trashItem(target);
         store.update('apps', (all) => (all || []).filter((entry) => entry.id !== j.appId));
       }
       j.status = 'error'; j.filesDeleted = true; j.note = 'Application moved to the Recycle Bin'; emitJob(j); send('library:changed', {});
@@ -1260,11 +1314,11 @@ function registerIpc() {
       await graphicsManager.uninstall(installKey(j, j.installed || []));
       j.status = 'error'; j.error = null; j.installed = []; j.filesDeleted = true; j.note = 'Graphics package removed; original game files restored'; emitJob(j); send('library:changed', {}); return;
     }
-    const installed = j.installed?.length ? j.installed : (j.plan?.entries || []).filter((e) => e.dest).map((e) => (j.plan.root === 'game' ? 'game:' : '') + e.dest);
+    const installed = j.installed?.length ? j.installed : (j.plan?.entries || []).filter((e) => e.dest).map((e) => planPrefix(j.plan) + e.dest);
     const removed = new Set();
     for (const file of installed) {
-      const abs = file.startsWith('game:') ? path.resolve(store.get('settings').gameInstallDir, file.slice(5)) : path.resolve(modsDir(), file);
-      if (!insideRootsStrict(abs) && !insideGame(abs)) throw new Error('File is outside the mod install folders');
+      const abs = recordedPath(file);
+      if (!insideRootsStrict(abs) && !insideGame(abs) && !insideUser(abs)) throw new Error('File is outside the mod install folders');
       if (fs.existsSync(abs)) await shell.trashItem(abs);
       if (file.startsWith('game:') && fs.existsSync(abs + '.mxbm-bak')) await fsp.rename(abs + '.mxbm-bak', abs);
       removed.add(file);
@@ -1576,12 +1630,12 @@ function registerIpc() {
     if (!fs.existsSync(file)) throw new Error('Animation file is missing.');
     shell.showItemInFolder(file);
   });
-  handle('apps:list', () => (store.get('apps') || []).filter((item) => /\.exe$/i.test(item.path) && fs.existsSync(item.path)));
+  const appInDownloads = (p) => path.resolve(p).toLowerCase().startsWith(path.resolve(app.getPath('downloads')).toLowerCase() + path.sep);
+  handle('apps:list', () => (store.get('apps') || []).filter((item) => (/\.exe$/i.test(item.path) || item.files) && fs.existsSync(item.path)));
   handle('apps:run', async (id) => {
     const item = (store.get('apps') || []).find((entry) => entry.id === id);
-    if (!item || !/\.exe$/i.test(item.path) || !fs.existsSync(item.path)) throw new Error('Application file is missing from Downloads.');
-    const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
-    if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
+    if (!item || !(/\.exe$/i.test(item.path) || item.files) || !fs.existsSync(item.path)) throw new Error('Application file is missing from Downloads.');
+    if (!appInDownloads(item.path)) throw new Error('Application is outside Downloads.');
     const error = await shell.openPath(item.path);
     if (error) throw new Error(error);
     return true;
@@ -1589,9 +1643,9 @@ function registerIpc() {
   handle('apps:remove', async (id) => {
     const item = (store.get('apps') || []).find((entry) => entry.id === id);
     if (!item) return false;
-    const root = path.resolve(app.getPath('downloads')).toLowerCase() + path.sep;
-    if (!path.resolve(item.path).toLowerCase().startsWith(root)) throw new Error('Application is outside Downloads.');
-    if (fs.existsSync(item.path)) await shell.trashItem(item.path);
+    const target = item.folder && appInDownloads(item.folder) ? item.folder : item.path;
+    if (!appInDownloads(target)) throw new Error('Application is outside Downloads.');
+    if (fs.existsSync(target)) await shell.trashItem(target);
     store.update('apps', (all) => (all || []).filter((entry) => entry.id !== id));
     for (const job of jobs.values()) if (job.appId === id) { job.status = 'error'; job.filesDeleted = true; job.note = 'Application moved to the Recycle Bin'; emitJob(job); }
     send('library:changed', {});
@@ -1960,8 +2014,10 @@ function registerIpc() {
     if (bikeSwaps.hasRecord(key)) { await bikeSwaps.removeRecord(key); for (const rel of rec.files) if (/\.pnt$/i.test(rel) && insideRootsStrict(path.resolve(modsDir(), rel)) && fs.existsSync(path.resolve(modsDir(), rel))) await shell.trashItem(path.resolve(modsDir(), rel)); store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; }); resetJobs(); send('library:changed', {}); return; }
     if (graphicsPackages.isGraphics(rec)) { await graphicsManager.uninstall(key); resetJobs(); send('library:changed', {}); return; }
     for (const f of rec.files) {
-      const abs = f.startsWith('game:') ? path.join(store.get('settings').gameInstallDir, f.slice(5)) : path.join(modsDir(), f);
-      if (f && fs.existsSync(abs) && (insideRootsStrict(abs) || insideGame(abs))) await shell.trashItem(abs);
+      const abs = recordedPath(f);
+      if (f && fs.existsSync(abs) && (insideRootsStrict(abs) || insideGame(abs) || insideUser(abs))) await shell.trashItem(abs);
+      // Game files this mod replaced come back (menus, stands, pitboards, translations).
+      if (f.startsWith('game:') && insideGame(abs) && !fs.existsSync(abs) && fs.existsSync(abs + '.mxbm-bak')) await fsp.rename(abs + '.mxbm-bak', abs);
     }
     store.update('installs', (all) => { const n = { ...all }; delete n[key]; return n; });
     resetJobs();

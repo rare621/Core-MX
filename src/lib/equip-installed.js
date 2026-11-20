@@ -11,7 +11,7 @@ function choices(files) {
     else if (!group.paints.some((name) => name.toLowerCase() === paint.toLowerCase())) group.paints.push(paint);
   };
   for (let file of files) {
-    if (file.startsWith('game:')) continue;
+    if (/^(game|user):/.test(file)) continue;
     file = canonical(file);
     let m = file.match(/^bikes\/([^/]+)\/paints\/([^/]+)\.pnt$/i);
     if (m) { add('bike:' + m[1], { kind: 'bike', bike: m[1], label: m[1].replace(/_/g, ' '), slot: 'bikePaint', changes: {} }, m[2]); continue; }

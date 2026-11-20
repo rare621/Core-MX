@@ -10,12 +10,19 @@ function safeName(name) {
   return String(name || 'download').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+$/, '').slice(0, 180) || 'download';
 }
 
+// Headers arrive as Latin-1: a UTF-8 file name ("español.str") shows as "espaÃ±ol.str". Decode it
+// back when the bytes are valid UTF-8.
+function utf8Name(name) {
+  if (!/[\u0080-\u00ff]/.test(name) || /[^\u0000-\u00ff]/.test(name)) return name;
+  const text = Buffer.from(name, 'latin1').toString('utf8');
+  return text.includes('\ufffd') ? name : text;
+}
 function filenameFromHeaders(headers, url) {
   const cd = headers.get('content-disposition') || '';
   let m = cd.match(/filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/);
   if (m) return safeName(decodeURIComponent(m[1].replace(/"/g, '')));
   m = cd.match(/filename\s*=\s*"([^"]+)"/) || cd.match(/filename\s*=\s*([^;]+)/);
-  if (m) return safeName(m[1].trim());
+  if (m) return safeName(utf8Name(m[1].trim()));
   try { return safeName(decodeURIComponent(path.basename(new URL(url).pathname))); } catch { return 'download'; }
 }
 

@@ -10,6 +10,7 @@ const SIGNATURES = [
   ['helmetcam', /(^|\/)gopro\.hrc$/i],
   ['riderModel', /(^|\/)rider\.hrc$|(^|\/)rider\.(anm|edf)$/i],
   ['tyre', /\.tyre$/i],
+  ['tyre', /(?:^|\/)install_e10_wheels\.ps1$/i],
   ['bike', /\.(engn|geom|scl|susp|chas)$|(^|\/)bike\.hrc$/i],
 ];
 
@@ -35,6 +36,14 @@ async function detectKind(files) {
   if (names.some((n) => /(?:^|\/)engine\.scl$/i.test(n)) && names.some((n) => /(?:^|\/)(?:sfx(?:\.cfg)?|samples)(?:\/|$)/i.test(n))) return { kind: 'sound', reason: 'sound-files' };
   let kind = kindFromNames(names);
   if (kind) return { kind, reason: 'files' };
+  // Files with one clear place: setups, translations, number fonts, stands and HUD pitboards.
+  const content = names.filter((n) => !/\.(txt|md|url|pdf|html?|docx?|rtf|jpe?g|png|webp|gif|psd)$/i.test(n));
+  if (content.length && content.every((n) => /\.st[pt]$/i.test(n))) return { kind: 'setup', reason: 'files' };
+  if (content.length && content.every((n) => /\.str$/i.test(n))) return { kind: 'translation', reason: 'files' };
+  if (names.some((n) => /(?:^|\/)plate\.tga$/i.test(n)) && names.some((n) => /\.ini$/i.test(n))) return { kind: 'bikeFont', reason: 'files' };
+  if (names.some((n) => /(?:^|\/)number\.tga$/i.test(n)) && names.some((n) => /(?:^|\/)name\.tga$/i.test(n))) return { kind: 'riderFont', reason: 'files' };
+  if (names.some((n) => /(?:^|\/)stand\.edf$/i.test(n)) && !names.some((n) => /\.(pkz|engn|geom)$/i.test(n))) return { kind: 'stand', reason: 'files' };
+  if (names.some((n) => /(?:^|\/)misc\/hud\/pitboard[^/]*\.(cfg|tga)$/i.test(n))) return { kind: 'pitboard', reason: 'files' };
   kind = kindFromPackageName(names);
   if (kind) return { kind, reason: 'package-name' };
 

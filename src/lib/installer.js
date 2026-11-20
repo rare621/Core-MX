@@ -31,8 +31,15 @@ const KINDS = {
   riderModel:      { label: 'Rider model', base: () => 'rider/riders' },
   animation:       { label: 'Rider animation (mods folder)', base: () => 'rider/animations' },
   animationGame:   { label: 'Rider animation (game folder)', base: () => 'rider/animations/mx', root: 'game' },
-  tyre:            { label: 'Tyres', base: () => 'tyres' },
+  tyre:            { label: 'Tyres / wheels', base: () => 'tyres' },
+  bikeFont:        { label: 'Bike number font', base: () => 'misc/fonts' },
+  riderFont:       { label: 'Rider name & number font', base: () => 'rider/fonts' },
   sound:           { label: 'Bike sound', base: () => 'bikes' },
+  setup:           { label: 'Bike setup (profile)', base: () => 'profiles', root: 'user' },
+  translation:     { label: 'Game translation (language)', base: () => 'ui', root: 'game' },
+  stand:           { label: 'Bike stand (game folder)', base: () => 'misc/stand', root: 'game' },
+  pitboard:        { label: 'Pitboard (game folder)', base: () => 'misc/hud', root: 'game' },
+  hudTexture:      { label: 'MXBMRP3 HUD textures', base: () => 'mxbmrp3/textures', root: 'user' },
   plugin:          { label: 'Game plugin', base: () => 'plugins', root: 'game' },
   graphics:        { label: 'Graphics mod (game folder)', base: () => '', root: 'game' },
   menuUi:          { label: 'Menu, loading screen or menu background (game folder)', base: () => '', root: 'game' },
@@ -51,8 +58,115 @@ const CATEGORY_KIND = [
   [[22, 360, 122, 173], 'track'],
   [[168, 57], 'menuUi'],
   [[174, 609, 130], 'graphics'],
+  [[95], 'tyre'], [[42], 'bikeFont'], [[41], 'riderFont'], [[610], 'setup'], [[351], 'translation'],
+  [[366], 'stand'], [[605], 'pitboard'],
   [[30], 'riderKit'], [[29], 'bike'],
 ];
+// Categories whose downloads are files for making mods (paint templates, wheel/tyre textures to pack
+// with paintED, 3D models and objects for track builders), not files the game loads.
+const RESOURCE_CATEGORIES = [382, 136, 119];
+const RESOURCE_EXT = /\.(ttf|otf|woff2?|psd|psb|ai|xcf|kra|sai|blend\d*|fbx|obj|3ds|max|c4d|dae|svg|eps|spp|sbsar|xlsx?|csv)$/i;
+const GAME_FILE = /\.(pkz|pnt|dlo|anm|edf|hrc|engn|geom|scl|tyre|str|stp|stt|mnu|amb|map|trk|fnt|arr)$/i;
+const STRONG_GAME_FILE = /\.(pkz|pnt|dlo|anm|str|stp|stt|mnu|engn|geom|tyre)$/i;
+const NOT_CONTENT = /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif|bmp|mp4|mov)$|(?:^|\/)(?:license|licence|readme|changelog|notice|authors|credits|copying)$/i;
+
+// What a download is before it is placed in a game folder:
+//   'app'   - a program in an archive (an .exe and no game files): saved to Downloads, run from Apps
+//   'files' - files for making mods (fonts, PSD templates, 3D models): saved to Downloads
+//   null    - a mod: planned and installed into the game.
+function packageKind(files, categories = []) {
+  const content = files.filter((f) => !NOT_CONTENT.test(f.rel));
+  if (!content.length) return null;
+  if (content.some((f) => /\.exe$/i.test(f.rel)) && !content.some((f) => GAME_FILE.test(f.rel) || /(?:^|\/)(?:mods|misc|ui|plugins|bikes|tracks|rider|tyres)\//i.test(f.rel))) return 'app';
+  if (content.every((f) => RESOURCE_EXT.test(f.rel))) return 'files';
+  if (categories.some((c) => RESOURCE_CATEGORIES.includes(c)) && !content.some((f) => STRONG_GAME_FILE.test(f.rel) || /(?:^|\/)mods\//i.test(f.rel))) return 'files';
+  return null;
+}
+
+// Several alternatives for the same place (a pack of stands or pitboards, one folder per brand):
+// only one can be used, so the player chooses. dests: rel -> destination (null = not copied,
+// undefined = no known place). Returns the variant folders, and edits dests so that files of the
+// other variants are not copied (or wait for the choice when none is chosen yet).
+function pickVariant(dests, chosen) {
+  const byDest = new Map();
+  for (const [rel, d] of dests) if (d) { const k = d.toLowerCase(); if (!byDest.has(k)) byDest.set(k, []); byDest.get(k).push(rel); }
+  const clashes = [...byDest.values()].filter((rels) => rels.length > 1);
+  if (!clashes.length) return { variants: [], variant: null, waiting: false, other: new Set() };
+  const prefixes = new Set();
+  for (const rels of clashes) {
+    const parts = rels.map((r) => r.split('/'));
+    let i = 0;
+    while (parts.every((p) => i < p.length - 1 && p[i] === parts[0][i])) i++;
+    for (const p of parts) if (i < p.length - 1) prefixes.add(p.slice(0, i + 1).join('/'));
+  }
+  const list = [...prefixes].filter((p) => ![...prefixes].some((q) => q !== p && p.startsWith(q + '/'))).sort((a, b) => a.localeCompare(b));
+  const owner = (rel) => list.find((p) => rel.startsWith(p + '/'));
+  const variant = list.includes(chosen) ? chosen : null, other = new Set();
+  if (list.length > 1) {
+    for (const [rel, d] of dests) {
+      const own = owner(rel);
+      if (!own || d === null) continue;
+      if (!variant) dests.set(rel, undefined);
+      else if (own !== variant) { dests.set(rel, null); other.add(rel); }
+    }
+  }
+  // Anything still clashing (inside one variant, or files at the same place without folders) is left to the player.
+  const seen = new Map();
+  for (const [rel, d] of dests) if (d) seen.set(d.toLowerCase(), (seen.get(d.toLowerCase()) || 0) + 1);
+  for (const [rel, d] of dests) if (d && seen.get(d.toLowerCase()) > 1) dests.set(rel, undefined);
+  const label = (p) => { const last = p.split('/').pop(); return list.filter((q) => q.split('/').pop() === last).length > 1 ? p : last; };
+  return { variants: list.length > 1 ? list.map((id) => ({ id, label: label(id) })) : [], variant, waiting: list.length > 1 && !variant, other };
+}
+
+const DESIGN_SKIP = /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif|bmp|bat|cmd|ps1|vbs|exe|dll|msi|json|pdb|psd|psb|xcf|ai|xlsx?|blend\d*|fbx|ttf|otf)$|(?:^|\/)(?:license|licence|readme|changelog|notice|authors|credits)$/i;
+// Bike stands: the game's stand lives in misc/stand (stand.edf, stand_s.edf, stand.ini, gfx.cfg).
+// Creators: copy the "stand" folder into MX Bikes/misc. Its look comes from a bike paint (Stand_Tex
+// packed into the .pnt), so loose textures for paint packing are not copied.
+function standDestinations(files) {
+  const out = new Map();
+  for (const f of files) {
+    const segs = f.rel.split('/'), l = segs.map((s) => s.toLowerCase()), fname = segs[segs.length - 1];
+    let dest = null;
+    const misc = l.lastIndexOf('misc'), stand = l.slice(0, -1).lastIndexOf('stand');
+    if (DESIGN_SKIP.test(f.rel) || /\.pnt$/i.test(fname)) dest = null;
+    else if (misc >= 0 && misc < segs.length - 1) dest = ['misc', ...segs.slice(misc + 1)].join('/');
+    else if (stand >= 0) dest = ['misc/stand', ...segs.slice(stand + 1)].join('/');
+    else if (/^(stand(_s)?\.edf|stand\.ini|gfx\.cfg)$/i.test(fname)) dest = `misc/stand/${fname}`;
+    out.set(f.rel, dest);
+  }
+  return out;
+}
+// HUD pitboards (MX Bikes/misc/hud: pitboard.cfg, pitboard.tga, PitboardFontsNumbers.*). Creators:
+// "move the misc folder into your MX Bikes directory (where mxbikes.exe is)". A trackside board's
+// .pnt belongs in mods/misc/pitboard instead, so it is not part of this (game folder) install.
+function pitboardDestinations(files) {
+  const out = new Map();
+  // A board without the game's folders is the HUD board (misc/hud), unless it is the trackside one:
+  // it has a 3D pitboard.edf or a trackside pitboard.cfg (texture = w_pitboard, handgrip...), and those
+  // files belong in misc/pitboard (a trackside .cfg in misc/hud would break the HUD board).
+  const trackside = files.some((f) => /\.edf$/i.test(f.rel)) || files.some((f) => {
+    if (!/(?:^|\/)pitboard[^/]*\.cfg$/i.test(f.rel) || !f.abs) return false;
+    try { return /handgrip|texture\s*=\s*w_pitboard/i.test(fs.readFileSync(f.abs, 'latin1').slice(0, 4000)); } catch { return false; }
+  });
+  for (const f of files) {
+    const segs = f.rel.split('/'), l = segs.map((s) => s.toLowerCase()), fname = segs[segs.length - 1];
+    const misc = l.slice(0, -1).lastIndexOf('misc');
+    let dest;
+    if (DESIGN_SKIP.test(f.rel) || /\.pnt$/i.test(fname)) dest = null;
+    else if (misc >= 0) dest = ['misc', ...segs.slice(misc + 1)].join('/');
+    else if (/\.edf$/i.test(fname)) dest = `misc/pitboard/${fname}`;
+    else if (/\.(cfg|tga|arr)$/i.test(fname)) dest = `misc/${trackside ? 'pitboard' : 'hud'}/${fname}`;
+    out.set(f.rel, dest);
+  }
+  return out;
+}
+// The E10 Factory Bike Pack wheel fix ships only a PowerShell script that copies the game's own
+// stock wheel files (tyres.pkz, tyres/p_mx) into mods/tyres/Factory_tyre. CoreMX never runs scripts,
+// so it copies the same files itself.
+const SCRIPT_RECIPES = [
+  { match: /(?:^|\/)install_e10_wheels\.ps1$/i, kind: 'tyre', copies: ['gfx.cfg', 'fwheel.hrc', 'rwheel.hrc', 'p_mx.edf', 'p_mx_s.edf', 'p_mx_as.edf', 'c_p_mx.edf'].map((n) => ({ pkz: 'tyres.pkz', inner: `tyres/p_mx/${n}`, dest: `tyres/Factory_tyre/${n}` })) },
+];
+const STOCK_TYRES = ['p_mx', 'm_sm'];
 
 // Menus, loading screens and menu backgrounds (MXB Mods "UI" and "Menu Backgrounds"). They only
 // work in the game install folder (creators: "not in mods"): menu files (.mnu, their tiles/ images,
@@ -122,6 +236,16 @@ function guessModel(models, text) {
   return bestScore >= 2 ? best : null;
 }
 
+// Setup posts name the bike loosely ("YZ450 SETUP" for MX1OEM_2023_Yamaha_YZ450F): match model
+// codes by prefix. Several matching bikes (years): the newest is suggested; the player confirms.
+function guessSetupBike(bikes, title) {
+  const codes = tokens(title).filter((t) => /[a-z]/.test(t) && /\d/.test(t) && t.length >= 4);
+  if (!codes.length) return null;
+  const hits = bikes.filter((b) => tokens(b).some((bt) => /\d/.test(bt) && /[a-z]/.test(bt) && codes.some((c) => bt.startsWith(c) || c.startsWith(bt) && bt.length >= 4)));
+  const year = (b) => Number((b.match(/(?:^|_)((?:19|20)\d\d)(?:_|$)/) || [])[1] || 0);
+  return hits.sort((a, b) => year(b) - year(a))[0] || null;
+}
+
 function listModels(modsDir, rel) {
   try {
     const names = new Set();
@@ -173,10 +297,29 @@ function plan(files, ctx, opts = {}) {
 
   // A .dlo is an MX Bikes game plugin regardless of the website's category
   // or an older review's saved "Graphics" choice.
-  let kind = files.some((f) => /\.dlo$/i.test(f.rel)) ? 'plugin' : opts.kind || ((!ctx.categories || !ctx.categories.length) && ctx.kindHint) || kindFromCategories(ctx.categories);
+  // A category CoreMX has no type for ("Other", "Bikelife", "Modpacks", ...) uses what was found
+  // inside the files (ctx.kindHint), like an upload from the computer.
+  const catKind = kindFromCategories(ctx.categories);
+  const recipe = SCRIPT_RECIPES.find((r) => files.some((f) => r.match.test(f.rel)));
+  let kind = files.some((f) => /\.dlo$/i.test(f.rel)) ? 'plugin' : opts.kind || recipe?.kind || ((!ctx.categories || !ctx.categories.length || catKind === 'custom') && ctx.kindHint) || catKind;
   let autoKind = !opts.kind;
   const visualBikeFiles = files.some((f) => /\.edf$/i.test(f.rel)) && !files.some((f) => /\.(engn|geom)$/i.test(f.rel));
   if (autoKind && visualBikeFiles && (kind === 'bike' || files.some((f) => /(?:^|\/)bikes\//i.test(f.rel)) || /model[\s_-]*swap/i.test(text + ' ' + (ctx.categoryNames || []).join(' ')))) kind = 'bikeSwap';
+  if (autoKind && !recipe) {
+    const content = files.filter((f) => !NOT_CONTENT.test(f.rel));
+    // Paints posted under Fonts or Stands are a bike livery / rider kit (a stand's look is a bike paint).
+    if ((kind === 'bikeFont' || kind === 'riderFont') && hasPnt && !files.some((f) => /(?:^|\/)(?:plate|number|name)\.tga$/i.test(f.rel))) kind = kind === 'bikeFont' ? 'bike' : 'riderKit';
+    else if (kind === 'stand' && hasPnt && !files.some((f) => /\.edf$/i.test(f.rel))) kind = 'bike';
+    // Pitboards for the MXBMRP3 plugin are numbered HUD textures (pitboard_hud_100.tga).
+    else if (kind === 'pitboard' && content.length && content.every((f) => /(?:^|\/)[a-z0-9]+(?:_[a-z0-9]+)*_\d+\.tga$/i.test(f.rel))) kind = 'hudTexture';
+    // Paints in a category without a type ("Bikelife", "Other") that name a bike are a livery.
+    else if (kind === 'custom' && content.length && content.every((f) => /\.pnt$/i.test(f.rel)) && content.every((f) => { const r = bikeLivery.requirement(f.rel, ctx.title); return r && r.brand && r.model && !r.ambiguous; })) kind = 'bikePaint';
+    // Wheels posted as a bike: a .pkz named like a tyre set (p_mx, m_sm or an installed one).
+    else if (kind === 'bike' && hasPkz && !hasPnt) {
+      const tyreNames = new Set([...STOCK_TYRES, ...listModels(modsDir, 'tyres').map((n) => n.toLowerCase())]);
+      if (files.filter((f) => /\.pkz$/i.test(f.rel)).every((f) => tyreNames.has(path.posix.basename(f.rel).slice(0, -4).toLowerCase()))) kind = 'tyre';
+    }
+  }
   if (autoKind) {
     if (PAINT_OF[kind] && !hasPkz && hasPnt) kind = PAINT_OF[kind];
     else if (MODEL_OF[kind] && hasPkz && !hasPnt) kind = MODEL_OF[kind];
@@ -227,6 +370,25 @@ function plan(files, ctx, opts = {}) {
       else { const g = guessModel(paintModels, text); if (g) { o.paintTarget = g; paintGuess = 'title'; } }
     } else paintGuess = 'user';
   }
+  // Setups: profiles/<profile>/setups/common/<bike>/<name>.stp (where MX Bikes saves them). A setup
+  // without that folder layout is for the bike named in its folders, else the bike the player picks
+  // (suggested from the mod name).
+  const userRoot = K.root === 'user';
+  const setupBikes = kind === 'setup' ? listModels(modsDir, 'bikes') : [];
+  const setupBikeFor = (segs) => segs.slice(0, -1).reverse().map((s) => setupBikes.find((b) => b.toLowerCase() === s.toLowerCase())).find(Boolean);
+  const setupRest = (segs) => {
+    const si = segs.map((s) => s.toLowerCase()).lastIndexOf('setups');
+    return si >= 0 && segs.length - si - 1 >= 3 ? segs.slice(si + 1) : null;
+  };
+  if (kind === 'setup') {
+    paintModels = setupBikes;
+    if (opts.paintTarget && setupBikes.includes(opts.paintTarget)) paintGuess = 'user';
+    else {
+      o.paintTarget = null;
+      const needsBike = files.some((f) => /\.st[pt]$/i.test(f.rel) && !setupRest(f.rel.split('/')) && !setupBikeFor(f.rel.split('/')));
+      if (needsBike && !opts.requirePaintTarget) { const g = guessSetupBike(setupBikes, ctx.title || '') || guessModel(setupBikes, text); if (g) { o.paintTarget = g; paintGuess = 'title'; } }
+    }
+  }
 
   const entries = [];
   // Graphics mods (ReShade, presets, overhauls) go in the game install folder, keeping the archive layout
@@ -251,7 +413,35 @@ function plan(files, ctx, opts = {}) {
   const pluginsAt = (rel) => rel.split('/').findIndex((seg, i, all) => i < all.length - 1 && seg.toLowerCase() === 'plugins');
   const hasPluginsFolder = kind === 'plugin' && files.some((f) => pluginsAt(f.rel) >= 0);
   const menuDest = kind === 'menuUi' ? menuDestinations(files) : null;
+  // Translations: MX Bikes/ui/<language>.str; the language is chosen per profile in game.
+  const special = kind === 'stand' ? standDestinations(files) : kind === 'pitboard' ? pitboardDestinations(files)
+    : kind === 'translation' ? new Map(files.map((f) => [f.rel, /\.str$/i.test(f.rel) ? `ui/${path.posix.basename(f.rel)}` : null])) : null;
+  const pick = special ? pickVariant(special, opts.variant) : { variants: [], variant: null, waiting: false, other: new Set() };
+  if (pick.variant) o.variant = pick.variant;
+  const tyreDirs = new Set(files.filter((f) => /\.tyre$/i.test(f.rel)).map((f) => path.posix.dirname(f.rel).toLowerCase()));
+  const fontDirs = new Set(files.filter((f) => /(?:^|\/)(?:plate|number|name)\.tga$/i.test(f.rel)).map((f) => path.posix.dirname(f.rel).toLowerCase()));
   for (const f of files) {
+    if (special) {
+      const dest = special.get(f.rel);
+      const status = dest === null ? 'skip' : dest === undefined ? 'unresolved' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
+      const how = dest ? kind : pick.other.has(f.rel) ? 'other-variant' : dest === null ? (/\.pnt$/i.test(f.rel) ? 'paint-elsewhere' : 'doc') : pick.waiting ? 'choose-variant' : 'unknown';
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: dest || null, status, how });
+      continue;
+    }
+    if (userRoot) {
+      const segs = f.rel.split('/'), fname = segs[segs.length - 1];
+      let dest = null, how = 'user';
+      if (kind === 'hudTexture' && /\.tga$/i.test(fname)) dest = `mxbmrp3/textures/${fname}`;
+      else if (kind === 'setup' && /\.st[pt]$/i.test(fname)) {
+        const bike = setupBikeFor(segs) || o.paintTarget;
+        const rest = setupRest(segs) || (bike ? ['common', bike, fname] : null);
+        dest = ctx.profile && rest ? ['profiles', ctx.profile, 'setups', ...rest].join('/') : null;
+        how = setupRest(segs) ? 'structure' : setupBikeFor(segs) ? 'setup-bike' : 'setup';
+      }
+      const status = dest ? (ctx.userDir && fs.existsSync(path.join(ctx.userDir, dest)) ? 'overwrite' : 'new') : NOT_CONTENT.test(f.rel) || DOC_EXT.test(fname) || !/\.(st[pt]|tga)$/i.test(fname) ? 'skip' : 'unresolved';
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status, how: dest ? how : status === 'skip' ? 'doc' : how });
+      continue;
+    }
     if (hasPluginsFolder) {
       const at = pluginsAt(f.rel), segs = f.rel.split('/');
       const dest = at < 0 ? null : ['plugins', ...segs.slice(at + 1)].join('/');
@@ -273,7 +463,7 @@ function plan(files, ctx, opts = {}) {
     if (gameRoot) {
       const segs = f.rel.split('/').slice(strip);
       const fname = segs[segs.length - 1];
-      const skip = segs.length === 1 && /\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname);
+      const skip = segs.length === 1 && (/\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname) || /^(license|licence|readme|changelog|notice|authors|credits|copying)$/i.test(fname));
       const dest = kind === 'animationGame' ? (/\.anm$/i.test(fname) ? `rider/animations/mx/${fname}` : null)
         : skip ? null : kind === 'plugin' ? (segs[0].toLowerCase() === 'plugins' ? segs.join('/') : ['plugins', ...segs].join('/')) : segs.join('/');
       const status = !dest ? 'skip' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
@@ -344,6 +534,28 @@ function plan(files, ctx, opts = {}) {
       }
     }
     if (!dest && /\.pkz$/i.test(fname)) { dest = `${base}/${fname}`; how = 'model'; }
+    if (!dest && recipe && /\.(ps1|bat|cmd|vbs)$/i.test(fname)) {
+      entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'script' });
+      continue;
+    }
+    // A loose tyre set: the folder holding its .tyre files (e.g. m_sm/m_sm_f_soft.tyre) is the tyre.
+    if (!dest && kind === 'tyre' && segs.length > 1 && !DOC_EXT.test(fname)) {
+      for (let j = segs.length - 2; j >= 0; j--) {
+        if (tyreDirs.has(lsegs.slice(0, j + 1).join('/'))) { dest = `tyres/${segs.slice(j).join('/')}`; how = 'model'; break; }
+      }
+    }
+    // Number fonts: a folder with plate.tga (bike) or name.tga/number.tga (rider) and its .ini.
+    if (!dest && (kind === 'bikeFont' || kind === 'riderFont') && !DOC_EXT.test(fname)) {
+      const dirs = segs.slice(0, -1);
+      for (let j = dirs.length; j >= 1; j--) {
+        if (fontDirs.has(lsegs.slice(0, j).join('/'))) { dest = `${base}/${segs.slice(j - 1).join('/')}`; how = 'model'; break; }
+      }
+      if (!dest && fontDirs.has('.')) {
+        const ini = files.find((x) => !x.rel.includes('/') && /\.ini$/i.test(x.rel));
+        const name = ini ? ini.rel.slice(0, -4) : String(ctx.title || 'font').replace(/[^\w .-]+/g, '').trim() || 'font';
+        if (!f.rel.includes('/')) { dest = `${base}/${name}/${fname}`; how = 'model'; }
+      }
+    }
     if (!dest && kind === 'animation' && /\.anm$/i.test(fname)) { dest = `rider/animations/mx/${fname}`; how = 'animation'; }
     if (!dest && segs.length > 1) {
       for (let j = segs.length - 2; j >= 0; j--) {
@@ -423,8 +635,15 @@ function plan(files, ctx, opts = {}) {
     if (kept) serverNote.push(`This is the server version of the track. ${kept === 1 ? 'A track with the same file is' : `${kept} tracks with the same files are`} already installed (normally the player version), so ${kept === 1 ? 'it is' : 'they are'} kept and not replaced. Riding the server version looks empty or black.`);
     else serverNote.push('This is the server version of the track: a cut-down copy for running a dedicated server. In game it shows up as a separate track that looks empty or black when ridden.');
   }
+  if (recipe && kind === recipe.kind) {
+    for (const c of recipe.copies) {
+      const exists = fs.existsSync(path.join(modsDir, c.dest));
+      entries.push({ rel: `(game) ${c.pkz}/${c.inner}`, abs: null, size: 0, fromGame: c, dest: ctx.installDir ? c.dest : null, status: !ctx.installDir ? 'unresolved' : exists ? 'overwrite' : 'new', how: 'game-file' });
+    }
+  }
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
-  const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest);
+  const setupNeedsBike = kind === 'setup' && entries.some((e) => !e.dest && /\.st[pt]$/i.test(e.rel));
+  const needsPaintTarget = (!!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest)) || (setupNeedsBike && !!ctx.profile);
   const needsSoundBike = kind === 'sound' && entries.some((e) => e.status === 'unresolved' && !DOC_EXT.test(e.rel));
   const installable = entries.filter((e) => e.dest).length;
   const bikeBlocked = [...bikeMatches.values()].some((result) => ['missing', 'incompatible'].includes(result.status));
@@ -434,7 +653,9 @@ function plan(files, ctx, opts = {}) {
   warnings.push(...serverNote);
   if (ambiguousAnimations.size) warnings.push('This download contains multiple variants for the same animation file. Install one variant at a time; CoreMX will not pick one silently.');
   if ((kind === 'animation' || kind === 'animationGame') && ctx.animationLocation === null) warnings.push('The creator did not specify whether this animation belongs in the game install folder or mods folder. Check the installation instructions and change the content type below if needed.');
-  const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
+  const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && (/\.pnt$/i.test(e.rel) || setupNeedsBike && /\.st[pt]$/i.test(e.rel)) && (needsPaintTarget || needsRiderTarget) || e.how === 'choose-variant').length;
+  if (pick.waiting) warnings.push('This download has several versions for the same place (for example one per brand), and the game uses one at a time. Choose the one you want below.');
+  if (kind === 'setup' && !ctx.profile) warnings.push('Create a rider profile in MX Bikes first: setups are saved in your profile.');
   if (!installable && !awaitingTarget && !needsSoundBike && !ambiguousAnimations.size) warnings.push('Choose the content type or destination folder to continue.');
   if ((counts.unresolved || 0) > awaitingTarget && !needsSoundBike) warnings.push(`${counts.unresolved - awaitingTarget} file(s) could not be matched and will be skipped.`);
   if (needsSoundBike && o.soundBike) warnings.push('Some sound files are for a different engine size or have an unknown layout. Check the file list before installing.');
@@ -467,7 +688,14 @@ function plan(files, ctx, opts = {}) {
       entries.push({ rel: `(game) ${c.loose || c.pkz + '/' + c.inner}`, abs: null, size: 0, fromGame: c, dest: c.dest, status: exists ? 'overwrite' : 'new', how: 'game-file' });
     }
   }
-  if (gameRoot && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins' : kind === 'animationGame' ? 'animations' : 'graphics mods'} go there.`);
+  if ((gameRoot || recipe && kind === recipe.kind) && !ctx.installDir) warnings.push(`Set your game install folder in Settings first — ${kind === 'plugin' ? 'plugins go there' : kind === 'animationGame' ? 'animations go there' : kind === 'graphics' ? 'graphics mods go there' : recipe && kind === recipe.kind ? 'CoreMX copies the stock wheel files from it' : 'this goes there'}.`);
+  if (recipe && kind === recipe.kind) warnings.push('This fix comes as a script. CoreMX never runs scripts; it copies the same stock wheel files from your game (tyres.pkz) into mods/tyres/Factory_tyre itself.');
+  if (kind === 'translation') warnings.push('After installing, choose the language in MX Bikes: Profiles → Modify → Language.');
+  if (kind === 'stand') warnings.push('The game uses one stand for every bike. Installing replaces the stand you use now (the original stays in the game files, so removing this brings it back). A stand\'s colours come from each bike\'s paint.');
+  if (kind === 'pitboard' && entries.some((e) => e.how === 'paint-elsewhere')) warnings.push('The trackside pitboard paints (.pnt) in this download go in mods/misc/pitboard and are not part of this install. Only the HUD pitboard is installed.');
+  if (kind === 'pitboard' && installable && !entries.some((e) => /^misc\/(hud|pitboard)\/pitboard\.(cfg|tga|edf)$/i.test(e.dest || ''))) warnings.push('These pitboard files have numbered names. The game only uses pitboard.cfg and pitboard.tga, so follow the creator\'s readme to rename the board you want.');
+  if (kind === 'setup' && ctx.profile && installable) warnings.push(`Setups are saved in your profile "${ctx.profile}" and show up in that bike's setup list in game.`);
+  if (kind === 'hudTexture') warnings.push('These are textures for the MXBMRP3 HUD plugin. They go in Documents/PiBoSo/MX Bikes/mxbmrp3/textures; pick them in the plugin\'s settings.');
   if (kind === 'menuUi' && files.some((f) => /\.(bat|cmd|exe)$/i.test(f.rel))) warnings.push('This mod comes with a launcher (.bat/.exe). CoreMX never runs those; only its images and menu files are installed.');
   if (kind === 'menuUi' && entries.some((e) => e.status === 'unresolved')) warnings.push('Some files have no known place in MX Bikes/ui or MX Bikes/misc (or several files would land in the same place, like colour options). Check the mod description and pick the ones you want.');
   if (gameRoot) warnings.push(kind === 'plugin' ? 'This plugin goes in the MX Bikes plugins folder. Close the game before installing it.' : kind === 'animationGame' ? 'The creator requires these .anm files in MX Bikes/rider/animations/mx. Close the game before installing or changing them.' : 'This goes into your MX Bikes install folder. Any game file it replaces is backed up first (as .mxbm-bak) so you can undo it.');
@@ -477,14 +705,15 @@ function plan(files, ctx, opts = {}) {
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
   const confident = !ctx.serverVersion && installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title' && !bikeBlocked && [...bikeMatches.values()].every((result) => result.status === 'match')
     && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && (kind === 'bikePaint' || !ctx.unreadablePaints?.length)
-    && kind !== 'bikeSwap' && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
+    && kind !== 'bikeSwap' && !pick.waiting && !(kind === 'setup' && !ctx.profile) && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);
 
   return {
-    kind, kindLabel: mixedGear ? 'Mixed rider gear paints' : K.label, autoKind, base: gameRoot ? 'MX Bikes install folder' : base, root: gameRoot ? 'game' : 'mods',
+    kind, kindLabel: mixedGear ? 'Mixed rider gear paints' : K.label, autoKind, base: gameRoot ? 'MX Bikes install folder' : userRoot ? 'MX Bikes documents folder' : base, root: gameRoot ? 'game' : userRoot ? 'user' : 'mods',
+    gameDir: ctx.installDir || null, variants: pick.variants, needsVariant: pick.waiting,
     askType: !!ctx.local && !ctx.kindHint && !opts.kind && !allStructured,
     kindHint: ctx.kindHint || null, detectReason: ctx.detectReason || null,
-    options: o, paintModels, paintModelsBase: mixedGear ? null : paintModelsDir, paintGuess, bikeCompatibility,
+    options: o, paintModels, paintModelsBase: mixedGear ? null : kind === 'setup' ? (setupNeedsBike || paintGuess ? 'bikes' : null) : paintModelsDir, paintGuess, bikeCompatibility,
     entries, counts, installable, warnings, confident, requiredModels, needsPaintTarget, needsSoundBike,
     soundBikes: kind === 'sound' ? listModels(modsDir, 'bikes') : [], riderModels: showRiderTarget ? riderModels : [], needsRiderTarget,
     requiresModelWarning: kind !== 'bikePaint' && (requiredModels.some((r) => !r.included && !r.installed) || needsPaintTarget || needsRiderTarget || riderModels.some((r) => r.name === riderTarget && r.unverified)), dependencies: ctx.dependencies || [],
@@ -534,7 +763,7 @@ async function apply(p, rootDir, { signal, rollbackDir } = {}) {
     journal.push({ to, previous, createdBackup });
     // In the game folder, keep the original file before replacing it
     if (p.root === 'game' && fs.existsSync(to) && !fs.existsSync(to + '.mxbm-bak')) await fsp.copyFile(to, to + '.mxbm-bak');
-    if (e.fromGame) await fsp.writeFile(to, await readGameFile(rootDir, e.fromGame));
+    if (e.fromGame) await fsp.writeFile(to, await readGameFile(p.gameDir || rootDir, e.fromGame));
     else await fsp.copyFile(e.abs, to);
     check();
     const now = new Date();
@@ -558,4 +787,4 @@ async function apply(p, rootDir, { signal, rollbackDir } = {}) {
   }
 }
 
-module.exports = { menuDestinations, plan, apply, KINDS, kindFromCategories, guessTrackType, guessModel, listModels };
+module.exports = { menuDestinations, plan, apply, KINDS, kindFromCategories, packageKind, pickVariant, guessTrackType, guessModel, listModels };

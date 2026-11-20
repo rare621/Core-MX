@@ -1,5 +1,7 @@
 function category(file) {
-  const p = file.replace(/^game:/, '').toLowerCase();
+  const p = file.replace(/^(game|user):/, '').toLowerCase();
+  if (/^profiles\/[^/]+\/setups\//.test(p)) return 'setups';
+  if (/^ui\/[^/]+\.str$/.test(p)) return 'translations';
   if (/^tracks\//.test(p)) return 'tracks';
   if (/^bikes\/.+\/paints\//.test(p)) return 'bike liveries';
   if (/^bikes\//.test(p)) return 'bikes';

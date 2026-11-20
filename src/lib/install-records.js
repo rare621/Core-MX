@@ -11,7 +11,7 @@ async function missingFiles(records, { modsDir, disabledDir }) {
     while (index < files.length) {
       const rel = files[index++];
       // Graphics packages have their own active/disabled storage and backups.
-      if (/^game:/i.test(rel)) continue;
+      if (/^(game|user):/i.test(rel)) continue;
       let absent = true;
       for (const root of [modsDir, disabledDir].filter(Boolean)) {
         const base = path.resolve(root), file = path.resolve(base, rel);
