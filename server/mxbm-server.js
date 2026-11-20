@@ -21,7 +21,10 @@ fs.mkdirSync(FILES, { recursive: true });
 // Optional Cloudflare R2 storage for paint/model files (see r2.js). Without r2.json, files stay in FILES.
 const R2_FILE = path.join(path.dirname(DATA), 'r2.json');
 const R2 = (() => { const c = require('./r2').loadConfig(R2_FILE); return c ? require('./r2').createR2(c) : null; })();
-const R2_GRACE = 24 * 60 * 60 * 1000; // an R2 file nobody wears is deleted after a day
+const R2_GRACE = (Number(arg('unusedseconds', 120)) > 0 ? Number(arg('unusedseconds', 120)) : 120) * 1000; // an R2 file nobody wears is deleted after 2 minutes
+// Synced files of users who haven't opened CoreMX for this long are removed (R2 and this PC); their
+// app uploads them again when they come back. --inactivedays N (default 5).
+const INACTIVE_MS = (Number(arg('inactivedays', 5)) > 0 ? Number(arg('inactivedays', 5)) : 5) * 24 * 60 * 60 * 1000;
 // All synced files together (MB). Only files someone has equipped are kept, so this is a safety net,
 // not a quota: on this PC's disk 4 GB, in R2 100 GB (1.5 US cents per GB-month past the free 10 GB).
 const MAX_STORE = Number(arg('maxstore', R2 ? 100 * 1024 : 4 * 1024)) * 1024 * 1024;
@@ -31,7 +34,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 17;
+const VERSION = 18;
 const ADMIN_STEAM_ID = '76561198098586128';
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
@@ -56,7 +59,8 @@ try {
   db = { users: {}, servers: {}, announcements: [], r2: {}, ...saved }; cacheCleanupSafe = true;
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
-const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha) });
+const { liveFiles } = require('./cache-cleanup');
+const sweepCache = require('./cache-cleanup').createCacheCleanup({ directory: FILES, users: () => db.users, busy: (sha) => cacheReaders.has(sha), inactiveMs: INACTIVE_MS });
 async function cleanCache() {
   if (!cacheCleanupSafe) return;
   try {
@@ -133,7 +137,11 @@ function auth(req) {
   const m = String(req.headers.authorization || '').match(/^Bearer ([a-f0-9]{48})$/);
   if (!m) return null;
   const h = hash(m[1]);
-  for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h) return { id, user: u };
+  for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h) {
+    // Any signed-in request means the user has CoreMX open (synced files stay while seen within INACTIVE_MS).
+    if (Date.now() - (u.lastSeen || 0) > 60000) { u.lastSeen = Date.now(); save(); }
+    return { id, user: u };
+  }
   return null;
 }
 function adminAllowed(me, key) {
@@ -189,7 +197,7 @@ const routes = {
     if (!isSteamId(id)) return [400, { error: 'steamId must be a 17-digit Steam ID' }];
     if (db.users[id]) return [409, { error: 'This Steam ID is already registered on this service. Ask the person running it to reset it.' }];
     const token = crypto.randomBytes(24).toString('hex');
-    db.users[id] = { tokenHash: hash(token), name: str(body.name, 40), friends: [], createdAt: Date.now() };
+    db.users[id] = { tokenHash: hash(token), name: str(body.name, 40), friends: [], createdAt: Date.now(), lastSeen: Date.now() };
     save();
     return [200, { id, token }];
   },
@@ -589,14 +597,14 @@ async function uploadCheck(req, res, sha) {
 }
 
 // ---------- R2 upkeep ----------
-// Moves files already on this PC up to R2 (one at a time), and deletes R2 files nobody wears for a day.
+// Moves files already on this PC up to R2 (one at a time), and deletes R2 files nobody active wears
+// for 2 minutes (see INACTIVE_MS).
 let r2Busy = false;
 async function r2Upkeep() {
   if (!R2 || r2Busy || !cacheCleanupSafe) return;
   r2Busy = true;
   try {
-    const live = new Set();
-    for (const u of Object.values(db.users)) if (u.sharePaints !== false) for (const it of (u.loadout && u.loadout.items) || []) live.add(it.sha256);
+    const live = liveFiles(db.users, { inactiveMs: INACTIVE_MS });
     const local = fs.readdirSync(FILES).find((f) => /^[a-f0-9]{64}$/.test(f) && !db.r2[f] && !cacheReaders.has(f) && live.has(f));
     if (local) {
       const file = path.join(FILES, local), buf = fs.readFileSync(file);
@@ -617,7 +625,7 @@ async function r2Upkeep() {
   } catch (e) { console.warn('R2 upkeep:', e.message); }
   finally { r2Busy = false; }
 }
-if (R2) { setTimeout(r2Upkeep, 5000).unref(); setInterval(r2Upkeep, 30000).unref(); }
+if (R2) { setTimeout(r2Upkeep, 5000).unref(); setInterval(r2Upkeep, Math.min(30000, R2_GRACE)).unref(); }
 
 server.requestTimeout = 60000;
 server.listen(PORT, () => console.log(`CoreMX online service on port ${server.address().port} (data: ${DATA})${R2 ? ` · files in R2 bucket ${R2.bucket}` : ''}`));

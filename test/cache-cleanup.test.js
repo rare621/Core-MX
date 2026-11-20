@@ -22,3 +22,19 @@ test('cache cleanup retains shared/offline loadouts and readers, removes only un
   delete users.a; await clean(); clock = 502; await clean();
   assert.deepEqual(await fs.readdir(dir), ['keep.txt']);
 });
+
+// Users who haven't opened CoreMX for 5 days: their synced files are removed (R2 and the service PC);
+// their app uploads them again when they come back.
+test('files only away users wear are not kept', () => {
+  const { liveFiles } = require('../server/cache-cleanup');
+  const DAY = 24 * 3600 * 1000, now = 100 * DAY, wear = (sha) => ({ loadout: { items: [{ sha256: sha }] } });
+  const users = {
+    here: { ...wear('a'), lastSeen: now - 60 * 1000 },
+    away: { ...wear('b'), lastSeen: now - 6 * DAY },
+    both: { ...wear('a'), lastSeen: now - 30 * DAY },
+    never: wear('c'),
+    private: { ...wear('d'), lastSeen: now, sharePaints: false },
+  };
+  assert.deepEqual([...liveFiles(users, { now, inactiveMs: 5 * DAY })], ['a']);
+  assert.deepEqual([...liveFiles(users, { now })].sort(), ['a', 'b', 'c'], 'without a limit every sharing user counts');
+});
