@@ -282,8 +282,11 @@ const LIB_TABS = {
     { id: 'goggles', label: 'Goggles', icon: 'goggles', match: (i) => gearName(i) === 'goggles' },
     { id: 'riders', label: 'Rider models', icon: 'rider', match: (i) => gearName(i) === 'riders' },
     { id: 'more', label: 'More', icon: 'box', match: (i) => !GEAR_MAIN.includes(gearName(i)) },
+    { id: 'synced', label: 'Synced from friends', icon: 'download', match: (i) => !!i.synced },
   ],
 };
+// Gear synced from other riders (and not installed by the player) is only listed under Synced from friends.
+for (const t of LIB_TABS.rider) if (t.id !== 'synced') { const own = t.match; t.match = (i) => !i.synced && own(i); }
 S.lib.tab = S.lib.tab || 'bikes';
 S.lib.f = {};
 S.lib.quick = 'all';
@@ -597,10 +600,11 @@ function renderLibItems() {
   if (!S.scanned) { sc.innerHTML = `<div class="grid">${Array.from({ length: 12 }, () => '<div class="card"><div class="thumb skeleton"></div><div class="card-body"><div class="skeleton" style="height:12px;border-radius:4px;width:70%"></div></div></div>').join('')}</div>`; return; }
   if (!xs.length) {
     const filtered = S.lib.query || S.lib.quick !== 'all' || Object.values(S.lib.f).some(Boolean);
-    sc.innerHTML = `<div class="empty"><div>${icon(filtered ? 'search' : 'box')}<h3>${filtered ? 'No matches' : 'Nothing here yet'}</h3><div>${filtered ? 'Try clearing a filter.' : 'Get some from <b>Get Mods</b>, or add a file from your PC.'}</div></div></div>`;
+    sc.innerHTML = `<div class="empty"><div>${icon(filtered ? 'search' : 'box')}<h3>${filtered ? 'No matches' : 'Nothing here yet'}</h3><div>${filtered ? 'Try clearing a filter.' : currentTab().id === 'synced' ? 'Gear downloaded from friends and riders on your server appears here.' : 'Get some from <b>Get Mods</b>, or add a file from your PC.'}</div></div></div>`;
     renderBulk(); return;
   }
   const extra = [];
+  if (currentTab().id === 'synced') extra.push(`<div class="notice warn">${icon('alert')}<div>Downloaded so you can see other riders' gear in game. These are <b>not complete mods</b>: a synced helmet, boots or rider model only has the paints that rider wears. They are not offered in Rider. To use one yourself, install the mod from <b>Get Mods</b>; it then moves to your own gear.</div></div>`);
   if (S.lib.quick === 'dups') extra.push(`<div class="notice warn">${icon('dup')}<div>These were downloaded twice (names ending in “(1)”). The ones marked Duplicate are identical copies — safe to delete. <button class="btn btn-sm" style="margin-left:6px" data-act="select-dupes">Select all identical copies</button></div></div>`);
   if (currentTab().id === 'bikes' && S.lib.bikePreviewsInitialized && !S.lib.bikePreviewTask) {
     const failed = S.items.filter((item) => item.group === 'bikes' && item.bikePreviewFailed).length;

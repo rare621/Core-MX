@@ -1299,6 +1299,30 @@ static const GameList *ovModelList(int row) {
   }
 }
 
+/* Gear synced from friends that you haven't installed yourself is not offered (CoreMX keeps it under
+ * My gear > Synced from friends). CoreMX writes mxbm_synced.txt ("kind<TAB>model<TAB>name" lines);
+ * it is re-read each time the overlay opens. The selected item always stays. */
+static char g_synced[32768];
+static void ovLoadSynced(void) {
+  char path[MAX_PATH * 2 + 40]; FILE *f; size_t n = 0, i;
+  g_synced[0] = 0;
+  sprintf(path, "%smxbm_synced.txt", g_dir);
+  f = fopen(path, "rb"); if (!f) return;
+  g_synced[0] = '\n';
+  n = fread(g_synced + 1, 1, sizeof g_synced - 3, f); fclose(f);
+  n++; if (n && g_synced[n - 1] != '\n') g_synced[n++] = '\n';
+  g_synced[n] = 0;
+  for (i = 0; i < n; i++) { if (g_synced[i] == '\r') g_synced[i] = '\n'; else if (g_synced[i] >= 'A' && g_synced[i] <= 'Z') g_synced[i] += 32; }
+}
+static int ovSyncedHidden(int row, const char *model, const char *name) {
+  static const char *const KIND[OV_ROWS] = { "bikepaint", "suitpaint", "glovespaint", "bootspaint", "helmetpaint", "gogglespaint", "helmet", "boots", "protection", "protectionpaint" };
+  char needle[200]; size_t i;
+  if (!g_synced[0]) return 0;
+  _snprintf(needle, sizeof needle - 1, "\n%s\t%.63s\t%.63s\n", KIND[row], model ? model : "", name); needle[sizeof needle - 1] = 0;
+  for (i = 0; needle[i]; i++) if (needle[i] >= 'A' && needle[i] <= 'Z') needle[i] += 32;
+  return strstr(g_synced, needle) != 0;
+}
+
 /* Fills one row's options from the game's lists and finds the selected one. */
 static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
   static unsigned char e[0x18C];
@@ -1314,6 +1338,7 @@ static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
       if (!srvCopy(p + (size_t)i * l->stride, o, 63)) break;
       o[63] = 0;
       if (!o[0]) continue;
+      if (_stricmp(o, cur) != 0 && ovSyncedHidden(row, "", o)) continue;
       if (_stricmp(o, cur) == 0) g_ovSel[row] = g_ovCount[row];
       g_ovCount[row]++;
     }
@@ -1327,6 +1352,7 @@ static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
     for (i = 0; i < n && g_ovCount[row] < OV_MAXOPT; i++) {
       if (!srvCopy(p + (size_t)i * 0x18C, e, sizeof e) || *(int *)e != owner) continue;
       memcpy(g_ovOpt[row][g_ovCount[row]], e + 4, 63); g_ovOpt[row][g_ovCount[row]][63] = 0;
+      if (_stricmp(g_ovOpt[row][g_ovCount[row]], cur) != 0 && ovSyncedHidden(row, row == R_SUIT || row == R_GLOVES ? "" : model, g_ovOpt[row][g_ovCount[row]])) continue;
       if (_stricmp(g_ovOpt[row][g_ovCount[row]], cur) == 0) g_ovSel[row] = g_ovCount[row];
       g_ovCount[row]++;
     }
@@ -1334,6 +1360,7 @@ static void ovLoadRow(unsigned char *base, unsigned char *r, int row) {
 }
 static void ovLoadOptions(unsigned char *base, unsigned char *r) {
   int row;
+  ovLoadSynced();
   for (row = 0; row < OV_ROWS; row++) { ovLoadRow(base, r, row); g_ovModelChanged[row] = 0; g_ovEdited[row] = 0; }
 }
 
