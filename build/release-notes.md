@@ -1,7 +1,8 @@
-CoreMX 1.0.44
+CoreMX 1.0.45
 
-- Fixed shared helmet, boots, rider, protection and tyre model packages so MX Bikes can recognize them in game. The files now keep the model's folder inside the PKZ.
-- Already downloaded CoreMX model packages with the old layout are replaced on the next friend sync. A matching file you installed yourself is left alone.
-- The in-game overlay now says to check CoreMX sync when gear is missing instead of claiming a background MXB Mods install is in progress.
+- Friends now shows Steam profile photos on friend cards and stops redrawing the page every few seconds.
+- Gear received through friend sync has its own "Synced from friends" area in My Gear. It stays out of ordinary Rider gear choices and the in-game overlay until you install that mod yourself.
+- CoreMX now bundles 7-Zip, so ZIP, RAR and 7z mod downloads can unpack without a separate extractor installation.
+- The game plugin and online service have been updated to support the synced-gear changes.
 
-Includes CoreMX-server-v17.zip. Your live server still reports v16, so stop it, update its source files from this ZIP, and restart it. Preserve mxbm-data.json, admin.key, mxbm-files, and your private r2.json. See server/README.md for the update steps.
+Includes CoreMX-server-v18.zip. The live service was on v17 when this release was prepared, so update the server code and restart the service. Preserve mxbm-data.json, admin.key, mxbm-files, and your private r2.json. Version 18 removes unused synced files after two minutes and stops retaining files for accounts inactive for five days; returning riders upload their equipped files again. See server/README.md for update steps.
