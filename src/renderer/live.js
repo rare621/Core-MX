@@ -93,7 +93,7 @@ function drawFriendsRiding() {
   const box = $('#friendsRiding'); if (!box) return;
   const live = new Map((S.live.friends || []).map((l) => [l.id, l]));
   const riding = (S.friends || []).map((f, i) => ({ f, i, l: live.get(f.code) })).filter(({ l }) => l && l.status === 'ok' && l.online && (l.server || l.inEvent));
-  const html = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${friendFace(f)}<span class="fr-dot ride"></span></span>
+  const html = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${friendFace(withPhoto(f))}<span class="fr-dot ride"></span></span>
     <div class="rf-txt"><b>${esc(f.name)}</b><small>${esc(l.server || 'In a session · server shows once on track')}${l.trackName ? ` · ${esc(l.trackName)}` : ''}</small></div>
     ${l.server && l.address ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}</div>`).join('')}</div>`
     : `<div class="side-empty">${icon('users')}<span>${(S.friends || []).length ? 'None of your friends are riding right now.' : 'Add friends to see where they ride.'}</span><button class="btn btn-sm" data-view="friends">Friends</button></div>`}`;
@@ -334,7 +334,7 @@ async function renderFriends(c) {
   const visible = S.live.showAllFriends ? rows : rows.slice(0, pageSize);
   const friendCard = ({ f, i, s }) => {
     const j = joinable(f);
-    return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${friendFace(f)}<span class="fr-dot ${s[0]}"></span></button>
+    return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${friendFace(withPhoto(f))}<span class="fr-dot ${s[0]}"></span></button>
     <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}" data-friend-status="${i}">${esc(s[1])}</div>${paintLine(f)}</div>
       <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
         <button class="btn btn-sm btn-ghost btn-icon fr-remove" data-friend-remove="${i}" title="Remove ${esc(f.name)} from friends" aria-label="Remove friend ${esc(f.name)}">${icon('trash')}</button></div></div>`;
@@ -358,7 +358,7 @@ async function renderFriends(c) {
   const displayKey = JSON.stringify([
     c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
     S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
-    (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address]),
+    (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address, f.avatar]),
     st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.defaultUrl, st?.service?.share,
     st?.serverShare, st?.plugin?.available, st?.plugin?.installed, st?.plugin?.needsUpdate,
     st?.paintSync?.enabled, st?.paintSync?.busy, st?.paintSync?.at, st?.paintSync?.error,
@@ -519,6 +519,8 @@ function friendProgressHtml() {
   return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? 'Installing equipped files' : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
 }
 
+// Saved friends ({ code, name }) get their photo from the online friend list ({ id, avatar }).
+function withPhoto(f) { const live = (S.live.friends || []).find((l) => l.id === f.code); return live && live.avatar ? { ...f, avatar: live.avatar } : f; }
 // A friend's Steam profile photo, or their first letter.
 function friendFace(f) {
   const letter = esc((f.name || '?').slice(0, 1).toUpperCase());
