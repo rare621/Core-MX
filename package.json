@@ -1,7 +1,7 @@
 {
   "name": "mx-bikes-manager",
   "productName": "CoreMX",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "description": "CoreMX — Content manager for MX Bikes",
   "main": "main.js",
   "private": true,
