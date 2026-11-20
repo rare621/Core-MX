@@ -1,4 +1,4 @@
-/* global S, $, esc, icon, toast, modal, confirmBox, cleanErr, api, timeAgo, trackInstalled, findTrack, joinServer, onlineTabs, renderOnline, refreshAccounts */
+/* global S, $, esc, icon, toast, modal, confirmBox, cleanErr, api, timeAgo, trackInstalled, findTrack, joinServer, onlineTabs, renderOnline, refreshAccounts, bikeCheck, queueOpenLink, go */
 'use strict';
 // ---------- Live online data: the game plugin + your online service ----------
 // Servers tab: "Live servers" (with tracks and riders). Friends tab: where friends are, join them.
@@ -178,7 +178,48 @@ async function drawLiveServers(refresh) {
 // Joining a live server: if other app users are riding there (their plugin reports it, or
 // their Steam name is on the server's rider list), offer to download their free gear first
 // so their bikes and outfits show up in game. Then the usual track check and join.
+// Bikes the riders on a server use that you don't have (see bike-check.js). OEM bikes come from the
+// official packs (OEM Packs downloads only the bikes you're missing); mod bikes are looked up in Get
+// Mods. Resolves true to go on joining.
+const PACK_NAMES = { mx: 'MX OEM', sm: 'Supermoto OEM', enduro: 'Enduro OEM', freeride: 'Freeride OEM' };
+function installedBikeNames() {
+  return (S.items || []).filter((i) => i.group === 'bikes' && !i.disabled).flatMap((i) => [i.name, i.title, i.info && i.info.name].filter(Boolean));
+}
+function missingBikesDialog(s, result) {
+  return new Promise((resolve) => {
+    const list = (bikes) => bikes.map((b) => `<li><b>${esc(b.bike)}</b> <span class="muted">· ${esc(b.category || 'class unknown')} · ${b.riders.length === 1 ? esc(b.riders[0]) : b.riders.length + ' riders'}</span></li>`).join('');
+    const packRows = result.packs.map((p) => `<div class="set-card" style="margin:10px 0"><div style="display:flex;gap:12px;align-items:center"><div style="flex:1"><b>${esc(PACK_NAMES[p.pack] || 'OEM')} bikes you don't have</b><ul style="margin:6px 0 0 18px">${list(p.bikes)}</ul></div><button class="btn btn-primary" data-bike-pack="${esc(p.pack)}">${icon('download')}Get missing ${esc(PACK_NAMES[p.pack] || 'OEM')} bikes</button></div><p class="muted" style="margin:8px 0 0">Downloads only the bikes from the official pack that you're missing or that changed.</p></div>`).join('');
+    const modRows = result.mods.length ? `<div class="set-card" style="margin:10px 0"><b>Mod bikes CoreMX couldn't find in your mods</b><ul style="margin:6px 0 0 18px">${result.mods.map((b, i) => `<li style="margin:4px 0"><b>${esc(b.bike)}</b> <span class="muted">· ${b.riders.length === 1 ? esc(b.riders[0]) : b.riders.length + ' riders'}</span> <button class="btn btn-sm" data-bike-find="${i}">${icon('search')}Find in Get Mods</button></li>`).join('')}</ul><p class="muted" style="margin:8px 0 0">A mod bike's name in game can differ from its folder, so you may already have it.</p></div>` : '';
+    const m = modal({
+      title: `Bikes on ${esc(s.name || 'this server')}`, size: 'md',
+      body: `<div class="notice ${result.noneOwned ? 'warn' : 'info'}">${icon(result.noneOwned ? 'alert' : 'info')}<div>${result.noneOwned
+        ? 'You don\'t seem to have any of the bikes riders use here. If this server needs one of them, MX Bikes will refuse to join with <b>Missing Bike</b>.'
+        : 'Some riders here use bikes you don\'t have. You can still join on your own bike; MX Bikes may refuse with <b>Missing Bike</b> if the server needs one of these.'}</div></div>${packRows}${modRows}`,
+      foot: '<span class="grow"></span><button class="btn" data-bike-cancel>Cancel</button><button class="btn btn-primary" data-bike-join>Join anyway</button>',
+      onClose: () => resolve(false),
+    });
+    m.addEventListener('click', (e) => {
+      const pack = e.target.closest('[data-bike-pack]'), find = e.target.closest('[data-bike-find]');
+      if (pack) { m.close(); queueOpenLink({ type: 'oem', pack: pack.dataset.bikePack }); return; }
+      if (find) {
+        const b = result.mods[Number(find.dataset.bikeFind)];
+        m.close();
+        S.getSrc = 'free'; S.browse.tab = 'all'; S.browse.query = b.bike; S.browse.sort = 'relevance';
+        S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.req = (S.browse.req || 0) + 1;
+        go('get');
+        return;
+      }
+      if (e.target.closest('[data-bike-cancel]')) { m.close(); return; }
+      if (e.target.closest('[data-bike-join]')) { resolve(true); m.close(); }
+    });
+  });
+}
+
 async function joinLiveServer(s) {
+  if (typeof bikeCheck !== 'undefined' && (s.riders || []).length) {
+    const result = bikeCheck.check(s.riders, installedBikeNames());
+    if (result.missing.length && !(await missingBikesDialog(s, result))) return;
+  }
   const join = async () => {
     // The list can sit open while a host's estimated endpoint is replaced by the address
     // observed by a rider who joined in-game. Use the current endpoint, not the card's copy.
@@ -760,6 +801,12 @@ async function findFriendTrack(friend, session, joinAfter = false) {
 // then their current track is handled before MX Bikes launches.
 async function syncAndJoinFriend(friend, session) {
   if (!session?.address) throw new Error('This server address is not known yet. Join it once from the game server list, or save the matching address.');
+  // Bikes the riders there use that you don't have (the friend's server row has the rider list).
+  if (typeof bikeCheck !== 'undefined') {
+    const row = ((await api.invoke('online:servers').catch(() => null))?.servers || []).find((r) => r.address === session.address || r.name && session.server && r.name.toLowerCase() === String(session.server).toLowerCase());
+    const result = row?.riders?.length ? bikeCheck.check(row.riders, installedBikeNames()) : null;
+    if (result?.missing.length && !(await missingBikesDialog(row, result))) return;
+  }
   toast(`Checking ${esc(friend.name)}'s current gear…`, 'info', 2200);
   S.live.status = await api.invoke('online:paintSyncNow', friend.code);
   const sync = S.live.status.paintSync || {};
