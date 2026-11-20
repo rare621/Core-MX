@@ -3093,8 +3093,12 @@ document.addEventListener('click', async (e) => {
 S.settingsTab = 'general';
 S.admin = { unlocked: false, stats: null };
 const ADMIN_STEAM_ID = '76561198098586128';
+// Admin: the owner and the admins the owner adds by friend code (the service says who; refreshed
+// when Settings opens). The owner's own Steam account always counts.
+function isAdminAccount() { return !!(S.adminRole?.admin || S.accounts.steam?.steamId === ADMIN_STEAM_ID); }
+async function refreshAdminRole(force) { try { S.adminRole = await api.invoke('online:adminRole', force); } catch {} }
 function settingsTabs() {
-  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button><button class="${S.settingsTab === 'credits' ? 'active' : ''}" data-settings-tab="credits">${icon('rider')}Creator & Tester</button>${S.accounts.steam?.steamId === ADMIN_STEAM_ID ? `<button class="${S.settingsTab === 'admin' ? 'active' : ''}" data-settings-tab="admin">${icon('shield')}Admin</button>` : ''}</div>`;
+  return `<div class="seg-tabs"><button class="${S.settingsTab === 'general' ? 'active' : ''}" data-settings-tab="general">${icon('settings')}General</button><button class="${S.settingsTab === 'health' ? 'active' : ''}" data-settings-tab="health">${icon('sparkle')}Fix & clean</button><button class="${S.settingsTab === 'plugins' ? 'active' : ''}" data-settings-tab="plugins">${icon('globe')}Plugins</button><button class="${S.settingsTab === 'credits' ? 'active' : ''}" data-settings-tab="credits">${icon('rider')}Creator & Tester</button>${isAdminAccount() ? `<button class="${S.settingsTab === 'admin' ? 'active' : ''}" data-settings-tab="admin">${icon('shield')}Admin</button>` : ''}</div>`;
 }
 document.addEventListener('click', (e) => { const tab = e.target.closest('[data-settings-tab]'); if (tab) { S.settingsTab = tab.dataset.settingsTab; renderSettings($('#content')); } });
 function renderCreditsSettings(c) {
@@ -3108,6 +3112,8 @@ function renderCreditsSettings(c) {
   </div></div></div></div>`;
 }
 async function renderSettings(c) {
+  if (!S.adminRole) await refreshAdminRole();
+  else refreshAdminRole().then(() => { if (S.view === 'settings' && $('[data-settings-tab]') && !$('[data-settings-tab="admin"]') && isAdminAccount()) renderSettings($('#content')); });
   if (S.settingsTab === 'admin') return renderAdminSettings(c);
   if (S.settingsTab === 'health') return renderHealth(c);
   if (S.settingsTab === 'plugins') return renderPluginSettings(c);
@@ -3219,23 +3225,68 @@ function wireAdminActivity(c) {
   });
 }
 
+// ---------- Admin: who may use it (owner only) ----------
+// Admins are added by friend code; they unlock Admin with the same server admin key and see
+// activity and announcements. Only the owner manages this list.
+function adminsHtml(list) {
+  const me = S.accounts.steam || {};
+  const row = (a, owner) => `<div class="admin-user admin-row"${owner ? '' : ` data-open="https://steamcommunity.com/profiles/${esc(a.id)}"`}>
+      <span class="admin-user-av">${esc((a.name || '?').slice(0, 1).toUpperCase())}</span>
+      <span class="admin-user-main"><b>${esc(a.name || 'Not signed in to CoreMX yet')}</b><small class="muted mono">${esc(a.id)}</small></span>
+      <span class="admin-user-days muted"><small>${owner ? 'Owner' : a.addedAt ? 'Added ' + esc(adminDate(a.addedAt)) : 'Admin'}</small></span>
+      <span class="admin-user-joined">${owner ? '' : `<button class="btn btn-sm btn-danger" data-admin-remove="${esc(a.id)}">${icon('trash')}Remove</button>`}</span></div>`;
+  return `<div class="set-card"><h3>Admins</h3><p>People you add see <b>Settings → Admin</b> in their CoreMX (it can take a minute) and unlock it with the same server admin key. They can see activity and publish announcements; only you can add or remove admins.</p>
+    <div class="path-row" style="gap:8px;margin:14px 0"><input class="input mono" id="adminAddCode" placeholder="Friend code (7656119…)" spellcheck="false" style="flex:1"><button class="btn btn-primary" id="adminAddBtn">${icon('user')}Add admin</button></div>
+    <div class="admin-users">${row({ id: me.steamId || '', name: me.name || 'You' }, true)}${(list || []).map((a) => row(a, false)).join('') || ''}</div></div>`;
+}
+async function loadAdmins(c) {
+  const box = $('#adminAdmins', c); if (!box) return;
+  try { S.admin.admins = (await api.invoke('online:adminList')).admins || []; }
+  catch (error) { box.innerHTML = `<div class="notice warn">${icon('alert')}<div>${esc(cleanErr(error))}</div></div>`; return; }
+  box.innerHTML = adminsHtml(S.admin.admins);
+  const add = async () => {
+    const code = $('#adminAddCode', box).value.trim();
+    if (!/^7656119\d{10}$/.test(code)) { toast('A friend code is a 17-digit number starting with 7656119', 'err', 3500); return; }
+    try { S.admin.admins = (await api.invoke('online:adminAdd', code)).admins || []; toast('Admin added. They see the Admin tab next time CoreMX checks (within a minute).', 'ok', 4000); box.innerHTML = adminsHtml(S.admin.admins); wire(); }
+    catch (error) { toast(esc(cleanErr(error)), 'err', 5000); }
+  };
+  const wire = () => {
+    $('#adminAddBtn', box)?.addEventListener('click', add);
+    $('#adminAddCode', box)?.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    box.querySelectorAll('[data-admin-remove]').forEach((b) => b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = b.dataset.adminRemove, who = (S.admin.admins || []).find((a) => a.id === id);
+      if (!await confirmBox('Remove admin?', `<b>${esc(who?.name || id)}</b> will no longer see the Admin tab.`, 'Remove', true)) return;
+      try { S.admin.admins = (await api.invoke('online:adminRemove', id)).admins || []; box.innerHTML = adminsHtml(S.admin.admins); wire(); toast('Admin removed', 'ok', 2500); }
+      catch (error) { toast(esc(cleanErr(error)), 'err', 5000); }
+    }));
+  };
+  wire();
+}
+
 async function renderAdminSettings(c) {
   if (!S.accounts.steam) await refreshAccounts();
-  if (S.accounts.steam?.steamId !== ADMIN_STEAM_ID) { S.settingsTab = 'general'; return renderSettings(c); }
+  await refreshAdminRole(true);
+  if (!isAdminAccount()) { S.settingsTab = 'general'; return renderSettings(c); }
+  const owner = !!(S.adminRole?.owner || S.accounts.steam?.steamId === ADMIN_STEAM_ID);
+  if (!owner) S.admin.tab = 'overview';
   if (S.admin.unlocked) {
     try { S.admin.stats = await api.invoke('online:adminStatus'); }
     catch (error) { S.admin.unlocked = false; S.admin.stats = null; toast(esc(cleanErr(error)), 'err', 6000); }
   }
+  const adminTabs = S.admin.unlocked && owner ? `<div class="seg-tabs admin-tabs"><button class="${S.admin.tab !== 'admins' ? 'active' : ''}" data-admin-tab="overview">${icon('signal')}Activity & announcements</button><button class="${S.admin.tab === 'admins' ? 'active' : ''}" data-admin-tab="admins">${icon('users')}Admins</button></div>` : '';
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings admin-settings">
-    ${S.admin.unlocked ? `${adminActivityHtml(S.admin.activity)}
+    ${adminTabs}${S.admin.unlocked && S.admin.tab === 'admins' ? '<div id="adminAdmins"><div class="loadmore"><div class="spinner"></div></div></div>' : S.admin.unlocked ? `${adminActivityHtml(S.admin.activity)}
     <div class="set-card"><h3>New announcement</h3><p>People see this once when the app next checks online. It also stays in their Notifications until they delete it.</p>
       <div class="field"><label for="adminTitle">Title</label><input class="input" id="adminTitle" maxlength="100" placeholder="Server maintenance"></div>
       <div class="field"><label for="adminMessage">Description</label><textarea class="input" id="adminMessage" maxlength="2000" rows="5" placeholder="Tell everyone what is happening and when."></textarea></div>
-      <button class="btn btn-primary" id="adminPublish">${icon('bell')}Publish announcement</button></div>` : `<div class="set-card"><h3>Unlock Admin</h3><p>Only your registered Steam account can use this tab. Enter the admin key configured on the CoreMX online server to publish announcements.</p>
+      <button class="btn btn-primary" id="adminPublish">${icon('bell')}Publish announcement</button></div>` : `<div class="set-card"><h3>Unlock Admin</h3><p>For admin accounts. Enter the admin key configured on the CoreMX online server to publish announcements.</p>
       <div class="field"><label for="adminKey">Server admin key</label><input class="input" id="adminKey" type="password" autocomplete="off"></div>
       <button class="btn btn-primary" id="adminUnlock">Unlock</button></div>`}
   </div></div></div></div>`;
-  if (S.admin.unlocked) { wireAdminActivity(c); loadAdminActivity(c); }
+  c.querySelectorAll('[data-admin-tab]').forEach((b) => b.addEventListener('click', () => { S.admin.tab = b.dataset.adminTab; renderAdminSettings(c); }));
+  if (S.admin.unlocked && S.admin.tab === 'admins') loadAdmins(c);
+  else if (S.admin.unlocked) { wireAdminActivity(c); loadAdminActivity(c); }
   $('#adminUnlock')?.addEventListener('click', async (e) => {
     e.currentTarget.disabled = true;
     try { S.admin.stats = await api.invoke('online:adminUnlock', $('#adminKey').value); S.admin.unlocked = true; renderAdminSettings(c); }

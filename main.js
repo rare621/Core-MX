@@ -1507,6 +1507,10 @@ function registerIpc() {
   handle('online:deleteNotification', (id) => online.deleteNotification(id));
   handle('online:adminUnlock', (key) => online.unlockAdmin(key));
   handle('online:adminStatus', () => online.adminStatus());
+  handle('online:adminRole', (force) => online.adminRole(!!force));
+  handle('online:adminList', () => online.adminList());
+  handle('online:adminAdd', (id) => online.adminAdd(String(id || '').trim().slice(0, 17)));
+  handle('online:adminRemove', (id) => online.adminRemove(String(id || '').trim().slice(0, 17)));
   handle('online:adminActivity', (days) => online.adminActivity(Math.max(1, Math.min(90, Number(days) || 30))));
   handle('online:createAnnouncement', (title, message) => online.createAnnouncement(title, message));
   handle('online:paintSync', (on) => online.setPaintSync(on));

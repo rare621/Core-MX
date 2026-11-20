@@ -43,7 +43,7 @@ What happens then:
 
 ## Announcements
 
-The Admin settings tab appears only when Steam is signed in as `76561198098586128`. To publish, enter the key from `admin.key` on the server PC. The service also verifies the registered account token and the key; a changed local app cannot grant itself admin access. The key stays in app memory for that session and is never included in a release.
+The Admin settings tab appears for the owner (Steam `76561198098586128`) and for admins the owner adds by friend code in Admin → Admins (they see the tab within a minute; removing them takes it away). Only the owner can add or remove admins. Everyone unlocks it with the same key from `admin.key` on the server PC. The service also verifies the registered account token and the key; a changed local app cannot grant itself admin access. The key stays in app memory for that session and is never included in a release.
 
 Publishing adds an announcement to each registered account's inbox. The app checks while open, shows a new announcement once as a popup, and keeps it in Notifications until that person deletes it. Accounts registered later also see recent announcements. The Admin tab reports the number of accounts currently registered with the online service, not a lifetime total after account deletion.
 
