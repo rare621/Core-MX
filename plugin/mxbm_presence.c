@@ -20,6 +20,7 @@
  *   cl /LD /O2 mxbm_presence.c /Fe:mxbm_presence.dlo
  */
 #define WIN32_LEAN_AND_MEAN
+#include <math.h>
 #include <winsock2.h> /* types only; socket functions are looked up at runtime */
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -1528,9 +1529,47 @@ static void ovSave(unsigned char *r) {
 
 
 static char g_ovMsg[100], g_fontName[64];
-static SPluginQuad_t g_quads[160];
+/* Sprites the overlay draws with (rounded corners and a dot), made by the plugin; see ovMakeSprites. */
+static char g_spriteNames[200];
+static int g_ovSprites = 0;
+enum { SP_TL = 1, SP_TR, SP_BL, SP_BR, SP_DOT };
+static float g_ovAspect = 9.0f / 16.0f;   /* screen height / width, for round corners */
+static SPluginQuad_t g_quads[640];
 static SPluginString_t g_strings[128];
 static int g_nq, g_ns;
+
+/* The overlay's shapes, written once as small TGA files in plugins\mxbm_data: a white quarter disc for
+ * each corner (anti-aliased edge) and a white disc. The game tints them with each quad's colour. */
+static int writeTga(const char *path, int size, int corner) {
+  unsigned char head[18] = { 0 }; FILE *f; int x, y;
+  if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return 1;
+  if (!(f = fopen(path, "wb"))) return 0;
+  head[2] = 2; head[12] = (unsigned char)(size & 255); head[13] = (unsigned char)(size >> 8);
+  head[14] = head[12]; head[15] = head[13]; head[16] = 32; head[17] = 0x28;   /* 32-bit, top-left origin */
+  fwrite(head, 1, sizeof head, f);
+  for (y = 0; y < size; y++) for (x = 0; x < size; x++) {
+    /* corner 0..3 = TL TR BL BR: the disc's centre sits at the inner corner; 4 = whole disc */
+    float cx = corner == 4 ? size / 2.0f : (corner == 0 || corner == 2) ? (float)size : 0.0f;
+    float cy = corner == 4 ? size / 2.0f : (corner == 0 || corner == 1) ? (float)size : 0.0f;
+    float rad = corner == 4 ? size / 2.0f - 1.0f : (float)size - 1.0f;
+    float dx = x + 0.5f - cx, dy = y + 0.5f - cy, d = (float)sqrt(dx * dx + dy * dy);
+    float a = rad + 0.5f - d; unsigned char px[4] = { 255, 255, 255, 0 };
+    px[3] = (unsigned char)(a <= 0 ? 0 : a >= 1 ? 255 : (int)(a * 255));
+    fwrite(px, 1, 4, f);
+  }
+  fclose(f);
+  return 1;
+}
+static int ovMakeSprites(const char *dir) {
+  static const char *const NAMES[5] = { "ov_tl.tga", "ov_tr.tga", "ov_bl.tga", "ov_br.tga", "ov_dot.tga" };
+  char path[MAX_PATH * 2 + 40]; size_t at = 0; int k;
+  for (k = 0; k < 5; k++) {
+    sprintf(path, "%smxbm_data\\%s", dir, NAMES[k]);
+    if (!writeTga(path, 64, k)) return 0;
+    at += (size_t)sprintf(g_spriteNames + at, "mxbm_data\\%s", NAMES[k]) + 1;   /* zero-separated */
+  }
+  return 5;
+}
 
 /* Copies the game's font next to the plugin (once) and registers it. */
 EXPORT int DrawInit(int *_piNumSprites, char **_pszSpriteName, int *_piNumFonts, char **_pszFontName) {
@@ -1551,6 +1590,7 @@ EXPORT int DrawInit(int *_piNumSprites, char **_pszSpriteName, int *_piNumFonts,
   if (GetFileAttributesA(dst) == INVALID_FILE_ATTRIBUTES && !CopyFileA(src, dst, TRUE)) return 0;
   copy(g_fontName, "mxbm_data\\main.fnt", sizeof g_fontName);
   *_piNumFonts = 1; *_pszFontName = g_fontName; g_ovFont = 1;
+  if (_piNumSprites && _pszSpriteName && (g_ovSprites = ovMakeSprites(me)) > 0) { *_piNumSprites = g_ovSprites; *_pszSpriteName = g_spriteNames; }
   return 0;
 }
 
@@ -1561,6 +1601,34 @@ static void ovQuad(float x0, float y0, float x1, float y1, unsigned long c) {
   q->m_aafPos[0][0] = x0; q->m_aafPos[0][1] = y0; q->m_aafPos[1][0] = x0; q->m_aafPos[1][1] = y1;
   q->m_aafPos[2][0] = x1; q->m_aafPos[2][1] = y1; q->m_aafPos[3][0] = x1; q->m_aafPos[3][1] = y0;
   q->m_iSprite = 0; q->m_ulColor = c;
+}
+static void ovSprite(float x0, float y0, float x1, float y1, int sprite, unsigned long c) {
+  if (g_nq >= (int)(sizeof g_quads / sizeof g_quads[0])) return;
+  ovQuad(x0, y0, x1, y1, c);
+  g_quads[g_nq - 1].m_iSprite = sprite;
+}
+/* A rounded rectangle (radius in screen heights). Without the sprites: a plain rectangle. */
+static void ovRound(float x0, float y0, float x1, float y1, float rad, unsigned long c) {
+  float ry = rad, rx = rad * g_ovAspect;
+  if (!g_ovSprites || rad <= 0) { ovQuad(x0, y0, x1, y1, c); return; }
+  if (ry * 2 > y1 - y0) { ry = (y1 - y0) / 2; rx = ry * g_ovAspect; }
+  if (rx * 2 > x1 - x0) { rx = (x1 - x0) / 2; ry = rx / g_ovAspect; }
+  ovQuad(x0 + rx, y0, x1 - rx, y1, c);
+  ovQuad(x0, y0 + ry, x0 + rx, y1 - ry, c);
+  ovQuad(x1 - rx, y0 + ry, x1, y1 - ry, c);
+  ovSprite(x0, y0, x0 + rx, y0 + ry, SP_TL, c); ovSprite(x1 - rx, y0, x1, y0 + ry, SP_TR, c);
+  ovSprite(x0, y1 - ry, x0 + rx, y1, SP_BL, c); ovSprite(x1 - rx, y1 - ry, x1, y1, SP_BR, c);
+}
+/* A panel: soft shadow, dark fill, faint outline, like the app's cards. */
+static void ovPanel(float x0, float y0, float x1, float y1) {
+  ovRound(x0 + 0.003f, y0 + 0.008f, x1 + 0.003f, y1 + 0.010f, 0.020f, 0x40000000);
+  ovRound(x0 - 0.0012f, y0 - 0.0020f, x1 + 0.0012f, y1 + 0.0020f, 0.020f, 0x26FFFFFF);
+  ovRound(x0, y0, x1, y1, 0.019f, 0xF0141418);
+}
+static void ovDot(float cx, float cy, float rad, unsigned long c) {
+  float rx = rad * g_ovAspect;
+  if (g_ovSprites) ovSprite(cx - rx, cy - rad, cx + rx, cy + rad, SP_DOT, c);
+  else ovQuad(cx - rx, cy - rad, cx + rx, cy + rad, c);
 }
 static void ovText(const char *s, float x, float y, float size, int justify, unsigned long c) {
   SPluginString_t *t;
@@ -1607,9 +1675,6 @@ static OvHit g_ovHits[64]; static int g_ovNHits;
 
 static void ovHit(float x0, float y0, float x1, float y1, int kind, int value) {
   if (g_ovNHits < 64) { OvHit *h = &g_ovHits[g_ovNHits++]; h->x0 = x0; h->y0 = y0; h->x1 = x1; h->y1 = y1; h->kind = kind; h->value = value; }
-}
-static void ovBox(float x0, float y0, float x1, float y1, float t, unsigned long c) {
-  ovQuad(x0, y0, x1, y0 + t, c); ovQuad(x0, y1 - t, x1, y1, c); ovQuad(x0, y0, x0 + t, y1, c); ovQuad(x1 - t, y0, x1, y1, c);
 }
 static void ovTri(float ax, float ay, float bx, float by, float cx, float cy, unsigned long c) {
   SPluginQuad_t *q;
@@ -1676,6 +1741,52 @@ static int riderLook(int num, const char *bike, Look *out) {
   return found;
 }
 
+/* What still has to happen for a rider's gear to show in your game, in a few words. */
+static void riderTodo(unsigned char *base, LookStatus *st, char *status, char *todo, unsigned long *dot) {
+  unsigned char *vr = riderRecord(base, st);
+  int waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
+  if (vr && st->models[0] && !waiting) st->models[0] = 0;   /* the game rebuilt them: done */
+  todo[0] = 0;
+  if (!vr) { strcpy(status, "Not on track"); *dot = 0xFF707070; }
+  else if (waiting) { strcpy(status, "Ready: pits & back"); sprintf(todo, "Go to the pits and back to the track to see their %.30s", st->models); *dot = 0xFFFFB46C; }
+  else if (st->missing) {
+    const char *code = riderWaitCode(st);
+    strcpy(status, code && !strcmp(code, "uploading") ? "Uploading" : code && !strcmp(code, "offline") ? "Their CoreMX is off" : code && !strcmp(code, "paid") ? "Paid gear" : "Missing items");
+    if (!riderWait(st, todo)) {
+      if (st->firstMissing[0]) sprintf(todo, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
+      else sprintf(todo, "%d item%s not available to you yet", st->missing, st->missing == 1 ? "" : "s");
+    }
+    *dot = 0xFF4FC3FF;
+  }
+  else { strcpy(status, "Up to date"); *dot = 0xFF6CE07A; }
+}
+/* The Riders panel beside the main panel while the overlay is open: CoreMX riders on this server and
+ * what is left to do for their gear. Click a rider to see their gear. Returns the panel's right edge. */
+static float ovRidersPanel(unsigned char *base, float x0, float y0) {
+  int list[10], n = presentRiders(list, 10), q;
+  const float x1 = x0 + 0.255f, rowH = 0.050f;
+  float y1 = y0 + 0.046f + (n ? n * rowH : 0.032f) + 0.010f, y = y0 + 0.046f;
+  char line[110], status[40], todo[110]; unsigned long dot;
+  ovPanel(x0, y0, x1, y1);
+  ovDot(x0 + 0.018f, y0 + 0.022f, 0.0055f, OV_ACCENT);
+  ovText("RIDERS ON THIS SERVER", x0 + 0.027f, y0 + 0.014f, 0.0135f, 0, 0xFFD0D0D0);
+  if (!n) ovText("No other CoreMX riders here yet.", x0 + 0.014f, y + 0.004f, 0.0135f, 0, 0xFFB0B0B0);
+  for (q = 0; q < n; q++, y += rowH) {
+    LookStatus *st = &g_lookStatus[list[q]];
+    int open = g_ovRiderNum == st->num && _stricmp(g_ovRiderBike, st->bike) == 0;
+    riderTodo(base, st, status, todo, &dot);
+    if (open) ovRound(x0 + 0.0068f, y - 0.0038f, x1 - 0.0068f, y + rowH - 0.0042f, 0.012f, OV_ACCENT);
+    ovRound(x0 + 0.008f, y - 0.002f, x1 - 0.008f, y + rowH - 0.006f, 0.011f, open ? 0xFF2A2A30 : 0x10FFFFFF);
+    ovDot(x0 + 0.018f, y + 0.012f, 0.0055f, dot);
+    if (st->name[0]) sprintf(line, "%.22s  #%d", st->name, st->num); else sprintf(line, "#%d", st->num);
+    ovText(line, x0 + 0.027f, y + 0.003f, 0.0140f, 0, 0xFFFFFFFF);
+    ovText(status, x1 - 0.014f, y + 0.004f, 0.0125f, 2, dot);
+    if (todo[0]) { sprintf(line, "%.62s", todo); ovText(line, x0 + 0.027f, y + 0.023f, 0.0115f, 0, 0xFFA0A0A0); }
+    ovHit(x0 + 0.008f, y - 0.002f, x1 - 0.008f, y + rowH - 0.006f, 7, list[q]);
+  }
+  return x1;
+}
+
 EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumString, void **_ppString) {
   unsigned char *base = (unsigned char *)GetModuleHandleA(NULL), *r;
   const OvCard *cards; int ncards, f8, up, dn, lt, rt, en, tab, click, locked, i;
@@ -1688,6 +1799,10 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
   f8 = keyPressed(g_ovKey); up = keyPressed(VK_UP); dn = keyPressed(VK_DOWN); lt = keyPressed(VK_LEFT); rt = keyPressed(VK_RIGHT);
   en = keyPressed(VK_RETURN); tab = keyPressed(VK_TAB); click = keyPressed(VK_LBUTTON);
   r = S.inEvent ? ownRecord(base) : 0;
+  {
+    RECT rc; HWND w = GetForegroundWindow();
+    if (w && GetClientRect(w, &rc) && rc.right > 0 && rc.bottom > 0) g_ovAspect = (float)rc.bottom / (float)rc.right;
+  }
   if (f8) {
     g_ovOpen = !g_ovOpen; g_ovPicker = -1; g_ovMsgUntil = 0;
     if (g_ovOpen && r) ovLoadOptions(base, r);
@@ -1758,22 +1873,21 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     int present[8], npresent = g_ovTab == 2 ? presentRiders(present, 8) : 0;
     if (g_ovTab == 2) { groups = 1; ncards = npresent > 0 ? npresent : 1; }
     y1 = y + groups * 0.030f + ncards * 0.052f + 0.15f;
-    ovQuad(x0 + 0.004f, y0 + 0.007f, x1 + 0.004f, y1 + 0.007f, 0x55000000);   /* shadow */
-    ovQuad(x0, y0, x1, y1, 0xEE141418);
-    ovBox(x0, y0, x1, y1, 0.0015f, 0x30FFFFFF);
-    ovQuad(x0, y0, x1, y0 + 0.004f, OV_ACCENT);                                  /* accent strip */
-    ovText("CoreMX", x0 + 0.014f, y0 + 0.016f, 0.018f, 0, OV_ACCENT);
+    ovPanel(x0, y0, x1, y1);
+    ovRound(x0 + 0.014f, y0 + 0.016f, x0 + 0.014f + 0.040f * g_ovAspect, y0 + 0.032f, 0.006f, OV_ACCENT);   /* the app's orange mark */
+    ovText("CoreMX", x0 + 0.014f + 0.048f * g_ovAspect, y0 + 0.016f, 0.0155f, 0, 0xFFD0D0D0);
     ovText("Rider", x0 + 0.014f, y0 + 0.040f, 0.034f, 0, 0xFFFFFFFF);
     /* Tabs (pills). */
     for (k = 0; k < 3; k++) {
       float tx0 = x0 + 0.014f + k * 0.075f, tx1 = tx0 + 0.068f, ty0 = y0 + 0.085f, ty1 = ty0 + 0.034f;
-      ovQuad(tx0, ty0, tx1, ty1, k == g_ovTab ? OV_ACCENT : 0x14FFFFFF);
+      ovRound(tx0, ty0, tx1, ty1, 0.017f, k == g_ovTab ? OV_ACCENT : 0x14FFFFFF);
       ovText(k == 2 ? "Riders" : k ? "Bike" : "Outfit", (tx0 + tx1) / 2, ty0 + 0.008f, 0.017f, 1, k == g_ovTab ? 0xFFFFFFFF : 0xFFD0D0D0);
       ovHit(tx0, ty0, tx1, ty1, 1, k);
     }
     /* Close (x). */
-    ovText("x", x1 - 0.016f, y0 + 0.014f, 0.022f, 2, 0xFFB0B0B0);
-    ovHit(x1 - 0.03f, y0 + 0.008f, x1 - 0.004f, y0 + 0.04f, 5, 0);
+    ovDot(x1 - 0.022f, y0 + 0.026f, 0.014f, 0x16FFFFFF);
+    ovText("x", x1 - 0.022f, y0 + 0.013f, 0.020f, 1, 0xFFB0B0B0);
+    ovHit(x1 - 0.036f, y0 + 0.008f, x1 - 0.006f, y0 + 0.046f, 5, 0);
     if (g_ovTab == 2) {
       /* Other CoreMX riders on this server (live looks): liveries and paints are applied at once; a
        * different helmet, boots, rider or protector waits for the game's rebuild, which happens once
@@ -1793,10 +1907,10 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         }
         waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
         if (vr && st->models[0] && !waiting) st->models[0] = 0;   /* the game rebuilt them: done */
-        ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, open ? 0x30FFFFFF : waiting ? 0x40328CFF : 0x12FFFFFF);
-        if (open) ovQuad(x0 + 0.010f, y, x0 + 0.0135f, y + 0.046f, OV_ACCENT);
+        if (open) ovRound(x0 + 0.0098f, y - 0.0018f, x1 - 0.0098f, y + 0.0478f, 0.014f, OV_ACCENT);
+        ovRound(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 0.013f, open ? 0xFF2A2A30 : waiting ? 0x40328CFF : 0x12FFFFFF);
         /* Status dot: green up to date, blue queued for the pits, amber something missing, grey not on track. */
-        ovQuad(x0 + 0.017f, y + 0.017f, x0 + 0.024f, y + 0.029f, !vr ? 0xFF707070 : waiting ? 0xFFFFB46C : st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
+        ovDot(x0 + 0.0205f, y + 0.023f, 0.0055f, !vr ? 0xFF707070 : waiting ? 0xFFFFB46C : st->missing ? 0xFF4FC3FF : 0xFF6CE07A);
         ovHit(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 7, present[shown]);
         {
           /* "Name  ·  #501  ·  2023 Kawasaki KX250": the bike id without its class prefix, spaced. */
@@ -1823,9 +1937,8 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       int row = cards[k].row, sel = g_ovSel[row], c = g_ovCount[row], on = k == g_ovCard;
       char cur[33];
       if (cards[k].group) { ovText(cards[k].group, x0 + 0.014f, y, 0.0135f, 0, 0xFF8C8C8C); y += 0.030f; }
-      ovQuad(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, row == g_ovPicker ? 0x40328CFF : on ? 0x24FFFFFF : 0x12FFFFFF);
-      if (on || row == g_ovPicker) ovBox(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 0.0018f, row == g_ovPicker ? OV_ACCENT : 0x50FFFFFF);
-      if (on) ovQuad(x0 + 0.010f, y, x0 + 0.0135f, y + 0.046f, OV_ACCENT);
+      if (on || row == g_ovPicker) ovRound(x0 + 0.0098f, y - 0.0018f, x1 - 0.0098f, y + 0.0478f, 0.014f, row == g_ovPicker ? OV_ACCENT : 0x60FFFFFF);
+      ovRound(x0 + 0.010f, y, x1 - 0.010f, y + 0.046f, 0.013f, row == g_ovPicker ? 0xFF2B2420 : on ? 0xFF26262B : 0x12FFFFFF);
       ovText(OV_LABEL[row], x0 + 0.020f, y + 0.005f, 0.0135f, 0, 0xFF9A9A9A);
       memcpy(cur, r + OV_OFF[row], 32); cur[32] = 0;
       sprintf(line, "%.42s", sel >= 0 ? g_ovOpt[row][sel] : cur[0] ? cur : c ? "Default" : "None installed");
@@ -1840,7 +1953,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
       ovText(S.onTrack ? "Helmet, boots and protector changes show when you go back to the pits." : "Applying your new helmet, boots or protector...",
              x0 + 0.014f, y - 0.030f, 0.0135f, 0, 0xFF6CB4FF);
     if (r && !locked) {
-      ovQuad(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, OV_ACCENT);
+      ovRound(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, 0.021f, OV_ACCENT);
       ovText("Save", (x0 + x1) / 2, y + 0.011f, 0.019f, 1, 0xFFFFFFFF);
       ovHit(x0 + 0.014f, y, x1 - 0.014f, y + 0.042f, 4, 0);
     }
@@ -1849,51 +1962,26 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     sprintf(line, "Click or Up/Down, Left/Right   Tab switch   Enter save   F%d close", g_ovKey - VK_F1 + 1);
     ovText(line, x0 + 0.014f, y1 - 0.026f, 0.0125f, 0, 0xFF808080);
 
-    /* Outfit and Bike tabs: a compact Riders window under the panel, to see at a glance who is
-     * synced. A click shows that rider's gear beside the panel. */
-    if (g_ovTab != 2) {
-      int list[6], n = presentRiders(list, 6), q;
-      const float wy0 = y1 + 0.012f, rowH = 0.032f;
-      float wy1 = wy0 + 0.042f + (n ? n * rowH : 0.030f) + 0.008f, ry = wy0 + 0.040f;
-      ovQuad(x0 + 0.004f, wy0 + 0.007f, x1 + 0.004f, wy1 + 0.007f, 0x55000000);
-      ovQuad(x0, wy0, x1, wy1, 0xEE141418);
-      ovBox(x0, wy0, x1, wy1, 0.0015f, 0x30FFFFFF);
-      ovText("RIDERS", x0 + 0.014f, wy0 + 0.012f, 0.0135f, 0, 0xFF8C8C8C);
-      if (!n) ovText("No other CoreMX riders here yet.", x0 + 0.014f, ry, 0.0135f, 0, 0xFFB0B0B0);
-      for (q = 0; q < n; q++, ry += rowH) {
-        LookStatus *st = &g_lookStatus[list[q]];
-        unsigned char *vr = riderRecord(base, st);
-        int waiting = vr && st->models[0] && *(const int *)(vr + 0x4EE8) != 0;
-        const char *code = st->missing ? riderWaitCode(st) : NULL;
-        const char *status = !vr ? "Not on track" : waiting ? "Pits & back to apply" : st->missing ? (code && !strcmp(code, "uploading") ? "Uploading..." : "Missing items") : "Up to date";
-        unsigned long dot = !vr ? 0xFF707070 : waiting ? 0xFFFFB46C : st->missing ? 0xFF4FC3FF : 0xFF6CE07A;
-        int open = g_ovRiderNum == st->num && _stricmp(g_ovRiderBike, st->bike) == 0;
-        if (open) ovQuad(x0 + 0.008f, ry - 0.004f, x1 - 0.008f, ry + rowH - 0.006f, 0x24FFFFFF);
-        ovQuad(x0 + 0.014f, ry + 0.006f, x0 + 0.020f, ry + 0.016f, dot);
-        if (st->name[0]) sprintf(line, "%.24s  #%d", st->name, st->num); else sprintf(line, "#%d", st->num);
-        ovText(line, x0 + 0.026f, ry + 0.002f, 0.0140f, 0, 0xFFFFFFFF);
-        ovText(status, x1 - 0.014f, ry + 0.003f, 0.0130f, 2, dot);
-        ovHit(x0 + 0.008f, ry - 0.004f, x1 - 0.008f, ry + rowH - 0.006f, 7, list[q]);
-      }
-    }
+    /* Outfit and Bike tabs: the Riders panel beside the main panel (the Riders tab already lists them).
+     * The picker and a rider's gear open to the right of it. */
+    float side = x1;
+    if (g_ovTab != 2) side = ovRidersPanel(base, x1 + 0.008f, y0);
     /* A rider's gear beside the panel (view only), from the Riders tab or the Riders window. */
     if (g_ovRiderNum && g_ovPicker < 0) {
       Look L;
       if (!riderLook(g_ovRiderNum, g_ovRiderBike, &L)) g_ovRiderNum = 0;   /* they left */
       else {
         static const char *const GEAR[11] = { "Bike livery", "Rider model", "Helmet", "Helmet paint", "Goggles", "Suit", "Gloves", "Boots", "Boots paint", "Protector", "Protector paint" };
-        const float px0 = x1 + 0.008f, px1 = px0 + 0.24f, py0 = y0, rowH = 0.036f;
+        const float px0 = side + 0.008f, px1 = px0 + 0.24f, py0 = y0, rowH = 0.036f;
         float py1 = py0 + 0.075f + 11 * rowH + 0.02f, gy = py0 + 0.075f;
         int g;
-        ovQuad(px0 + 0.004f, py0 + 0.007f, px1 + 0.004f, py1 + 0.007f, 0x55000000);
-        ovQuad(px0, py0, px1, py1, 0xEE141418);
-        ovBox(px0, py0, px1, py1, 0.0015f, 0x30FFFFFF);
-        ovQuad(px0, py0, px1, py0 + 0.004f, OV_ACCENT);
+        ovPanel(px0, py0, px1, py1);
         sprintf(line, "%.30s", L.name[0] ? L.name : "Rider");
         ovText(line, px0 + 0.012f, py0 + 0.016f, 0.020f, 0, 0xFFFFFFFF);
         sprintf(line, "#%d   %.40s", L.num, L.bike);
         ovText(line, px0 + 0.012f, py0 + 0.044f, 0.0125f, 0, 0xFF9A9A9A);
-        ovText("x", px1 - 0.012f, py0 + 0.014f, 0.020f, 2, 0xFFB0B0B0);
+        ovDot(px1 - 0.020f, py0 + 0.025f, 0.013f, 0x16FFFFFF);
+        ovText("x", px1 - 0.020f, py0 + 0.0125f, 0.019f, 1, 0xFFB0B0B0);
         ovHit(px1 - 0.026f, py0 + 0.008f, px1 - 0.002f, py0 + 0.04f, 8, 0);
         for (g = 0; g < 11; g++, gy += rowH) {
           const char *v = L.f[g];
@@ -1906,17 +1994,16 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
     }
     /* Picker beside the panel. */
     if (r && !locked && g_ovPicker >= 0) {
-      const float px0 = x1 + 0.008f, px1 = px0 + 0.22f, py0 = y0, rowH = 0.034f;
+      const float px0 = side + 0.008f, px1 = px0 + 0.22f, py0 = y0, rowH = 0.034f;
       int c = g_ovCount[g_ovPicker], shown = c < OV_PICKER_ROWS ? c : OV_PICKER_ROWS;
       float py1 = py0 + 0.06f + shown * rowH + 0.05f;
-      ovQuad(px0, py0, px1, py1, 0xE6141418);
-      ovBox(px0, py0, px1, py1, 0.0015f, 0x30FFFFFF);
+      ovPanel(px0, py0, px1, py1);
       sprintf(line, "%s  (%d)", OV_LABEL[g_ovPicker], c);
       ovText(line, px0 + 0.012f, py0 + 0.018f, 0.017f, 0, 0xFFFFFFFF);
       for (k = 0; k < shown; k++) {
         int opt = g_ovScroll + k; float oy = py0 + 0.055f + k * rowH;
         if (opt >= c) break;
-        if (opt == g_ovSel[g_ovPicker]) ovQuad(px0 + 0.006f, oy - 0.003f, px1 - 0.006f, oy + rowH - 0.005f, 0x60328CFF);
+        if (opt == g_ovSel[g_ovPicker]) ovRound(px0 + 0.006f, oy - 0.003f, px1 - 0.006f, oy + rowH - 0.005f, 0.012f, 0x70328CFF);
         sprintf(line, "%.40s", g_ovOpt[g_ovPicker][opt]);
         ovText(line, px0 + 0.014f, oy + 0.004f, 0.0155f, 0, opt == g_ovSel[g_ovPicker] ? 0xFFFFFFFF : 0xFFC8C8C8);
         ovHit(px0 + 0.006f, oy - 0.003f, px1 - 0.006f, oy + rowH - 0.005f, 3, opt);
