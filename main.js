@@ -42,6 +42,7 @@ const imageMatch = require('./src/lib/image-match');
 const { filesMatch } = require('./src/lib/file-verify');
 const onlineSvc = require('./src/lib/online');
 const paintsync = require('./src/lib/paintsync');
+const syncedGear = require('./src/lib/synced-gear');
 const gearAssets = require('./src/lib/gear-assets');
 const riderPaints = require('./src/lib/rider-paints');
 const installSummary = require('./src/lib/install-summary');
@@ -159,6 +160,7 @@ function watchPluginFiles() {
   fs.watchFile(hook, { interval: 3000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onHookStateFile(hook); });
   if (fs.existsSync(hook)) onHookStateFile(hook);
   writeOverlayKey();
+  writeSyncedList();
   const overlay = path.join(dir, 'mxbm_overlay_save.json');
   fs.watchFile(overlay, { interval: 1000 }, (cur, prev) => { if (cur.mtimeMs && cur.mtimeMs !== prev.mtimeMs) onOverlaySave(overlay).catch((e) => console.warn('Overlay save:', e.message)); });
 }
@@ -171,6 +173,17 @@ function writeOverlayKey() {
   const file = path.join(dir, 'mxbm_overlay_key.txt');
   try { if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8').trim() !== overlayKey()) fs.writeFileSync(file, overlayKey()); }
   catch (e) { console.warn('Overlay key:', e.message); }
+}
+// Gear synced from friends is not offered in the overlay either: the plugin skips what
+// mxbm_synced.txt lists (src/lib/synced-gear.js), re-read each time the overlay opens.
+function writeSyncedList() {
+  const dir = gameDataDir(); if (!dir) return;
+  try {
+    const synced = syncedOnly();
+    const text = syncedGear.overlayList(synced, (kind, model) => syncedGear.modelInstalledElsewhere(modsDir(), synced, kind, model));
+    const file = path.join(dir, 'mxbm_synced.txt');
+    if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) fs.writeFileSync(file, text);
+  } catch (e) { console.warn('Synced list:', e.message); }
 }
 // The in-game overlay (F8) saves your paints: queue them like Apply does while the game runs, so
 // they are written to the profile when MX Bikes closes and shared with other riders right away.
@@ -342,7 +355,11 @@ function installedFileIndex() {
   return idx;
 }
 
+// Gear synced from other riders that the player hasn't installed themselves (src/lib/synced-gear.js).
+function syncedOnly() { return syncedGear.syncedOnly((store.get('online') || {}).received, store.get('installs')); }
+
 function decorate(items) {
+  const synced = syncedOnly();
   const images = store.get('images');
   const favs = new Set(store.get('favorites'));
   const idx = installedFileIndex();
@@ -354,6 +371,9 @@ function decorate(items) {
       const hit = idx.find(([f]) => require('./src/lib/install-image').ownsInstallFile(p, f));
       if (hit) { it.post = { id: hit[1].postId, title: hit[1].title, link: hit[1].link, image: hit[1].image, installedAt: hit[1].installedAt }; break; }
     }
+    // Synced from friends: shown only under My gear > Synced from friends.
+    const from = it.parts.length && it.parts.every((p) => synced.has(syncedGear.norm(p))) && synced.get(syncedGear.norm(it.parts[0]));
+    it.synced = from ? { from: from.from || '', at: from.at || 0 } : null;
     it.hasImage = it.customImage || !!it.bikePreview || !!(it.post && it.post.image) || !!(it.info && it.info.pic);
   }
   return items;
@@ -544,6 +564,18 @@ function newJob(fields) {
   return j;
 }
 
+// Installing a mod yourself takes over files synced from friends: they become ordinary gear, and a
+// synced package of a model just installed as a folder (or the other way round) goes to the Recycle Bin.
+async function releaseSynced(written) {
+  const received = { ...((store.get('online') || {}).received || {}) };
+  const { forget, trash } = syncedGear.releaseAfterInstall(received, written);
+  if (!forget.length) return;
+  for (const p of trash) { const abs = path.resolve(modsDir(), ...p.split('/')); if (insideRoots(abs)) await shell.trashItem(abs).catch(() => {}); }
+  for (const p of forget) delete received[p];
+  store.set('online', { ...(store.get('online') || {}), received });
+  await scan(); writeSyncedList(); send('library:changed', {});
+}
+
 async function runDownload(j) {
   j.completedAt = null;
   j.status = 'downloading'; emitJob(j);
@@ -664,6 +696,7 @@ async function doInstall(j, opts) {
     emitJob(j);
     cleanupStage(j);
     send('library:changed', {});
+    releaseSynced(written).catch(() => {});
   } catch (e) { fail(j, e); }
 }
 
@@ -1486,7 +1519,7 @@ function registerIpc() {
     const outfit = cached && Date.now() - cached.at < 60000 ? cached.outfit : await online.friendLoadout(friendId);
     return require('./src/lib/friend-preview').build(outfit, { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, resolveAppearance: (bike, entry) => bikeSwaps.sharedPreview(bike, entry), buildModel: (type, options) => modelWorkers.build(type, options) });
   });
-  handle('online:removeReceived', () => online.removeReceived());
+  handle('online:removeReceived', async () => { const r = await online.removeReceived(); writeSyncedList(); return r; });
   handle('online:steamFriends', async () => {
     const me = steam.detect(paths.steamRoot());
     const list = me.found ? steam.friends(paths.steamRoot(), me.steamId) : [];
@@ -1661,6 +1694,9 @@ function registerIpc() {
     const bikeDir = await profile.findBikeDir(modsDir(), bike);
     const packed = await bike3d.paints({ modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, bike, bikeDir }).catch(() => []);
     lo.options.bikePaint = [...new Set(['', ...lo.options.bikePaint, ...packed])];
+    // Synced-only gear is not offered (it lives under My gear > Synced from friends).
+    const synced = syncedOnly();
+    if (synced.size) lo.options = syncedGear.filterOptions(lo.options, syncedGear.hiddenChoices(synced, lo.current, bike, (kind, model) => syncedGear.modelInstalledElsewhere(modsDir(), synced, kind, model)), lo.current);
     lo.profileActive = (await profile.listProfiles(profUserDir())).last === name;
     lo.selectedInGame = lo.selectedInGame && lo.profileActive;
     return lo;
@@ -2072,7 +2108,7 @@ app.whenReady().then(async () => {
       if (!sub) return true;
       return gearAssets.hasModel({ modsDir: modsDir(), rider: n.rider || 'default_mx', stockPkz: stockRiderPkz() }, sub, n.name);
     },
-    onInstalled: async () => { await scan(); send('library:changed', {}); },
+    onInstalled: async () => { await scan(); writeSyncedList(); send('library:changed', {}); },
     onChange: (st) => send('online:status', st),
   });
   online.start();
