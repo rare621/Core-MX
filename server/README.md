@@ -33,7 +33,7 @@ What happens then:
 - Files already stored on this PC are moved up to R2 one at a time, then deleted here.
 - New uploads go straight to R2. The service reads each upload back and checks that it matches its hash, belongs to the uploader's equipped loadout and is a real paint or model; anything else is deleted from R2.
 - Downloads get a link to R2 that works for 5 minutes. Older app versions follow it too.
-- A file in R2 that nobody has equipped for a day is deleted. Files someone has equipped are always kept; if a rider equips an old paint again, the app uploads it again by itself.
+- A file in R2 that nobody has equipped for two minutes is deleted (`--unusedseconds`, default 120). A rider who has not opened CoreMX for 5 days (`--inactivedays`, default 5) no longer counts, so their files are deleted too. When they come back, or equip an old paint again, the app uploads it again by itself.
 - The storage safety cap (`--maxstore`) is 100 GB with R2 (4 GB without). Only equipped files count, so normal use stays far below it. The service window warns at 80% full. At most, 100 GB costs about $1.35 a month in R2.
 - Without `r2.json`, everything works as before. A broken `r2.json` stops the service with a clear error instead of quietly falling back.
 
@@ -43,7 +43,7 @@ The Admin settings tab appears only when Steam is signed in as `7656119809858612
 
 Publishing adds an announcement to each registered account's inbox. The app checks while open, shows a new announcement once as a popup, and keeps it in Notifications until that person deletes it. Accounts registered later also see recent announcements. The Admin tab reports the number of accounts currently registered with the online service, not a lifetime total after account deletion.
 
-The server checks its cache every 30 seconds. Files no longer referenced by any shared outfit are deleted after two minutes unused. This also clears old unused files after an upgrade. A file stays while any rider still shares it, including offline riders, and active downloads are protected. Turning outfit sharing off or unregistering releases that user's references. Only hash-named server cache files are removed; accounts and installed mods on players' PCs are untouched. Deleted cache copies can be uploaded again from a rider's installed files.
+The server checks its cache every 30 seconds. Files no longer referenced by any shared outfit are deleted after two minutes unused. This also clears old unused files after an upgrade. A file stays while a rider who used CoreMX in the last 5 days still shares it, and active downloads are protected. Turning outfit sharing off or unregistering releases that user's references. Only hash-named server cache files are removed; accounts and installed mods on players' PCs are untouched. Deleted cache copies can be uploaded again from a rider's installed files.
 
 The health page reports the service version. Announcement delivery and notification deletion require version 9 or later.
 

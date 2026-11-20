@@ -3,7 +3,20 @@ const path = require('path');
 
 // Only server-owned, hash-named cache files are eligible. Never touch accounts,
 // user mods, unexpected files, directories or links.
-function createCacheCleanup({ directory, users, busy = () => false, now = Date.now, graceMs = 120000 }) {
+// Synced files someone still needs: the gear users wear, counting only users who share it and were
+// seen (any CoreMX heartbeat) within inactiveMs. Files of users away longer are removed; their app
+// uploads them again when it next shares their outfit.
+function liveFiles(users, { now = Date.now(), inactiveMs = Infinity } = {}) {
+  const live = new Set();
+  for (const user of Object.values(users || {})) {
+    if (!user || user.sharePaints === false) continue;
+    if (inactiveMs !== Infinity && !(now - (user.lastSeen || 0) < inactiveMs)) continue;
+    for (const item of user.loadout?.items || []) live.add(item.sha256);
+  }
+  return live;
+}
+
+function createCacheCleanup({ directory, users, busy = () => false, now = Date.now, graceMs = 120000, inactiveMs = Infinity }) {
   const unusedSince = new Map();
   let running = false;
   return async function cleanup() {
@@ -12,11 +25,7 @@ function createCacheCleanup({ directory, users, busy = () => false, now = Date.n
     let removed = 0, bytes = 0;
     try {
       const entries = await fs.promises.readdir(directory, { withFileTypes: true });
-      const live = new Set();
-      for (const user of Object.values(users())) {
-        if (user.sharePaints === false) continue;
-        for (const item of user.loadout?.items || []) live.add(item.sha256);
-      }
+      const live = liveFiles(users(), { now: now(), inactiveMs });
       const present = new Set(entries.map((entry) => entry.name));
       for (const name of unusedSince.keys()) if (!present.has(name) || live.has(name)) unusedSince.delete(name);
       for (const entry of entries) {
@@ -37,4 +46,4 @@ function createCacheCleanup({ directory, users, busy = () => false, now = Date.n
     } finally { running = false; }
   };
 }
-module.exports = { createCacheCleanup };
+module.exports = { createCacheCleanup, liveFiles };

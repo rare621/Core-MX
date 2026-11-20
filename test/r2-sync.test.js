@@ -99,3 +99,47 @@ test('with r2.json, paint files go to and come from R2, never through the servic
   for (let i = 0; i < 20 && (await fs.readdir(path.join(root, 'mxbm-files'))).length; i++) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(await fs.readdir(path.join(root, 'mxbm-files')), [], 'and removed from the service PC');
 });
+
+// Storage upkeep: a file nobody wears is deleted after the grace (2 minutes; 1 s here), and so is the
+// gear of a user who hasn't opened CoreMX for the inactive time (5 days; 4 s here). Their app uploads
+// it again when they're back.
+test('R2 keeps only files that riders using CoreMX wear', async (t) => {
+  const r2 = await fakeR2();
+  t.after(() => r2.server.close());
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-r2-upkeep-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--inactivedays', String(4 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = (token) => async (method, route, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) });
+    return { status: res.status, data: await res.json() };
+  };
+  const me = (await call()('POST', '/v1/register', { steamId: '76561198000000021', name: 'Rider' })).data, c = call(me.token);
+  const paint = (fill) => { const b = Buffer.alloc(2048, fill); b.write('PNT\0', 0, 'latin1'); b.writeUInt32LE(2, 104); return b; };
+  const upload = async (buf, slot) => {
+    const sha = crypto.createHash('sha256').update(buf).digest('hex');
+    return { sha, item: { slot, label: slot, path: `rider/helmets/X/paints/${slot}.pnt`, sha256: sha, size: buf.length, value: slot }, buf };
+  };
+  const a = await upload(paint(3), 'helmetPaint'), b = await upload(paint(4), 'gogglesPaint');
+  await c('POST', '/v1/loadout', { bike: 'B', items: [a.item, b.item], equipped: [], unavailable: [] });
+  for (const f of [a, b]) {
+    const grant = (await c('POST', `/v1/files/${f.sha}/upload`)).data;
+    await fetch(grant.url, { method: 'PUT', body: f.buf });
+    assert.deepEqual((await c('POST', `/v1/files/${f.sha}/uploaded`)).data, { ok: true });
+  }
+  const has = (sha) => r2.objects.has(`/coremx-sync/files/${sha}`);
+  const until = async (ok, ms) => { for (let i = 0; i < ms / 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 100)); return ok(); };
+  // Changed gear: the paint no longer worn goes, the one still worn stays.
+  await c('POST', '/v1/loadout', { bike: 'B', items: [a.item], equipped: [], unavailable: [] });
+  assert.ok(await until(() => !has(b.sha), 9000), 'unworn file removed');
+  assert.ok(has(a.sha), 'worn file kept');
+  // Away (no requests at all): after the inactive time their worn file goes too.
+  assert.ok(await until(() => !has(a.sha), 12000), 'away user\'s file removed');
+  // Back: the service asks for it again.
+  assert.deepEqual((await c('POST', '/v1/loadout', { bike: 'B', items: [a.item], equipped: [], unavailable: [] })).data.missing, [a.sha]);
+});
