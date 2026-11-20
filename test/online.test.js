@@ -217,7 +217,10 @@ test('rate limiting pauses all online calls until Retry-After expires, then reco
 test('legacy rate-limit errors without Retry-After wait a minute; simultaneous list requests share one fetch', async (t) => {
   let now = 100000, calls = 0;
   t.mock.method(Date, 'now', () => now);
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    // An in-flight presence report from another fixture can finish during this test.
+    // Count only the Friends requests whose sharing behavior this assertion covers.
+    if (!String(url).endsWith('/v1/friends')) return new Response('{}');
     calls++;
     await new Promise((resolve) => setImmediate(resolve));
     return calls === 1 ? new Response('{}', { status: 429 }) : new Response(JSON.stringify({ friends: [] }));
