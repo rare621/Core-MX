@@ -10,7 +10,7 @@ const { looksText } = require('../src/lib/online');
 async function service(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-ondemand-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -145,7 +145,7 @@ test('a hosted game leaves the list when its host closes it', async (t) => {
 test('a restarted hosted game is not mixed with players stuck on the old one', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-restart-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--hostgraceseconds', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--hostgraceseconds', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -169,4 +169,61 @@ test('a restarted hosted game is not mixed with players stuck on the old one', a
   const what = (await viewer('GET', '/v1/servers')).servers.find((s) => s.name === 'What!');
   assert.deepEqual(what.riders.map((r) => r.name), ['Host', 'NewRider'], 'the new game\'s riders');
   assert.equal(what.address, '203.0.113.9:54210', 'not the stuck player\'s old address');
+});
+
+// Two servers with the same name (another host, another track) are separate rows, by the server's IP
+// as the players' games connected to it; a report without an address stays on its row.
+test('servers with the same name are listed separately', async (t) => {
+  const { reg } = await service(t);
+  const a = await reg(1, 'RiderA'), b = await reg(2, 'RiderB'), c = await reg(3, 'RiderC'), viewer = await reg(4, 'Viewer');
+  const at = (address, track, riders, extra = {}) => ({ state: { inGame: true, inEvent: true, server: 'Practice', trackId: track, riders: riders.map((name) => ({ name })), ...(address ? { serverAddress: address, serverAddressSource: 'game' } : {}), ...extra } });
+  await a.c('POST', '/v1/presence', at('198.51.100.10:54210', 'Echo', ['RiderA']));
+  await b.c('POST', '/v1/presence', at('198.51.100.20:54210', 'Kato', ['RiderB']));
+  let rows = (await viewer.c('GET', '/v1/servers')).servers.filter((s) => s.name === 'Practice');
+  assert.equal(rows.length, 2, 'two servers named Practice');
+  assert.deepEqual(rows.map((r) => r.trackId).sort(), ['Echo', 'Kato']);
+  assert.notEqual(rows[0].id, rows[1].id);
+  // C's game hasn't read the address: C joins the newest row (Kato) and stays there.
+  await c.c('POST', '/v1/presence', at(null, 'Kato', ['RiderB', 'RiderC']));
+  await a.c('POST', '/v1/presence', at('198.51.100.10:54210', 'Echo', ['RiderA']));
+  await c.c('POST', '/v1/presence', at(null, 'Kato', ['RiderB', 'RiderC']));
+  rows = (await viewer.c('GET', '/v1/servers')).servers.filter((s) => s.name === 'Practice');
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((r) => r.trackId === 'Kato').reporters, 2, 'C stayed on the Kato server');
+  // Riders on a server: the row clicked (its id), not just its name.
+  const echo = rows.find((r) => r.trackId === 'Echo'), kato = rows.find((r) => r.trackId === 'Kato');
+  for (const u of [a, b, c]) await u.c('POST', '/v1/loadout', { bike: 'B', items: [], equipped: [], unavailable: [] });
+  const on = async (row) => (await viewer.c('POST', '/v1/server-riders', { server: 'Practice', id: row.id, pending: true })).loadouts.map((l) => l.name).sort();
+  assert.deepEqual(await on(echo), ['RiderA']);
+  assert.deepEqual(await on(kato), ['RiderB', 'RiderC']);
+  // A name-only row is taken over once someone's game knows the address (no duplicate).
+  const d = await reg(5, 'RiderD'), e = await reg(6, 'RiderE');
+  await d.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Solo', trackId: 'T', riders: [{ name: 'RiderD' }] } });
+  await e.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Solo', trackId: 'T', riders: [{ name: 'RiderD' }, { name: 'RiderE' }], serverAddress: '198.51.100.30:54210', serverAddressSource: 'game' } });
+  await d.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Solo', trackId: 'T', riders: [{ name: 'RiderD' }] } });
+  const solo = (await viewer.c('GET', '/v1/servers')).servers.filter((s) => s.name === 'Solo');
+  assert.equal(solo.length, 1);
+  assert.equal(solo[0].reporters, 2);
+});
+
+// Servers only reported by apps without the disconnect check (1.0.47 and earlier) stay off the Online
+// list: a player stuck on a closed game would keep it there. One current app is enough to list it.
+test('servers only older apps report are not listed', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-oldapps-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = (token) => async (method, route, body) => (await (await fetch(`http://127.0.0.1:${port}${route}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body && JSON.stringify(body) })).json());
+  const reg = async (n, name) => { const r = await call()('POST', '/v1/register', { steamId: `7656119800000007${n}`, name }); return call(r.token); };
+  const old = await reg(1, 'OldApp'), current = await reg(2, 'NewApp'), viewer = await reg(3, 'Viewer');
+  const on = (extra = {}) => ({ state: { inGame: true, inEvent: true, server: 'Stuck Server', trackId: 'T', riders: [], ...extra } });
+  await old('POST', '/v1/presence', on());
+  const listed = async () => (await viewer('GET', '/v1/servers')).servers.some((s) => s.name === 'Stuck Server');
+  assert.equal(await listed(), false, 'only an older app reports it');
+  await current('POST', '/v1/presence', on({ connCheck: true }));
+  assert.equal(await listed(), true, 'a current app is on it');
 });

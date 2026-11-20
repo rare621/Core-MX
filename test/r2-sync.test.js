@@ -43,7 +43,7 @@ test('with r2.json, paint files go to and come from R2, never through the servic
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-r2-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -117,7 +117,7 @@ test('R2 keeps only files that riders using CoreMX wear', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-r2-upkeep-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--inactivedays', String(4 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--inactivedays', String(4 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -164,7 +164,7 @@ test('R2 cleans up untracked uploads and files nobody needs any more', async (t)
   const oldKey = '/coremx-sync/files/' + 'a'.repeat(64), newKey = '/coremx-sync/files/' + 'b'.repeat(64);
   r2.objects.set(oldKey, Buffer.alloc(10)); r2.modified.set(oldKey, Date.now() - 2 * 3600 * 1000);
   r2.objects.set(newKey, Buffer.alloc(10)); r2.modified.set(newKey, Date.now() - 60 * 1000);
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--sweepminutes', '0.001', '--keepdays', String(3 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--unusedseconds', '1', '--sweepminutes', '0.001', '--keepdays', String(3 / 86400)], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -204,7 +204,7 @@ test('R2 keeps a requested file until the rider has installed it', async (t) => 
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'r2.json'), JSON.stringify({ accountId: 'a'.repeat(32), accessKeyId: 'id', secretAccessKey: 'secret', bucket: 'coremx-sync', testOrigin: r2.origin }));
   const start = async () => {
-    const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json'), '--unusedseconds', '1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--unusedseconds', '1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const port = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
       child.stdout.on('data', (c) => { const m = c.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });

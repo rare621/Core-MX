@@ -219,7 +219,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
     'Helmet/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}',
     'Helmet/paints/Active.pnt': f.helmetPaint,
   }), true));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(f.root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(f.root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Fixture service did not start')), 10000);

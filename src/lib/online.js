@@ -299,6 +299,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       trackId: s.trackId || '', trackName: s.trackName || '', category: s.category || '', bikeName: s.bikeName || '', type: s.type || 0,
       session: s.inEvent && Number.isInteger(s.session) && s.session >= 0 && s.session <= 7 ? s.session : null,
       riderName, riderProfile,
+      // This app's plugin notices when the server is gone (silence check), so the service may list it.
+      connCheck: pluginChecksConnection(),
       // The name MX Bikes shows for you on the server (read from the game by the plugin).
       gameName: s.inEvent ? String(s.rider || '').slice(0, 64) : '',
       // Race number and bike in game, so other CoreMX users can find this rider in their game
@@ -313,6 +315,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
 
   // The plugin's network status (mxbm_stun.json, written every 10 s): rxAgo = ms since the game last
   // received anything. Only a fresh status from a plugin that reports it counts.
+  function pluginChecksConnection() {
+    try { return 'rxAgo' in JSON.parse(fs.readFileSync(path.join(userDir(), 'mxbm_stun.json'), 'utf8')); } catch { return false; }
+  }
   function connectionLost() {
     try {
       const st = JSON.parse(fs.readFileSync(path.join(userDir(), 'mxbm_stun.json'), 'utf8'));
@@ -501,7 +506,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // server copy cannot make departed test sessions look real.
     const freshAfter = Date.now() - 2 * 60 * 1000;
     const servers = (r.servers || []).filter((s) => !s.lastSeen || Number(s.lastSeen) >= freshAfter)
-      .map((s) => ({ ...s, address: s.address || known[s.name] || null }));
+      // A remembered address (by name) only when one server has that name: rows can share a name.
+      .map((s, i, all) => ({ ...s, address: s.address || (all.filter((o) => o.name === s.name).length === 1 ? known[s.name] : null) || null }));
     return { at: r.at, servers };
   }
   async function syncFriends() {
@@ -605,22 +611,23 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   }
 
   // Riders on the same server who use the app (plugin report or Steam name on the rider list).
-  async function serverRiderLoadouts(server) {
+  // where: { id, address } of the server row (servers can share a name; see server/mxbm-server.js).
+  async function serverRiderLoadouts(server, where = {}) {
     if (!cfg().token) throw new Error('Go online first to see riders on this server');
     const health = await call('GET', '/v1/health');
     if (health.version < 6) throw new Error('Update the online server (mxbm-online-service.zip) to sync gear from riders on a server');
-    return (await call('POST', '/v1/server-riders', { server, pending: true })).loadouts || [];
+    return (await call('POST', '/v1/server-riders', { server, pending: true, id: where.id, address: where.address })).loadouts || [];
   }
-  async function serverRiders(server) {
-    const loadouts = await serverRiderLoadouts(server);
+  async function serverRiders(server, where) {
+    const loadouts = await serverRiderLoadouts(server, where);
     const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
     await paintsync.requestMissing(call, report); // their owners start uploading now
     return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
   }
-  async function syncServerRiders(server, ids) {
+  async function syncServerRiders(server, ids, where) {
     const wanted = new Set(ids || []);
     if (paintRun) await paintRun.catch(() => {});
-    const loadouts = (await serverRiderLoadouts(server)).filter((l) => wanted.has(l.id));
+    const loadouts = (await serverRiderLoadouts(server, where)).filter((l) => wanted.has(l.id));
     if (!loadouts.length) return [];
     paint.busy = true; onChange(status());
     try {

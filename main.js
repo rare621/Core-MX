@@ -308,6 +308,8 @@ async function addKnownServerAddresses(rows) {
   const addresses = await knownServerAddresses();
   return rows.map((row) => {
     if (row.address || !row.name) return row;
+    // Rows can share a name (different servers): then a name says nothing about which address.
+    if (rows.filter((other) => other.name && serverNameKey(other.name) === serverNameKey(row.name)).length > 1) return row;
     const matches = [...(addresses.get(serverNameKey(row.name)) || [])];
     return matches.length === 1 ? { ...row, address: matches[0] } : row;
   });
@@ -1509,8 +1511,10 @@ function registerIpc() {
   handle('online:createAnnouncement', (title, message) => online.createAnnouncement(title, message));
   handle('online:paintSync', (on) => online.setPaintSync(on));
   handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
-  handle('online:serverRiders', (server) => online.serverRiders(String(server || '').slice(0, 64)));
-  handle('online:syncServerRiders', (server, ids) => online.syncServerRiders(String(server || '').slice(0, 64), Array.isArray(ids) ? ids.map(String).slice(0, 32) : []));
+  // where: { id, address } of the server row clicked (servers can share a name).
+  const serverWhere = (w) => ({ id: typeof w?.id === 'string' ? w.id.slice(0, 160) : undefined, address: typeof w?.address === 'string' ? w.address.slice(0, 64) : undefined });
+  handle('online:serverRiders', (server, where) => online.serverRiders(String(server || '').slice(0, 64), serverWhere(where)));
+  handle('online:syncServerRiders', (server, ids, where) => online.syncServerRiders(String(server || '').slice(0, 64), Array.isArray(ids) ? ids.map(String).slice(0, 32) : [], serverWhere(where)));
   handle('online:serverShare', (on) => online.setServerShare(on));
   handle('online:upnp', (on) => online.setUpnp(!!on));
   handle('online:firewallCheck', async () => { await online.checkFirewall(); return online.status(); });

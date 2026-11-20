@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 test('only the Steam admin with the server key can publish; announcements appear once and remain in the inbox', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-announcements-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((resolve) => child.once('exit', resolve)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -46,7 +46,7 @@ test('only the Steam admin with the server key can publish; announcements appear
 test('the admin sees each account once with its activity', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-activity-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((resolve) => child.once('exit', resolve)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
