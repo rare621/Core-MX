@@ -201,7 +201,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       const recent = store.get('recentServers') || [];
       const previous = recent.find((s) => s.name.toLowerCase() === next.server.toLowerCase());
       if (!previous || current?.server !== next.server || previous.address !== next.serverAddress || Date.now() - previous.at > 10 * 60 * 1000) {
-        store.set('recentServers', [{ name: next.server, address: next.serverAddress, track: next.trackName || next.trackId || '', at: Date.now() }, ...recent.filter((s) => s.name.toLowerCase() !== next.server.toLowerCase())].slice(0, 10));
+        store.set('recentServers', [{ name: next.server, address: next.serverAddress, track: next.trackName || next.trackId || '', trackId: next.trackId || '', at: Date.now() }, ...recent.filter((s) => s.name.toLowerCase() !== next.server.toLowerCase())].slice(0, 10));
       }
     }
     const changed = JSON.stringify(next) !== JSON.stringify(current);

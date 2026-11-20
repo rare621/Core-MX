@@ -161,11 +161,13 @@ async function saveServers() { S.servers = await api.invoke('servers:save', S.se
 
 async function joinServer(address, server) {
   // Check the track first, so you don't land on a server without it.
-  if (server && server.track) {
-    const have = trackInstalled(server.track);
+  // A track counts by its name or its file id (the game's track id, e.g. DUNED.pkz for "KBOLTZ DUNED";
+  // a locked track's name can't be read from its file).
+  if (server && (server.track || server.trackId)) {
+    const have = trackInstalled(server.track) || trackInstalled(server.trackId);
     if (!have) {
-      const ok = await confirmBox('Track not installed', `<b>${esc(server.name || address)}</b> runs <b>${esc(server.track)}</b>, which you don't have. Find and install it first?`, 'Find the track');
-      if (ok) { findTrack(server.track); return; }
+      const ok = await confirmBox('Track not installed', `<b>${esc(server.name || address)}</b> runs <b>${esc(server.track || server.trackId)}</b>, which you don't have. Find and install it first?`, 'Find the track');
+      if (ok) { findTrack(server.track || server.trackId); return; }
     }
   }
   try { await api.invoke('game:join', address, server && server.name ? server.name : ''); toast(`Joining <b>${esc(server ? server.name || address : address)}</b>…`, 'ok', 3000); }
