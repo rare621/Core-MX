@@ -1,9 +1,9 @@
-CoreMX 1.0.47
+CoreMX 1.0.48
 
-- Equipped files now upload when another rider needs them. Friends and Join show when an owner's CoreMX is uploading, offline, or unable to send a file; Join no longer waits indefinitely.
-- Requested files stay available until the recipient confirms installation, even across interrupted downloads or an online service restart. Unused R2 files are cleaned up automatically.
-- Friend cards refresh while uploads are pending, and downloaded gear makes a running MX Bikes session reload its gear lists.
-- Server rider lists remain steady as players join. The in-game Riders overlay now shows each rider's gear and livery, plus clearer status for missing items.
-- Friends and Sync settings have separate tabs. The plugin also records small rider and classification logs to help diagnose who is still connected.
+- Sign in with Steam now confirms account ownership through Steam. Existing accounts keep their friends and settings when their owners sign in. Older app versions cannot create new accounts on service v24 by default.
+- Gear sync sends creators' original files, never decrypted copies. Sync keeps needed files available, removes unused uploads sooner, and offers clearer cleanup and waiting states.
+- Online servers with the same name stay separate; stale hosted sessions disappear when the host leaves. Join warns when other riders use bikes you do not have.
+- First-time setup now has a guided tour and tips. Friends has a leaderboard tab, and the in-game overlay has refreshed panels and rider details.
+- Installer categories, update checks, and several setup and documentation details have been improved.
 
-Includes **CoreMX-server-v22.zip**. The live service was v20 when this release was prepared, so **update and restart the online service** to enable on-demand sync. Replace the server code from the ZIP, but keep mxbm-data.json, admin.key, mxbm-files, and your private r2.json. See server/README.md for the update steps. Users should update the app as well.
+Includes **CoreMX-server-v24.zip**. The live service was v22 when this release was prepared. **Update and restart the online service** to enable Steam-verified sign-in and the new online and sync behavior. Stop the server, replace its code from the ZIP, and restart it. Keep `mxbm-data.json`, `admin.key`, `mxbm-files`, and your private `r2.json`; see `server/README.md`. Users should update the app to 1.0.48, then sign in with Steam to verify existing accounts.

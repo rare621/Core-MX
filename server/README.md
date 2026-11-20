@@ -82,7 +82,7 @@ For deployment instructions, verification, and Cloudflare upload limits, see [On
   still requires the host's endpoint to be reachable; the online service does not relay game traffic.
 - Friends see each other only when both have added each other. "Let friends see which server I'm on" off
   hides you from friends but still updates the server's track.
-- Accounts are Steam IDs claimed first-come. If someone needs a reset, stop the service and delete their
-  entry under `users` in `mxbm-data.json`.
+- Accounts use Steam-confirmed IDs. Existing accounts created before service v24 are verified when their
+  owners sign in with Steam; their friends and settings are retained.
 - The manager sends a heartbeat while it is open, including when MX Bikes is closed. Presence distinguishes an active manager from a running game and a riding session.
 - Only the active outfit is shared: the selected gear models, their selected paints, and the current bike livery. Model packages omit unused paint variants. Original paint files remain intact. Each file is content-checked, and recipients keep different existing files instead of silently replacing them.
