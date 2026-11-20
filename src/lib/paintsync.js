@@ -241,16 +241,22 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
 // Asks the service for files you need that aren't uploaded yet; their owners upload them on their
 // next report. Each becomes 'uploading' (owner online), 'offline' (owner's CoreMX is closed) or, if it
 // arrived meanwhile, 'ready' again. Older services have no /v1/want: those items stay 'waiting'.
-const asked = new Set(); // files this app asked for (confirmed once installed)
-async function requestMissing(call, report) {
+// Files this app asked for: when first asked (a file still not uploaded after STALL_AFTER becomes
+// 'stalled': no more fast re-checks; the normal sync keeps asking quietly). Confirmed once installed.
+const asked = new Map();
+const STALL_AFTER = 3 * 60 * 1000;
+// The state to show for a file not uploaded yet, between syncs.
+const pendingState = (sha, ownerOnline, now = Date.now()) => !ownerOnline ? 'offline' : now - (asked.get(sha) || now) > STALL_AFTER ? 'stalled' : 'uploading';
+async function requestMissing(call, report, now = Date.now()) {
   const waiting = report.flatMap((lo) => lo.items.filter((it) => it.state === 'waiting'));
   if (!waiting.length) return;
-  for (const it of waiting) asked.add(it.sha256);
+  for (const it of waiting) if (!asked.has(it.sha256)) asked.set(it.sha256, now);
   let states = {};
   try { states = (await call('POST', '/v1/want', { shas: [...new Set(waiting.map((it) => it.sha256))] })).states || {}; } catch { return; }
   for (const it of waiting) {
     const st = states[it.sha256];
-    if (st === 'uploading' || st === 'offline') it.state = st;
+    if (st === 'uploading') it.state = now - (asked.get(it.sha256) || now) > STALL_AFTER ? 'stalled' : 'uploading';
+    else if (st === 'offline') it.state = 'offline';
     else if (st === 'ready') it.state = 'ready';
   }
 }
@@ -309,4 +315,4 @@ async function removeReceived(modsDir, received) {
   }
   return n;
 }
-module.exports = { WITH_BIKE_MESSAGE, requestMissing, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };
+module.exports = { WITH_BIKE_MESSAGE, requestMissing, pendingState, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };

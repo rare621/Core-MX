@@ -319,7 +319,7 @@ function friendGearSummary(items) {
   const got = files.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
   const queued = files.filter((it) => it.state === 'ready').length;
   const uploading = files.filter((it) => it.state === 'uploading').length;
-  const notUploaded = files.filter((it) => it.state === 'waiting').length;
+  const notUploaded = files.filter((it) => it.state === 'waiting' || it.state === 'stalled').length;
   const offline = files.filter((it) => it.state === 'offline').length;
   const attention = files.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
   const count = `${got} of ${files.length} free files synced`;
@@ -660,7 +660,7 @@ async function openFriendDetails(friend) {
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     const track = l && (l.trackName || l.trackId);
     const missing = track && !trackHave(l);
-    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Not uploaded yet — Sync equipped gear to get it', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
+    const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Not uploaded yet — Sync equipped gear to get it', stalled: 'Their CoreMX hasn\'t sent it yet — asked again each sync', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
     const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);

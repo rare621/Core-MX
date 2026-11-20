@@ -17,7 +17,7 @@ const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'h
 // "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
 // sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
 // have), failed. Older plugins skip these lines. status: rider id -> sync report (items, unavailable).
-const WAIT_ITEM = { waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed' };
+const WAIT_ITEM = { waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed', stalled: 'failed' };
 function waitLines(lo, report, clean) {
   if (!report) return [];
   const out = [];
@@ -515,7 +515,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
       const [checked] = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: [lo] });
       // Not uploaded yet: say whether their CoreMX is online to send it (asked for by the next sync).
-      for (const it of checked.items) if (it.state === 'waiting' && cfg().paintSync !== false) it.state = lo.online === false ? 'offline' : 'uploading';
+      for (const it of checked.items) if (it.state === 'waiting' && cfg().paintSync !== false) it.state = paintsync.pendingState(it.sha256, lo.online !== false);
       next.push(checked);
       gearKeys.set(lo.id, key);
       if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
