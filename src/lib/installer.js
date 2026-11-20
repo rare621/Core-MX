@@ -414,6 +414,15 @@ function plan(files, ctx, opts = {}) {
       entry.how = 'multiple-variants';
     }
   }
+  // A track's server version (cut-down, little or no scenery) never replaces a file you already have:
+  // with the player track's name it would leave you riding an empty or black track.
+  const serverNote = [];
+  if (ctx.serverVersion) {
+    let kept = 0;
+    for (const e of entries) if (e.status === 'overwrite' && /\.pkz$/i.test(e.dest || '')) { e.status = 'skip'; e.how = 'server-keeps-player'; e.dest = null; kept++; }
+    if (kept) serverNote.push(`This is the server version of the track. ${kept === 1 ? 'A track with the same file is' : `${kept} tracks with the same files are`} already installed (normally the player version), so ${kept === 1 ? 'it is' : 'they are'} kept and not replaced. Riding the server version looks empty or black.`);
+    else serverNote.push('This is the server version of the track: a cut-down copy for running a dedicated server. In game it shows up as a separate track that looks empty or black when ridden.');
+  }
   const counts = entries.reduce((a, e) => ((a[e.status] = (a[e.status] || 0) + 1), a), {});
   const needsPaintTarget = !!paintModelsDir && !o.paintTarget && entries.some((e) => (kind === 'bikeSwap' || /\.pnt$/i.test(e.rel)) && !e.dest);
   const needsSoundBike = kind === 'sound' && entries.some((e) => e.status === 'unresolved' && !DOC_EXT.test(e.rel));
@@ -422,6 +431,7 @@ function plan(files, ctx, opts = {}) {
   const bikeResults = [...bikeMatches.values()];
   const bikeCompatibility = { targets: bikeTargetChecks, messages: [...new Set(bikeResults.map((result) => result.message))], blocked: bikeBlocked, multiple: bikeResults.every((result) => result.target) && new Set(bikeResults.map((result) => result.target)).size > 1 };
   const warnings = [];
+  warnings.push(...serverNote);
   if (ambiguousAnimations.size) warnings.push('This download contains multiple variants for the same animation file. Install one variant at a time; CoreMX will not pick one silently.');
   if ((kind === 'animation' || kind === 'animationGame') && ctx.animationLocation === null) warnings.push('The creator did not specify whether this animation belongs in the game install folder or mods folder. Check the installation instructions and change the content type below if needed.');
   const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && /\.pnt$/i.test(e.rel) && (needsPaintTarget || needsRiderTarget)).length;
@@ -465,7 +475,7 @@ function plan(files, ctx, opts = {}) {
 
   // Everything placed by the archive's own folder structure counts as certain even without a known type.
   const allStructured = installable > 0 && entries.every((e) => !e.dest || e.how === 'structure');
-  const confident = installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title' && !bikeBlocked && [...bikeMatches.values()].every((result) => result.status === 'match')
+  const confident = !ctx.serverVersion && installable > 0 && !counts.unresolved && !needsPaintTarget && paintGuess !== 'title' && !bikeBlocked && [...bikeMatches.values()].every((result) => result.status === 'match')
     && !requiredModels.some((m) => !m.installed && !m.included) && !needsRiderTarget && (kind === 'bikePaint' || !ctx.unreadablePaints?.length)
     && kind !== 'bikeSwap' && (kind !== 'custom' || allStructured) && (!counts.overwrite || ctx.reinstall)
     && !(ctx.local && !ctx.kindHint && !allStructured) && !gameRoot && !(gameRoot && !ctx.installDir);

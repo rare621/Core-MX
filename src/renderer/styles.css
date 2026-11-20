@@ -310,6 +310,7 @@ select option { background: var(--panel); }
 .dl:last-child { border-bottom: 0; }
 .dl .info { flex: 1; min-width: 0; }
 .dl .flag { font-size: 11px; font-weight: 600; color: var(--accent); }
+.dl .dl-server-note { font-size: 11.5px; color: var(--warn); margin: 1px 0 2px; }
 .dl .label { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dl .host { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .host-pill { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--raised-2); color: var(--text-2); }

@@ -615,7 +615,9 @@ async function afterDownload(j, file) {
     j.files = await archive.stage(file, j.stageDir, store.get('settings'));
     j.ctx = {
       modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, categories: j.categories || [], categoryNames: j.categoryNames || [], title: j.title,
-      reinstall: !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [], animationLocation: j.animationLocation,
+      // A track's server version never counts as a reinstall: it must not replace the player track.
+      reinstall: !j.serverVersion && !!(j.postId && store.get('installs')[j.postId]), dependencies: j.dependencies || [], animationLocation: j.animationLocation,
+      serverVersion: !!j.serverVersion,
     };
     if (!j.ctx.categories.length) {
       // Uploaded from the computer: no site category, so look inside the files.
@@ -1177,7 +1179,7 @@ function registerIpc() {
   handle('jobs:start', (d) => {
     const j = newJob({
       title: d.title, postId: d.postId, shopKey: d.shopKey, url: d.url, image: d.image, link: d.link, modified: d.modified,
-      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, requireReview: !!d.requireReview, modelWarningAccepted: !!d.modelWarningAccepted,
+      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, requireReview: !!d.requireReview || !!d.serverVersion, modelWarningAccepted: !!d.modelWarningAccepted, serverVersion: !!d.serverVersion,
       ...(Array.isArray(d.categories) && d.categories.some((id) => Number(id) === 519) ? { opts: { kind: d.animationLocation === 'game' ? 'animationGame' : 'animation' } } : {}),
       animationLocation: d.animationLocation ?? null,
     });
