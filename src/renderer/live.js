@@ -93,7 +93,7 @@ function drawFriendsRiding() {
   const box = $('#friendsRiding'); if (!box) return;
   const live = new Map((S.live.friends || []).map((l) => [l.id, l]));
   const riding = (S.friends || []).map((f, i) => ({ f, i, l: live.get(f.code) })).filter(({ l }) => l && l.status === 'ok' && l.online && (l.server || l.inEvent));
-  const html = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ride"></span></span>
+  const html = `<div class="section-title">Friends riding now</div>${riding.length ? `<div class="ride-friends">${riding.map(({ f, i, l }) => `<div class="ride-friend"><span class="fr-av">${friendFace(f)}<span class="fr-dot ride"></span></span>
     <div class="rf-txt"><b>${esc(f.name)}</b><small>${esc(l.server || 'In a session · server shows once on track')}${l.trackName ? ` · ${esc(l.trackName)}` : ''}</small></div>
     ${l.server && l.address ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}</div>`).join('')}</div>`
     : `<div class="side-empty">${icon('users')}<span>${(S.friends || []).length ? 'None of your friends are riding right now.' : 'Add friends to see where they ride.'}</span><button class="btn btn-sm" data-view="friends">Friends</button></div>`}`;
@@ -334,7 +334,7 @@ async function renderFriends(c) {
   const visible = S.live.showAllFriends ? rows : rows.slice(0, pageSize);
   const friendCard = ({ f, i, s }) => {
     const j = joinable(f);
-    return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${esc((f.name || '?').slice(0, 1).toUpperCase())}<span class="fr-dot ${s[0]}"></span></button>
+    return `<div class="fr-row" data-friend-open="${i}"><button class="fr-av fr-open" data-friend-details="${i}" aria-label="View ${esc(f.name)}'s gear">${friendFace(f)}<span class="fr-dot ${s[0]}"></span></button>
     <div class="fr-txt"><div class="fr-name">${esc(f.name)}</div><div class="fr-status ${s[0]}" data-friend-status="${i}">${esc(s[1])}</div>${paintLine(f)}</div>
       <div class="fr-act"><button class="btn btn-sm" data-friend-details="${i}">${icon('shirt')}Gear & sync</button>${j ? `<button class="btn btn-sm btn-primary" data-friend-join="${i}">${icon('play')}Join</button>` : ''}
         <button class="btn btn-sm btn-ghost btn-icon fr-remove" data-friend-remove="${i}" title="Remove ${esc(f.name)} from friends" aria-label="Remove friend ${esc(f.name)}">${icon('trash')}</button></div></div>`;
@@ -538,6 +538,17 @@ function unsharedLabel(slot, equipped) {
   if (['helmet', 'boots', 'protection', 'rider'].includes(slot.slot) && value && !/^(default|default_mx|default_sm|full|neck|none)$/i.test(value)) return 'Not uploaded yet — still sharing';
   return value && /Paint$/.test(slot.slot) ? 'Not uploaded yet — still sharing' : 'Included with the game';
 }
+// A friend's Steam profile photo, or their first letter.
+function friendFace(f) {
+  const letter = esc((f.name || '?').slice(0, 1).toUpperCase());
+  return /^(https:\/\/avatars\.steamstatic\.com\/[0-9a-f]{40}_full\.jpg|data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+)$/.test(f.avatar || '') ? `<img class="fr-photo" src="${esc(f.avatar)}" alt="" data-letter="${letter}">` : letter;
+}
+// A photo that doesn't load shows the letter instead (inline handlers are blocked by the page policy).
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.classList.contains('fr-photo')) img.replaceWith(document.createTextNode(img.dataset.letter || '?'));
+}, true);
+
 // MX2OEM_2023_Kawasaki_KX250 -> 2023 Kawasaki KX250
 function prettyBikeId(id) { return String(id || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' '); }
 async function openFriendDetails(friend) {
@@ -743,7 +754,7 @@ async function addFriendsModal() {
       const q = $('#sfQ', m).value.toLowerCase();
       const have = added();
       const xs = list.filter((f) => f.name.toLowerCase().includes(q)).sort((a, b) => (b.onService - a.onService) || a.name.localeCompare(b.name));
-      $('#sfList', m).innerHTML = xs.map((f) => `<div class="opt" style="cursor:default"><span class="fr-av sm">${esc(f.name.slice(0, 1).toUpperCase())}</span>
+      $('#sfList', m).innerHTML = xs.map((f) => `<div class="opt" style="cursor:default"><span class="fr-av sm">${friendFace(f)}</span>
         <span class="opt-txt"><span>${esc(f.name)}</span><span class="muted">${f.onService ? 'Uses CoreMX' : "Hasn't installed the app yet"}</span></span>
         ${have.has(f.steamId) ? `<span class="badge ok" style="position:static">${icon('check')}Added</span>` : `<button class="btn btn-sm ${f.onService ? 'btn-primary' : ''}" data-sf-add="${esc(f.steamId)}">Add</button>`}</div>`).join('') || '<div class="muted" style="padding:20px;text-align:center">No matches</div>';
     };
