@@ -164,7 +164,7 @@ async function joinLiveServer(s) {
   const join = () => {
     // Home-hosted (Host World) servers are often only reachable through the in-game browser.
     if (s.hosted) toast(`<b>${esc(s.name)}</b> is game hosted. If MX Bikes says <b>connection timed out</b>, join it from <b>Multiplayer → World</b> in the game.`, 'info', 9000);
-    return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s) });
+    return joinServer(s.address, { name: s.name, address: s.address, track: trackLabel(s), trackId: s.trackId || '' });
   };
   const st = S.live.status;
   if (!st || !st.service.connected || !s.name) return join();
@@ -595,7 +595,7 @@ async function openFriendDetails(friend) {
     if (!m.isConnected) return;
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     const track = l && (l.trackName || l.trackId);
-    const missing = track && !trackInstalled(track);
+    const missing = track && !trackHave(l);
     const stateLabels = { have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
     const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
@@ -665,7 +665,7 @@ async function findFriendTrack(friend, session, joinAfter = false) {
     $('.modal-body', m).addEventListener('click', (e) => {
       const button = e.target.closest('[data-track-result]'); if (!button) return;
       const p = results[Number(button.dataset.trackResult)];
-      if (joinAfter) { S.pendingFriendJoin = { friendId: friend.code, address: session.address, track: name, server: session.server, at: Date.now() }; toast('Install the matching track, then the app will join your friend', 'info', 6000); }
+      if (joinAfter) { S.pendingFriendJoin = { friendId: friend.code, address: session.address, track: name, trackId: session.trackId || '', server: session.server, at: Date.now() }; toast('Install the matching track, then the app will join your friend', 'info', 6000); }
       m.close();
       if (p.source === 'mxb-mods') openPost(p);
       else { S.shop.id = p.source === 'MX Bikes Shop' ? 'mxbs' : 'hub'; openProduct(p); }
@@ -687,19 +687,19 @@ async function syncAndJoinFriend(friend, session) {
   if (problems) toast(`${problems} of ${friend.name}'s files need attention — open Gear & sync for details`, 'info', 5000);
   else toast(`Checked ${friend.name}'s current free gear and tyres`, 'ok', 1800);
   const track = session.trackName || session.trackId;
-  if (track && !trackInstalled(track)) return findFriendTrack(friend, session, true);
-  return joinServer(session.address, { name: session.server, address: session.address, track });
+  if (track && !trackHave(session)) return findFriendTrack(friend, session, true);
+  return joinServer(session.address, { name: session.server, address: session.address, track, trackId: session.trackId || '' });
 }
 
 async function checkFriendTrackJoin() {
   const pending = S.pendingFriendJoin;
   if (!pending || Date.now() - pending.at > 30 * 60 * 1000) { S.pendingFriendJoin = null; return; }
-  if (!trackInstalled(pending.track)) return;
+  if (!trackInstalled(pending.track) && !trackInstalled(pending.trackId)) return;
   S.pendingFriendJoin = null;
   const friends = await api.invoke('online:friends');
   const friend = friends.find((f) => f.id === pending.friendId);
   if (!friend || !friend.online || friend.address !== pending.address || (friend.trackName || friend.trackId) !== pending.track) { toast('Track installed. Your friend changed session — open their profile to join.', 'info', 6000); return; }
-  await joinServer(pending.address, { name: pending.server, track: pending.track });
+  await joinServer(pending.address, { name: pending.server, track: pending.track, trackId: pending.trackId });
 }
 
 document.addEventListener('click', (e) => {
