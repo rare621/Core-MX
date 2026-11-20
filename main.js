@@ -274,19 +274,31 @@ function gameModsFolder() {
 function modsDir() { return gameModsFolder() || path.join(userDir(), 'mods'); }
 // Disabled mods sit next to the mods folder (same drive, so moving them is a rename).
 function disabledDir() { const game = gameModsFolder(); return game ? path.join(path.dirname(game), 'mods_disabled (MX Bikes Manager)') : path.join(userDir(), 'mods_disabled (MX Bikes Manager)'); }
-// Older CoreMX versions installed a FrostMod build for server addresses; the CoreMX plugin
-// does that now, so remove that build (only it, by checksum) once the game is closed.
-let frostCleanup = null;
-async function removeOldDiscoveryPlugin() {
-  if (frostCleanup) return frostCleanup;
-  frostCleanup = (async () => {
-    const settings = store.get('settings');
-    if (!settings.gameInstallDir || await profile.isGameRunning()) return;
-    if (await serverList.removeBundledFrostmod(settings.gameInstallDir, gameDataDir(), (p) => shell.trashItem(p))) {
-      store.update('settings', (s) => { const { frostmodAutoInstall, frostmodVersion, ...rest } = s; return rest; });
+// What uninstalling CoreMX removes from the game folder (build/installer.nsh reads this list): the
+// CoreMX plugin and its font copy, and a steam_appid.txt only when it holds exactly what CoreMX
+// writes (src/lib/game.js). Updates keep them.
+function writeUninstallList() {
+  try {
+    const game = store.get('settings').gameInstallDir, lines = [];
+    if (game) {
+      lines.push(path.join(game, 'plugins', 'mxbm_presence.dlo'), path.join(game, 'plugins', 'mxbm_data', 'main.fnt'));
+      const appid = path.join(game, 'steam_appid.txt');
+      try { if (fs.readFileSync(appid, 'utf8') === '655500') lines.push(appid); } catch {}
     }
-  })();
-  try { return await frostCleanup; } finally { frostCleanup = null; }
+    const file = path.join(app.getPath('userData'), 'uninstall-cleanup.txt'), text = lines.map((l) => l + '\r\n').join('');
+    if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) fs.writeFileSync(file, text);
+  } catch (e) { console.warn('Uninstall list:', e.message); }
+}
+// FrostMod is never removed (another tool, MXB App, installs it). When it is in the game's plugins
+// folder, the player is told once per start that it can interfere with the CoreMX plugin, unless
+// they chose "Don't show again".
+let frostmodTold = false;
+function checkFrostmod() {
+  if (frostmodTold || store.get('settings').frostmodWarningOff) return;
+  if (!mainWin || mainWin.isDestroyed() || mainWin.webContents.isLoading()) return;
+  if (!serverList.frostmodInstalled(store.get('settings').gameInstallDir)) return;
+  frostmodTold = true;
+  send('frostmod:found', {});
 }
 const serverNameKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
 // The official game plugin does not receive an IP:port. Enrich live server
@@ -578,6 +590,39 @@ function newJob(fields) {
   jobs.set(id, j);
   emitJob(j);
   return j;
+}
+
+// Synced gear nobody has needed for a while (Settings: syncedKeepDays, default 30; 0 = keep) goes to
+// the Recycle Bin, each file on its own timer (see paintsync.pruneReceived). Never while MX Bikes runs.
+// Files an install owns, and paints or models the player has equipped, are kept.
+let syncedPruneAt = 0;
+async function pruneSyncedGear(force = false) {
+  const days = Number(store.get('settings').syncedKeepDays ?? 30);
+  if (!(days > 0) || (!force && Date.now() - syncedPruneAt < 20 * 3600 * 1000)) return 0;
+  if (await profile.isGameRunning()) return 0;
+  // A sync in progress writes its own copy of the received list; try again later.
+  if (online?.status?.()?.paintSync?.busy) return 0;
+  syncedPruneAt = Date.now();
+  const owned = new Set(Object.values(store.get('installs') || {}).flatMap((r) => (r && r.files) || []).map((f) => String(f).toLowerCase()));
+  const equipped = new Set();
+  try {
+    const name = (await profile.listProfiles(profUserDir())).last;
+    if (name) for (const m of (await fsp.readFile(path.join(profUserDir(), 'profiles', name, 'profile.ini'), 'latin1')).matchAll(/^[^=\r\n[]+=([^\r\n]+)$/gm)) equipped.add(m[1].trim().toLowerCase());
+  } catch {}
+  const keep = (rel) => owned.has(rel.toLowerCase()) || equipped.has(path.posix.basename(rel).replace(/\.(pnt|pkz)$/i, '').toLowerCase());
+  const received = { ...((store.get('online') || {}).received || {}) };
+  // Files synced before CoreMX kept a "last needed" time start their timer now, so gear a friend
+  // still wears is not removed for being downloaded long ago.
+  if (!store.get('settings').syncedPruneSince) {
+    for (const [rel, info] of Object.entries(received)) if (info && !info.used) received[rel] = { ...info, used: Date.now() };
+    store.set('online', { ...(store.get('online') || {}), received });
+    store.update('settings', (s) => ({ ...s, syncedPruneSince: Date.now() }));
+    return 0;
+  }
+  const removed = await paintsync.pruneReceived(modsDir(), received, { days, keep, trash: (p) => shell.trashItem(p) });
+  store.set('online', { ...(store.get('online') || {}), received });
+  if (removed) { await scan(); writeSyncedList(); send('library:changed', {}); send('synced:pruned', { removed, days }); }
+  return removed;
 }
 
 // Installing a mod yourself takes over files synced from friends: they become ordinary gear, and a
@@ -2132,6 +2177,8 @@ app.whenReady().then(async () => {
   initSettings();
   updates = appUpdates.create({ updater: require('electron-updater').autoUpdater, packaged: app.isPackaged && !process.env.MXB_DEBUG_SHOT, version: app.getVersion(), notify: (state) => send('app:update', state) });
   setTimeout(() => updates.start(), 2500).unref();
+  // Keep looking while the app stays open: quiet, and only a new version shows (as the update dialog).
+  setInterval(() => updates.background().catch(() => {}), 5 * 60 * 1000).unref();
   // Repair this manager's previous accessory routing before online sync can use it.
   if (!await profile.isGameRunning()) await repairGearFolders().catch((e) => console.warn('Gear folder repair:', e.message));
   await reconcileInstallRecords();
@@ -2186,8 +2233,13 @@ app.whenReady().then(async () => {
   });
   online.start();
   watchPluginFiles();
-  removeOldDiscoveryPlugin().catch((e) => console.warn('Old FrostMod cleanup:', e.message));
-  setInterval(() => removeOldDiscoveryPlugin().catch(() => {}), 30000).unref();
+  setTimeout(checkFrostmod, 8000).unref();
+  setTimeout(checkFrostmod, 30000).unref();
+  setTimeout(writeUninstallList, 5000).unref();
+  setInterval(writeUninstallList, 5 * 60 * 1000).unref();
+  setTimeout(() => pruneSyncedGear().catch((e) => console.warn('Synced gear cleanup:', e.message)), 90 * 1000).unref();
+  setInterval(() => pruneSyncedGear().catch(() => {}), 3 * 3600 * 1000).unref();
+  setInterval(checkFrostmod, 10 * 60 * 1000).unref();
 });
 
 // Closing: remove the router port mapping first (at most 3 s), then quit.

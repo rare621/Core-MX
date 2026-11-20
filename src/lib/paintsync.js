@@ -315,4 +315,39 @@ async function removeReceived(modsDir, received) {
   }
   return n;
 }
-module.exports = { WITH_BIKE_MESSAGE, requestMissing, pendingState, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, safeRel, readable };
+// Synced files keep a "last needed" time (used): the last time a friend's or a server rider's gear
+// listed them. Called with every gear report; written at most once an hour per file.
+function touchReceived(received, reports, now = Date.now()) {
+  let changed = false;
+  for (const r of reports || []) for (const it of (r && r.items) || []) {
+    const e = it && typeof it.path === 'string' && Object.hasOwn(received, it.path) ? received[it.path] : null;
+    if (e && now - (Number(e.used) || 0) > 3600 * 1000) { received[it.path] = { ...e, used: now }; changed = true; }
+  }
+  return changed;
+}
+
+// Synced files nobody has needed for `days` go to the Recycle Bin (trash). Each file has its own
+// time: its last use, or its download when it was never needed again. keep(rel): files the player
+// uses themselves stay (their time restarts). A file the player changed is no longer treated as
+// synced and is left alone. Returns how many files were removed.
+async function pruneReceived(modsDir, received, { days, now = Date.now(), keep = () => false, trash }) {
+  if (!(Number(days) > 0)) return 0;
+  let n = 0;
+  const root = await fsp.realpath(modsDir).catch(() => null);
+  if (!root) return 0;
+  for (const [r, info] of Object.entries(received)) {
+    if (!safeRel(r)) { delete received[r]; continue; }
+    const last = Math.max(Number(info && info.used) || 0, Number(info && info.at) || 0);
+    if (now - last < days * 24 * 3600 * 1000) continue;
+    if (keep(r)) { received[r] = { ...info, used: now }; continue; }
+    const f = path.join(modsDir, ...r.split('/'));
+    try {
+      const real = await fsp.realpath(f);
+      if (!real.toLowerCase().startsWith(root.toLowerCase() + path.sep)) continue;
+      if (sha256(await fsp.readFile(f)) === info.sha256) { await trash(f); n++; }
+      delete received[r];
+    } catch (e) { if (e.code === 'ENOENT') delete received[r]; }
+  }
+  return n;
+}
+module.exports = { WITH_BIKE_MESSAGE, requestMissing, pendingState, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, touchReceived, pruneReceived, safeRel, readable };

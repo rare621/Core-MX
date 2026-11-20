@@ -17,28 +17,14 @@ test('the plugin server list is parsed, deduplicated and ignored once stale', as
   assert.equal(serverList.parse('frostmod-masterlist 1 0\n1.2.3.4:1\tx'), null);
 });
 
-test('only the FrostMod build CoreMX installed is removed', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-frost-clean-'));
+test('FrostMod is only detected, never removed', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-frost-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const plugins = path.join(root, 'plugins');
-  await fs.mkdir(path.join(plugins, 'frostmod-licenses'), { recursive: true });
-  const trashed = [];
-  const trash = async (p) => { trashed.push(p); await fs.rm(p); };
-  // Someone's own FrostMod: different checksum, untouched.
-  await fs.writeFile(path.join(plugins, 'frostmod.dlo'), 'a FrostMod the player installed');
-  assert.equal(await serverList.removeBundledFrostmod(root, null, trash), false);
-  assert.equal(trashed.length, 0);
-  // The bundled build (checksum faked for the test).
-  const bytes = Buffer.from('bundled build');
-  serverList.BUNDLED_FROSTMOD.add(crypto.createHash('sha256').update(bytes).digest('hex'));
-  await fs.writeFile(path.join(plugins, 'frostmod.dlo'), bytes);
-  await fs.writeFile(path.join(plugins, 'frostmod-licenses', 'LICENSE.txt'), 'MIT');
-  await fs.writeFile(path.join(plugins, 'frostmod_filter.flag'), '');
-  await fs.writeFile(path.join(plugins, 'frostmod_serverfilter.yaml'), 'their own settings');
-  await fs.writeFile(path.join(plugins, 'mxbm_presence.dlo'), 'ours');
-  assert.equal(await serverList.removeBundledFrostmod(root, null, trash), true);
-  assert.deepEqual(trashed, [path.join(plugins, 'frostmod.dlo')]);
-  const left = (await fs.readdir(plugins)).sort();
-  assert.deepEqual(left, ['frostmod_serverfilter.yaml', 'mxbm_presence.dlo']);
-  assert.equal(await serverList.removeBundledFrostmod(root, null, trash), false);
+  assert.equal(serverList.frostmodInstalled(root), false);
+  assert.equal(serverList.frostmodInstalled(''), false);
+  await fs.mkdir(path.join(root, 'plugins'), { recursive: true });
+  await fs.writeFile(path.join(root, 'plugins', 'frostmod.dlo'), 'their plugin');
+  assert.equal(serverList.frostmodInstalled(root), true);
+  assert.equal(serverList.removeBundledFrostmod, undefined, 'no code path deletes it');
+  assert.equal(await fs.readFile(path.join(root, 'plugins', 'frostmod.dlo'), 'utf8'), 'their plugin');
 });
