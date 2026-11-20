@@ -36,8 +36,15 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 23;
+const VERSION = 24;
 const ADMIN_STEAM_ID = '76561198098586128';
+// Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
+// someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
+// old unverified POST /v1/register open (apps before 1.0.48 use it); off by default.
+const STEAM_OPENID = arg('steamopenid', 'https://steamcommunity.com/openid/login');
+const OPEN_REGISTER = /^(1|yes|true|on)$/i.test(String(arg('openregister', 'no')));
+const PUBLIC_URL = String(arg('publicurl', '') || '').replace(/\/+$/, '');
+const MAX_DEVICES = 5;
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
   try { return fs.readFileSync(ADMIN_KEY_FILE, 'utf8').trim(); }
@@ -264,7 +271,7 @@ function auth(req) {
   const m = String(req.headers.authorization || '').match(/^Bearer ([a-f0-9]{48})$/);
   if (!m) return null;
   const h = hash(m[1]);
-  for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h) {
+  for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h || (Array.isArray(u.tokens) && u.tokens.includes(h))) {
     markActive(id);
     // Any signed-in request means the user has CoreMX open (synced files stay while seen within INACTIVE_MS).
     if (Date.now() - (u.lastSeen || 0) > 60000) { u.lastSeen = Date.now(); save(); }
@@ -279,7 +286,8 @@ const isOwner = (me) => !!me && me.id === ADMIN_STEAM_ID;
 const isAdmin = (me) => !!me && (isOwner(me) || (db.admins || []).some((a) => a.id === me.id));
 const adminList = () => (db.admins || []).map((a) => ({ id: a.id, name: db.users[a.id]?.name || '', registered: !!db.users[a.id], addedAt: a.at || null }));
 function adminAllowed(me, key) {
-  if (!isAdmin(me) || !ADMIN_KEY || typeof key !== 'string') return false;
+  // Only an account confirmed by Steam (Sign in with Steam) can use Admin.
+  if (!isAdmin(me) || !me.user?.verified || !ADMIN_KEY || typeof key !== 'string') return false;
   return crypto.timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(ADMIN_KEY)));
 }
 function announcementInbox(user) {
@@ -326,8 +334,10 @@ function presenceView(id, viewer = []) {
 const routes = {
   'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'on-demand', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
-  // First run of an app: claim a Steam ID and get a token. A claimed ID can't be re-claimed.
+  // Old apps (before Sign in with Steam) claimed a Steam ID without proof. Closed unless
+  // --openregister yes; accounts made this way are not verified.
   'POST /v1/register': async (req, body) => {
+    if (!OPEN_REGISTER) return [410, { error: 'Update CoreMX: it now signs in with your Steam account.' }];
     const id = String(body.steamId || '');
     if (!isSteamId(id)) return [400, { error: 'steamId must be a 17-digit Steam ID' }];
     if (db.users[id]) return [409, { error: 'This Steam ID is already registered on this service. Ask the person running it to reset it.' }];
@@ -587,7 +597,7 @@ const routes = {
   // Whether this account may use Admin (the app shows the tab), and whether it is the owner. No key needed.
   'GET /v1/admin/role': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
-    return [200, { admin: isAdmin(me), owner: isOwner(me) }];
+    return [200, { admin: isAdmin(me), owner: isOwner(me), verified: !!me.user.verified }];
   },
   // The owner adds and removes admins by friend code (Steam ID).
   'POST /v1/admin/admins': async (req, body, me) => {
@@ -739,6 +749,38 @@ const routes = {
     me.user.sharePaints = body.share !== false; save();
     return [200, { ok: true }];
   },
+  // Sign in with Steam. The app starts a sign-in (it keeps `secret`) and opens `url`, Steam's own
+  // sign-in page, in the browser. When Steam has confirmed the account, the page hands a one-time
+  // code back to CoreMX on that same PC through an mxbm://signin link; the app polls with the secret
+  // and that code. Both are needed, so someone who sends you their sign-in link can't get your
+  // account: the code only reaches the CoreMX on the PC whose browser signed in.
+  'POST /v1/auth/steam/start': async (req, body) => {
+    pruneSignIns();
+    if (signIns.size > 2000) return [503, { error: 'Too many sign-ins in progress. Try again in a minute.' }];
+    const state = crypto.randomBytes(16).toString('hex'), secret = crypto.randomBytes(24).toString('hex');
+    const origin = publicOrigin(req);
+    if (!origin) return [500, { error: 'This service does not know its public address (--publicurl).' }];
+    const returnTo = `${origin}/v1/auth/steam/return?state=${state}`;
+    signIns.set(state, { secretHash: hash(secret), expect: isSteamId(body.steamId) ? String(body.steamId) : null, name: str(body.name, 40), returnTo, at: Date.now(), result: null });
+    const q = new URLSearchParams({ 'openid.ns': 'http://specs.openid.net/auth/2.0', 'openid.mode': 'checkid_setup', 'openid.return_to': returnTo, 'openid.realm': origin,
+      'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select', 'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select' });
+    return [200, { state, secret, url: `${STEAM_OPENID}?${q}` }];
+  },
+  'POST /v1/auth/steam/poll': async (req, body) => {
+    const st = signIns.get(String(body.state || ''));
+    if (!st || typeof body.secret !== 'string' || !crypto.timingSafeEqual(Buffer.from(hash(body.secret)), Buffer.from(st.secretHash))) return [404, { error: 'This sign-in has expired. Start again.' }];
+    if (st.result?.error) { signIns.delete(String(body.state)); return [400, { error: st.result.error }]; }
+    if (!st.result) return [200, { done: false }];
+    // Steam has confirmed the account; waiting for the browser to hand CoreMX the code.
+    if (typeof body.code !== 'string' || !crypto.timingSafeEqual(Buffer.from(hash(body.code)), Buffer.from(st.codeHash))) return [200, { done: false, confirmed: true }];
+    signIns.delete(String(body.state));
+    return [200, { done: true, ...st.result }];
+  },
+  // Who this token belongs to, and whether Steam has confirmed it.
+  'GET /v1/me': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    return [200, { id: me.id, name: me.user.name || '', verified: !!me.user.verified }];
+  },
   // Forget this install (its token stops working, your Steam ID can be registered again).
   'POST /v1/unregister': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
@@ -746,6 +788,62 @@ const routes = {
     return [200, { ok: true }];
   },
 };
+
+// ---------- Sign in with Steam ----------
+const signIns = new Map(); // state -> { secretHash, expect, name, returnTo, at, result, codeHash }
+const SIGNIN_TTL = 15 * 60 * 1000;
+function pruneSignIns() { for (const [k, v] of signIns) if (Date.now() - v.at > SIGNIN_TTL) signIns.delete(k); }
+function publicOrigin(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host)) return null;
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? 'https' : 'http';
+  return `${proto}://${host}`;
+}
+// Steam confirmed an account: give this sign-in a token for it. A Steam ID claimed earlier without
+// proof (old apps) is taken back by its real owner: the old tokens stop working. A confirmed account
+// can be signed in on a few PCs at once.
+function signInSteam(id, name) {
+  const token = crypto.randomBytes(24).toString('hex'), h = hash(token);
+  const u = db.users[id];
+  if (!u) db.users[id] = { tokenHash: h, tokens: [], name: str(name, 40), friends: [], createdAt: Date.now(), lastSeen: Date.now(), verified: Date.now() };
+  else if (!u.verified) { u.tokenHash = h; u.tokens = []; u.verified = Date.now(); if (name) u.name = str(name, 40); presence.delete(id); }
+  else { u.tokens = [...(Array.isArray(u.tokens) ? u.tokens : []), h].slice(-(MAX_DEVICES - 1)); if (name) u.name = str(name, 40); }
+  markActive(id); save();
+  return { id, token, name: db.users[id].name };
+}
+const page = (title, text, link) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">${link ? `<meta http-equiv="refresh" content="0;url=${link}">` : ''}<title>${title}</title><body style="font:16px system-ui,sans-serif;background:#0f1115;color:#e8e8ea;display:grid;place-items:center;min-height:90vh;margin:0"><div style="max-width:440px;padding:28px;border-radius:14px;background:#181b22;text-align:center"><h2 style="margin:0 0 10px">${title}</h2><p style="color:#a8acb6;line-height:1.5">${text}</p>${link ? `<p><a href="${link}" style="display:inline-block;padding:10px 18px;border-radius:10px;background:#e8572a;color:#fff;text-decoration:none;font-weight:600">Open CoreMX</a></p>` : ''}</div></body>`;
+async function steamReturn(req, res, url) {
+  const done = (code, title, text, link) => { if (res.headersSent) return; const out = page(title, text, link); res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(out) }); res.end(out); };
+  pruneSignIns();
+  const state = url.searchParams.get('state') || '', st = signIns.get(state);
+  if (!st || st.result) return done(400, 'Sign-in expired', 'Go back to CoreMX and choose Sign in with Steam again.');
+  const p = url.searchParams;
+  const claimed = String(p.get('openid.claimed_id') || '').match(/^https:\/\/steamcommunity\.com\/openid\/id\/(7656119\d{10})$/);
+  if (p.get('openid.mode') !== 'id_res' || !claimed || p.get('openid.return_to') !== st.returnTo || p.get('openid.claimed_id') !== p.get('openid.identity')) {
+    st.result = { error: 'Steam sign-in was cancelled or did not finish.' };
+    return done(400, 'Not signed in', 'Steam sign-in was cancelled. Go back to CoreMX to try again.');
+  }
+  // Ask Steam whether it really sent this (the browser could have been handed a forged answer).
+  const check = new URLSearchParams();
+  for (const [k, v] of p) if (k.startsWith('openid.')) check.set(k, v);
+  check.set('openid.mode', 'check_authentication');
+  let valid = false;
+  try {
+    const r = await fetch(STEAM_OPENID, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: check.toString(), signal: AbortSignal.timeout(10000) });
+    valid = /(^|\n)is_valid\s*:\s*true\s*($|\n)/.test(await r.text());
+  } catch {}
+  if (!valid) { st.result = { error: 'Steam could not confirm the sign-in. Try again.' }; return done(502, 'Not signed in', 'Steam could not confirm the sign-in. Go back to CoreMX and try again.'); }
+  const id = claimed[1];
+  if (st.expect && st.expect !== id) {
+    st.result = { error: 'You signed in to a different Steam account than the one on this PC. Sign in with the Steam account you play MX Bikes on.' };
+    return done(400, 'Different Steam account', 'You signed in with a different Steam account than the one running on this PC. Go back to CoreMX and sign in with the account you play MX Bikes on.');
+  }
+  const code = crypto.randomBytes(16).toString('hex');
+  st.codeHash = hash(code);
+  st.result = signInSteam(id, st.name);
+  return done(200, 'Signed in to CoreMX', 'Steam confirmed your account. If your browser asks, allow it to open CoreMX. Then you can close this tab.', `mxbm://signin/${state}/${code}`);
+}
 
 const server = http.createServer(async (req, res) => {
   const ip = req.socket.remoteAddress || '';
@@ -757,6 +855,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 429, { error: 'Online service is busy. Please wait before retrying.', retryAfter });
   }
   const url = new URL(req.url, 'http://x');
+  if (req.method === 'GET' && url.pathname === '/v1/auth/steam/return') return steamReturn(req, res, url).catch(() => send(res, 500, { error: 'server error' }));
   const fm = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})$/);
   if (fm) return fileRoute(req, res, fm[1]);
   const fu = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})\/(upload|uploaded)$/);

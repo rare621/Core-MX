@@ -4,6 +4,7 @@
 //                                              source: mxbmods (mxb-mods.com post id), hub (MXB Hub product id), mxbs (MX Bikes Shop download id)
 //                                              file:   0-based index into the post's download list
 //   mxbm://oem/<pack>                          install or update an OEM pack (mx, enduro, sm, freeride)
+//   mxbm://signin/<state>/<code>               finish Sign in with Steam (from the service's page)
 // Everything is validated here; anything that doesn't match exactly is ignored.
 const SOURCES = new Set(['mxbmods', 'local', 'hub', 'mxbs']);
 const PACKS = new Set(['mx', 'enduro', 'sm', 'freeride']);
@@ -26,6 +27,8 @@ function parse(link) {
     if (m[3] !== undefined) out.file = Number(m[3]);
     return typeof id === 'string' || id > 0 ? out : null;
   }
+  m = link.match(/^mxbm:\/\/signin\/([a-f0-9]{32})\/([a-f0-9]{32})\/?$/i);
+  if (m) return { type: 'signin', state: m[1].toLowerCase(), code: m[2].toLowerCase() };
   m = link.match(/^mxbm:\/\/oem\/([a-z]+)\/?$/i);
   if (m) { const pack = m[1].toLowerCase(); return PACKS.has(pack) ? { type: 'oem', pack } : null; }
   return null;

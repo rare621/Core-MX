@@ -1581,6 +1581,12 @@ function registerIpc() {
   handle('online:pluginInstall', () => online.installPlugin());
   handle('online:pluginRemove', () => online.removePlugin());
   handle('online:connect', (url, name) => online.connect(url, name));
+  // Opens Steam's own sign-in page in the browser (only that address) and waits for it.
+  handle('online:signIn', () => online.signIn((url) => {
+    if (!/^https:\/\/steamcommunity\.com\/openid\/login\?/.test(url)) throw new Error('Unexpected sign-in address from the online service.');
+    return shell.openExternal(url);
+  }));
+  handle('online:cancelSignIn', () => online.cancelSignIn());
   handle('online:disconnect', () => online.disconnect());
   handle('online:share', (on) => online.setShare(on));
   handle('online:servers', async (force = false) => { const result = await online.servers(); const servers = await addKnownServerAddresses(result.servers); return { ...result, servers: await serverPing.measure(servers, undefined, !!force) }; });
@@ -2146,7 +2152,12 @@ async function debugShots() {
 // mxbm:// links (see src/lib/deeplink.js): join a server, install a mod from the website, install an OEM pack.
 const deeplink = require('./src/lib/deeplink');
 const linkInbox = deeplink.createInbox((link) => send('deeplink:open', link));
-linkInbox.push(deeplink.fromArgv(process.argv));
+// A Steam sign-in link goes straight to the sign-in waiting for it; the rest go to the window.
+function routeLink(link) {
+  if (link && link.type === 'signin') { if (online) online.signInCode(link.state, link.code); return; }
+  linkInbox.push(link);
+}
+routeLink(deeplink.fromArgv(process.argv));
 if (!process.env.MXB_DEBUG_SHOT) {
   if (!app.requestSingleInstanceLock()) app.quit();
   app.on('second-instance', (_e, argv) => {
@@ -2154,13 +2165,13 @@ if (!process.env.MXB_DEBUG_SHOT) {
     if (!mainWin || mainWin.isDestroyed()) {
       // Window was closed but the app was still running: open a fresh one
       linkInbox.reset();
-      linkInbox.push(l);
+      routeLink(l);
       if (app.isReady()) createWindow();
       return;
     }
     if (mainWin.isMinimized()) mainWin.restore();
     mainWin.show(); mainWin.focus();
-    linkInbox.push(l);
+    routeLink(l);
   });
   try {
     if (process.defaultApp) app.setAsDefaultProtocolClient('mxbm', process.execPath, [path.resolve(process.argv[1] || '.')]);
