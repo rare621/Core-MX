@@ -110,3 +110,24 @@ test('--publicurl sets the return address', async (t) => {
   const r = (await call(null, '/v1/auth/steam/start', {})).data;
   assert.match(new URL(r.url).searchParams.get('openid.return_to'), /^https:\/\/coremx\.app\/v1\/auth\/steam\/return\?state=/);
 });
+
+test('an account Steam has not verified can only verify, read announcements and leave until it does', async (t) => {
+  const { base, call } = await service(t, ['--openregister', 'yes']);
+  const old = (await call(null, '/v1/register', { steamId: '76561198000000030', name: 'Old' })).data;
+  const blocked = await call(old.token, '/v1/presence', { state: { inGame: false } });
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.data.code, 'verify');
+  assert.equal((await call(old.token, '/v1/friends')).status, 403);
+  assert.equal((await call(old.token, '/v1/leaderboard')).status, 403);
+  assert.equal((await fetch(base + '/v1/files/' + 'a'.repeat(64), { headers: { authorization: `Bearer ${old.token}` } })).status, 403, 'gear files too');
+  assert.equal((await call(old.token, '/v1/notifications')).status, 200);
+  assert.equal((await call(old.token, '/v1/me')).data.verified, false);
+  const verified = await steam.signIn(base, '76561198000000030', { name: 'Old' });
+  assert.equal((await call(verified.token, '/v1/presence', { state: { inGame: false } })).status, 200);
+});
+
+test('--requireverified no lets older accounts keep using everything', async (t) => {
+  const { call } = await service(t, ['--openregister', 'yes', '--requireverified', 'no']);
+  const old = (await call(null, '/v1/register', { steamId: '76561198000000031', name: 'Old' })).data;
+  assert.equal((await call(old.token, '/v1/presence', { state: { inGame: false } })).status, 200);
+});

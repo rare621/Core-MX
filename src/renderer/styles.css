@@ -987,3 +987,6 @@ select option { background: var(--panel); }
 .ob-tip-head .ico { color: var(--accent); }
 .ob-tip-head b { flex: 1; }
 .ob-tip p { margin: 6px 0 10px; color: var(--text-2); font-size: 13px; line-height: 1.45; }
+
+/* Verify with Steam pop-up */
+.verify-list { margin: 8px 0 12px; padding-left: 20px; line-height: 1.6; }

@@ -10,7 +10,7 @@ const { looksText } = require('../src/lib/online');
 async function service(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-ondemand-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -145,7 +145,7 @@ test('a hosted game leaves the list when its host closes it', async (t) => {
 test('a restarted hosted game is not mixed with players stuck on the old one', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-restart-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--hostgraceseconds', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json'), '--hostgraceseconds', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
@@ -211,7 +211,7 @@ test('servers with the same name are listed separately', async (t) => {
 test('servers only older apps report are not listed', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxbm-oldapps-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);

@@ -30,9 +30,31 @@ async function liveStatus(refresh) {
   if (!S.live.status || refresh) S.live.status = await api.invoke(refresh ? 'online:refresh' : 'online:status').catch(() => null);
   return S.live.status;
 }
+// An account made before Steam sign-in: online features are off until it is verified. Asked once
+// per start of CoreMX (Later closes it; Friends keeps a Verify button).
+let verifyAsked = false;
+function askToVerify() {
+  if (verifyAsked || $('#verifyAsk')) return;
+  verifyAsked = true;
+  const m = modal({
+    title: 'Verify your account with Steam', size: 'sm',
+    body: `<div id="verifyAsk"><p>CoreMX now confirms accounts with Steam, so nobody can use someone else's Steam ID. Your account was made before this, so <b>online features are off until you verify</b>:</p>
+      <ul class="verify-list"><li>Your friends, and which server and track they're on</li><li>Joining friends in one click</li><li>Live servers with CoreMX riders</li><li>Sharing your gear, and seeing friends' gear in game</li><li>The friends leaderboard</li></ul>
+      <p class="muted">Steam's own sign-in page opens in your browser; CoreMX never sees your password. Your friends and settings stay.</p></div>`,
+    foot: `<span class="grow"></span><button class="btn" data-close>Later</button><button class="btn btn-primary" data-verify-now>${icon('steam')}Verify with Steam</button>`,
+  });
+  m.addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-verify-now]')) return;
+    m.close();
+    try { S.live.status = await api.invoke('online:signIn'); toast('Verified with Steam', 'ok', 3000); }
+    catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
+  });
+}
+
 api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
+  if (st?.service?.connected && st.service.verified === false && !st.service.signingIn) askToVerify();
   const signKey = (x) => JSON.stringify([x?.service?.connected, x?.service?.needsSignIn, x?.service?.signingIn, x?.service?.verified]);
   if (previous && signKey(previous) !== signKey(st) && (S.view === 'friends' || S.view === 'online')) { S.live.friends = null; setTimeout(() => (S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content'))), 0); }
   // Hosting while Windows Firewall drops MX Bikes: say so once per hosting session.
@@ -80,7 +102,7 @@ function setupCardHtml(st, where) {
         ${p.available ? `<button class="btn btn-sm btn-primary" data-act="live-plugin-install">Install</button>` : '<span class="muted" style="font-size:12px">Not built yet</span>'}</div>`;
   const svcRow = !sv.connected && (sv.needsSignIn || sv.signingIn) ? signInRowHtml(sv)
     : sv.connected && sv.verified === false && !sv.signingIn
-    ? `<div class="live-step"><span style="color:var(--warn)">${icon('steam')}</span><div style="flex:1"><b>Verify your account with Steam</b><div class="muted">Online as ${esc(sv.name || '')}. Signing in with Steam once confirms this Steam ID is really yours, so nobody else can use it. Admin needs it.</div></div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
+    ? `<div class="live-step"><span style="color:var(--warn)">${icon('steam')}</span><div style="flex:1"><b>Verify your account with Steam</b><div class="muted">Online as ${esc(sv.name || '')}. Signing in with Steam once confirms this Steam ID is really yours, Online features are off until you do; friends and settings stay.</div></div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
     : sv.connected && sv.signingIn ? signInRowHtml(sv)
     : sv.connected
     ? `<div class="live-step done">${icon('check')}<div><b>Online${sv.name ? ` as ${esc(sv.name)}` : ''}</b>${sv.error ? `<div style="color:var(--warn)">${esc(sv.error)}</div>` : '<div class="muted">Signed in with your Steam account.</div>'}</div><button class="btn btn-sm btn-ghost" data-act="live-disconnect">Go offline</button></div>`
@@ -486,7 +508,7 @@ async function renderFriends(c) {
     : !connected
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div><b>You're offline.</b> ${st.service.defaultUrl ? "Friends' status and paint sync are paused until the online service is reachable." : 'Online features are not set up in this copy of the app.'}</div>${st.service.defaultUrl ? `<button class="btn btn-sm" data-act="live-connect">Try again</button>` : ''}</div>`
     : st.service.verified === false && !st.service.signingIn
-    ? `<div class="fr-banner tip">${icon('steam')}<div>Online as <b>${esc(st.service.name || steam.name || '')}</b>. <b>Verify with Steam</b> once to confirm this Steam ID is yours (needed for Admin). Friends and settings stay.</div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
+    ? `<div class="fr-banner tip">${icon('steam')}<div>Online as <b>${esc(st.service.name || steam.name || '')}</b>. <b>Verify with Steam</b> to turn online features back on: friends, live servers, gear sharing and the leaderboard. Friends and settings stay.</div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
     : st.service.signingIn
     ? `<div class="fr-banner tip">${icon('steam')}<div>${st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser."}</div><button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button></div>`
     : `<div class="fr-banner on"><span class="fr-dot ride"></span><div>Online as <b>${esc(st.service.name || steam.name || '')}</b>${st.service.error ? ` · <span style="color:var(--warn)">${esc(st.service.error)}</span>` : ''}</div>

@@ -215,7 +215,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
     'Helmet/helmet.hrc': 'level0\n{\nscene = helmet.edf\n}',
     'Helmet/paints/Active.pnt': f.helmetPaint,
   }), true));
-  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--oldapps', 'show', '--data', path.join(f.root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(f.root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { if (child.exitCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
   const port = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Fixture service did not start')), 10000);
@@ -231,7 +231,7 @@ test('two real clients exchange only mutual-friend equipped files through the on
   const b = await call()('POST', '/v1/register', { steamId: '76561198000000002', name: 'B' });
   const ac = call(a.token), bc = call(b.token);
   await ac('POST', '/v1/friends', { ids: [a.id, b.id] });
-  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 24);
+  const health = await ac('GET', '/v1/health'); assert.equal(health.version, 25);
   const uploaded = [];
   const shareA = () => sync.share({ call: ac, upload: async (hash, bytes) => {
     uploaded.push(hash);
