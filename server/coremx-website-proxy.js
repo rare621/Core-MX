@@ -9,7 +9,11 @@ function cleanHeaders(input) {
 function proxySync(req, res, port = 60000) {
   const headers = cleanHeaders(req.headers);
   // The sync service uses bearer tokens, not website session cookies or forwarded IPs.
-  for (const name of Object.keys(headers)) if (/^(?:forwarded|x-forwarded-|cf-|x-coremx-client-ip)/i.test(name)) delete headers[name];
+  for (const name of Object.keys(headers)) if (/^(?:forwarded|x-forwarded-|cf-|x-coremx-client-ip|x-coremx-public-origin)/i.test(name)) delete headers[name];
+  // The public address people reach the service on (https://coremx.app), for Steam sign-in's return
+  // address: the service itself only sees 127.0.0.1 here.
+  const host = String(req.headers.host || '').trim().toLowerCase();
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) headers['x-coremx-public-origin'] = 'https://' + host;
   // The player's public IP, set only here (from Cloudflare), so a Host World session can be joined.
   const ip = String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '').replace(/^::ffff:/, '');
   if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) headers['x-coremx-client-ip'] = ip;

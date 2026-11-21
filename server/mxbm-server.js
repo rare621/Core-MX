@@ -846,6 +846,10 @@ const SIGNIN_TTL = 15 * 60 * 1000;
 function pruneSignIns() { for (const [k, v] of signIns) if (Date.now() - v.at > SIGNIN_TTL) signIns.delete(k); }
 function publicOrigin(req) {
   if (PUBLIC_URL) return PUBLIC_URL;
+  // Behind the website proxy on this PC (coremx-website-proxy.js), which says the public address.
+  const peer = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const told = String(req.headers['x-coremx-public-origin'] || '');
+  if ((peer === '::1' || /^127\./.test(peer)) && /^https:\/\/[a-z0-9.-]+\.[a-z]{2,}$/.test(told)) return told;
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
   if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host)) return null;
   const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? 'https' : 'http';

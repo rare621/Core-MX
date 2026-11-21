@@ -10,5 +10,6 @@ if errorlevel 1 (
 )
 echo Keep this window open while people use the service. Close it to stop.
 echo.
-node mxbm-server.js --port 60000
+rem --publicurl: the address people reach this service on (Steam sign-in sends them back there).
+node mxbm-server.js --port 60000 --publicurl https://coremx.app
 pause
