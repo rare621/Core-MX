@@ -73,7 +73,7 @@ test('the admin sees each account once with its activity', async (t) => {
   assert.equal(data.users[0].id, '76561198000000001', 'online riders first');
   assert.equal(data.daily.length, 7);
   assert.equal(data.daily.at(-1).count, 3, 'today: each account counted once');
-  assert.deepEqual(data.summary, { accounts: 3, onlineNow: 1, inGame: 1, today: 3, last5Days: 3, last30Days: 3, newThisWeek: 3 });
+  assert.deepEqual(data.summary, { accounts: 3, onlineNow: 2, inGame: 1, today: 3, last5Days: 3, last30Days: 3, newThisWeek: 3 });
 });
 
 // Admins: the owner adds and removes them by friend code; they unlock Admin with the same server key

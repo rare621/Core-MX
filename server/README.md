@@ -50,6 +50,7 @@ Accounts are created by **Sign in with Steam**: the app opens Steam's own sign-i
 - A verified account can be signed in on up to 5 PCs.
 - **Admin needs a verified account**, the owner included: sign in with Steam once in the new app.
 - **v25: online features need a verified account.** An unverified account can only verify, read announcements and unregister; everything else (presence, friends, servers, gear files, leaderboard) answers `403` with `code: "verify"`. CoreMX 1.0.49+ then asks the player to verify with Steam. `--requireverified no` turns this off. Deploy v25 after 1.0.49 is out (1.0.48 doesn't ask), or start it with `--requireverified no` until most players have updated.
+- **v26: online counts every connected app.** Anyone whose CoreMX talked to the service in the last 2 minutes counts as online (the "N online" number and Admin → Activity), including older or not-yet-verified apps whose reports are refused; those show no game or server.
 - **Return address:** behind the coremx.app website proxy (`coremx-website-proxy.js`), the proxy tells the service the public address. `start-server.cmd` also passes `--publicurl https://coremx.app`; set it to your own address if you run the service elsewhere.
 
 ## Announcements

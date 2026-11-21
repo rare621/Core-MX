@@ -131,3 +131,13 @@ test('--requireverified no lets older accounts keep using everything', async (t)
   const old = (await call(null, '/v1/register', { steamId: '76561198000000031', name: 'Old' })).data;
   assert.equal((await call(old.token, '/v1/presence', { state: { inGame: false } })).status, 200);
 });
+
+test('apps the service hears from count as online, verified or not (v26)', async (t) => {
+  const { call } = await service(t, ['--openregister', 'yes']);
+  assert.equal((await call(null, '/v1/health')).data.activeUsers, 0);
+  const old = (await call(null, '/v1/register', { steamId: '76561198000000040', name: 'Old app' })).data;
+  assert.equal((await call(old.token, '/v1/presence', { state: { inGame: true } })).status, 403, 'its report is refused (not verified)');
+  const health = (await call(null, '/v1/health')).data;
+  assert.equal(health.version, 26);
+  assert.equal(health.activeUsers, 1, 'but it is online');
+});
