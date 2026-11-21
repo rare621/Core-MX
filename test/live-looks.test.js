@@ -40,3 +40,15 @@ test('gear CoreMX is fetching from MXB Mods, or found nothing for, tells the ove
   const lines = looksText([{ id: 'r', num: 2, bikeId: 'b', equipped: [] }], [], 1, { r: report }).trim().split('\n').filter((l) => l.startsWith('wait'));
   assert.deepEqual(lines, ['wait\t2\tb\tinstalling\tBig', 'wait\t2\tb\tnomatch\tB', 'wait\t2\tb\tpaid\tP']);
 });
+
+test('a rider found on the server by name (their plugin not reporting) still shows, with number and bike from your game', () => {
+  const { withGameRider } = require('../src/lib/online');
+  const game = [{ num: 917, name: 'YaBoiChase917 | BSM', bike: 'Kawasaki KX250 2023' }, { num: 501, name: 'Uhh_sal', bike: 'Honda CRF450R 2023' }, { num: 7, name: 'Sam', bike: 'X' }, { num: 8, name: 'Sam Two', bike: 'X' }];
+  const out = withGameRider([
+    { via: 'name', name: 'YaBoiChase917', bike: 'MX2OEM_2023_Kawasaki_KX250' },
+    { via: 'name', name: 'Uhh_sal', bike: 'MX2OEM_2023_Kawasaki_KX250' },   // outfit shared for another bike
+    { via: 'name', name: 'Sam', bike: 'X' },                                   // two riders match the name
+    { via: 'plugin', name: 'P', num: 5, bikeId: 'B', bike: 'B' },
+  ], game);
+  assert.deepEqual(out.map((l) => [l.name, l.num, l.bikeId]), [['YaBoiChase917', 917, 'MX2OEM_2023_Kawasaki_KX250'], ['P', 5, 'B']]);
+});

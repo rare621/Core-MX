@@ -34,6 +34,25 @@ function waitLines(lo, report, clean) {
   }
   return out.slice(0, 6).map(([code, label]) => ['wait', lo.num, clean(lo.bikeId), code, clean(label).slice(0, 40)].join('\t'));
 }
+// Riders the service found on your server by their name on the rider list (their own plugin isn't
+// reporting: CoreMX installed while the game ran, or no plugin): their race number and bike come from
+// your game's rider list. Only a single name match counts, and only when that bike's words are all in
+// the bike their outfit is shared for (the game says "Kawasaki KX250 2023", the folder is
+// MX2OEM_2023_Kawasaki_KX250). Riders their plugin reports are kept as they are.
+const looseName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const bikeWords = (s) => String(s || '').toLowerCase().replace(/^(mx\w*?|sm\w*?|en\w*?)oem_/i, ' ').split(/[^a-z0-9]+/).filter((t) => t && !['oem', 'mx1', 'mx2', 'mx3', 'mxe', 'the', 'by', 'and'].includes(t));
+function withGameRider(loadouts, gameRiders) {
+  return loadouts.map((l) => {
+    if (l.via === 'plugin') return l;
+    const n = looseName(l.name);
+    if (n.length < 3 || !l.bike) return null;
+    const hits = gameRiders.filter((g) => { const r = looseName(g.name); return r === n || (' ' + r + ' ').includes(' ' + n + ' '); });
+    const g = hits.length === 1 ? hits[0] : null;
+    const want = g ? bikeWords(g.bike) : [], have = new Set(bikeWords(l.bike));
+    if (!g || !(Number(g.num) > 0) || !want.length || !want.every((w) => have.has(w))) return null;
+    return { ...l, num: Number(g.num), bikeId: l.bike };
+  }).filter(Boolean);
+}
 function looksText(loadouts, reload, stamp, reports = {}) {
   const clean = (v) => String(v || '').replace(/[\t\r\n]/g, ' ').trim().slice(0, 63);
   const lines = [`coremx-looks 1 ${stamp}`, `reload\t${reload.join(',')}`];
@@ -420,7 +439,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // (The plugin's server type is not a host flag: seen as 1 and 2 while hosting. Host World has
       // no port setting, so the game's default port 54210 is used.)
       ...(hosting ? { hosting: true, hostPort: 54210, ...publicAddress(), ...(lanAddress ? { hostLan: `${lanAddress}:54210` } : {}) } : {}),
-      riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category })),
+      riders: (s.riders || []).map((r) => ({ name: r.name, bike: r.bike, category: r.category, ...(Number(r.num) > 0 ? { num: Number(r.num) } : {}) })),
     };
   }
 
@@ -845,7 +864,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const c = cfg(), s = current;
     if (!c.token || c.paintSync === false || !gameRunning || !s || !s.inEvent || !s.server) { if (looksKey) clearLooks(); return; }
     const all = await serverRiderLoadouts(s.server);
-    const riders = all.filter((l) => l.via === 'plugin' && Number(l.num) > 0 && l.bikeId && l.bike && l.bikeId.toLowerCase() === l.bike.toLowerCase());
+    const riders = withGameRider(all, s.riders || []).filter((l) => Number(l.num) > 0 && l.bikeId && l.bike && l.bikeId.toLowerCase() === l.bike.toLowerCase());
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: riders, onProgress: () => {} });
@@ -939,4 +958,4 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   };
 }
 
-module.exports = { create, PLUGIN, STATE_FILE, looksText, RELOAD_FOR };
+module.exports = { create, PLUGIN, STATE_FILE, looksText, RELOAD_FOR, withGameRider };
