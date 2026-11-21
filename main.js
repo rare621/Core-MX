@@ -705,7 +705,8 @@ const friendGear = require('./src/lib/friend-gear').create({
   isInstalled: (postId) => Object.values(store.get('installs') || {}).some((r) => Number(r.postId) === Number(postId))
     || [...jobs.values()].some((j) => Number(j.postId) === Number(postId) && !['done', 'error'].includes(j.status)),
   enabled: () => store.get('settings').friendGearInstall !== false,
-  onChange: () => online?.refreshGearStatus(),
+  // No page for a file that can come through the service: sync now, so it does without waiting.
+  onChange: (item) => { online?.refreshGearStatus(); if (item && item.pageOnly && item.state === 'nopage') online?.syncPaints().catch(() => {}); },
 });
 
 function fail(j, e) {

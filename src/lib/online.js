@@ -20,7 +20,7 @@ const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'h
 // "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
 // sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
 // have), failed. Older plugins skip these lines. status: rider id -> sync report (items, unavailable).
-const WAIT_ITEM = { waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed', stalled: 'failed' };
+const WAIT_ITEM = { page: 'installing', waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed', stalled: 'failed' };
 function waitLines(lo, report, clean) {
   if (!report) return [];
   const out = [];
@@ -86,6 +86,28 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     }
     annotate(results);
   }
+  // A file you don't have from another rider: its MXB Mods page first (theirs, or the shared catalog),
+  // then the service (R2). Returns the fetch state while it's being installed from MXB Mods.
+  function viaPage(lo, it) {
+    if (cfg().pagesFirst === false) return null;
+    const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
+    const name = it.value || cur[it.slot];
+    if (!name) return null;
+    findGear({ slot: it.slot, name, source: it.source || null, who: lo.name || '', catalogKey: catalogKeys.keyForItem(it.slot, name, cur, lo.bike), pageOnly: true });
+    let st = gearStatus(it.slot, name);
+    // Installed, yet the file still isn't there: not in that download. The next option, or the service.
+    if (st && st.state === 'installed') { gearStillMissing(it.slot, name); st = gearStatus(it.slot, name); }
+    return st && ['searching', 'installing'].includes(st.state) ? st : null;
+  }
+  // A file the service couldn't deliver either: its download failed, the owner's upload hasn't come
+  // after 3 minutes ('stalled'), or their CoreMX is closed ('offline'). The name search, then the player.
+  function noteFailedItems(results) {
+    for (const r of results || []) for (const it of r.items || []) {
+      if (!['failed', 'stalled', 'offline'].includes(it.state) || !it.value) continue;
+      const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
+      findGear({ slot: it.slot, name: it.value, source: it.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(it.slot, it.value, cur, r.bike) });
+    }
+  }
   // Each missing item's MXB Mods fetch state (u.find: searching, installing, installed, nomatch, failed).
   function annotate(results) {
     for (const r of results || []) {
@@ -93,6 +115,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       for (const u of r.unavailable || []) {
         const st = u.state === 'unavailable' && cur[u.slot] ? gearStatus(u.slot, cur[u.slot]) : null;
         if (st) u.find = st; else delete u.find;
+      }
+      // Files that can come through the service too: while installing from MXB Mods, or after both failed.
+      for (const it of r.items || []) {
+        const st = ['page', 'failed', 'stalled', 'offline'].includes(it.state) && it.value ? gearStatus(it.slot, it.value) : null;
+        if (st && st.state !== 'nopage') it.find = st; else delete it.find;
       }
     }
   }
@@ -104,6 +131,13 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const rows = new Map();
     for (const r of [...(paint.report || []), ...looksReports]) {
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
+      for (const it of r.items || []) {
+        if (!it.find || !DONE.has(it.find.state) || !['failed', 'stalled', 'offline'].includes(it.state)) continue;
+        const key = `${it.slot}|${String(it.value).toLowerCase()}`;
+        const row = rows.get(key) || { slot: it.slot, name: it.value, label: it.label, error: it.error || null, source: it.source || null, find: it.find, riders: [] };
+        if (r.name && !row.riders.includes(r.name)) row.riders.push(r.name);
+        rows.set(key, row);
+      }
       for (const u of r.unavailable || []) {
         const name = cur[u.slot];
         if (u.state !== 'unavailable' || !name || u.included === 'bike' || /paid|store-protected/i.test(u.error || '')) continue;
@@ -127,6 +161,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   }
   function noteDownloads(results) {
     noteUnavailable(results);
+    noteFailedItems(results);
     for (const r of results || []) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) pendingReload.add(RELOAD_FOR[it.slot]);
     if (pendingReload.size && current?.inEvent) { looksKey = ''; syncLooks(); }
   }
@@ -714,7 +749,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         paint.shared = shared.items; paint.unavailable = shared.unavailable;
       }
       const received = { ...(cfg().received || {}) };
-      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, friendId, onProgress: progress });
+      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, friendId, onProgress: progress });
       paintsync.touchReceived(received, results);
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       noteWaiting(paint.report);
@@ -784,7 +819,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     paint.busy = true; onChange(status());
     try {
       const received = { ...(cfg().received || {}) };
-      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: loadouts, onProgress: progress });
+      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: loadouts, onProgress: progress });
       paintsync.touchReceived(received, results);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
@@ -812,10 +847,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const riders = all.filter((l) => l.via === 'plugin' && Number(l.num) > 0 && l.bikeId && l.bike && l.bikeId.toLowerCase() === l.bike.toLowerCase());
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
-    const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
+    const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: riders, onProgress: () => {} });
     paintsync.touchReceived(received, results);
     setCfg({ received });
     noteUnavailable(results);
+    noteFailedItems(results);
     looksReports = results;
     noteNeedsYou();
     const reload = new Set(pendingReload);
