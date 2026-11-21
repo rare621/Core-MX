@@ -72,7 +72,7 @@ function missingRowHtml(r, i) {
   const why = r.find ? findLabel(r.find).replace(/ Find (it|the right one) below\.$/, '') : BOUND.test(r.error || '') ? 'Tied to their account (bought, or locked to them by its creator), so it can\'t be sent. You need your own copy.' : r.error || 'Couldn\'t be sent';
   // Why their CoreMX couldn't send it, in its own words (too big, locked, made for another rider model…).
   const theirs = r.find && r.error && !BOUND.test(r.error) && !/^Too big or locked to send/.test(r.error) ? `<small class="muted" style="display:block">Their CoreMX: ${esc(r.error)}</small>` : '';
-  return `<div class="friend-gear-row"><span class="slot-ico">${icon(GEAR_ICON[r.slot] || 'shirt')}</span><div><b>${esc(r.name)}</b><div class="muted">${esc(r.label || r.slot)}${r.riders.length ? ` · worn by ${esc(r.riders.join(', '))}` : ''}</div><small class="sync-warning">${esc(why)}</small>${theirs}
+  return `<div class="friend-gear-row"><span class="slot-ico">${icon(GEAR_ICON[r.slot] || 'shirt')}</span><div><b>${esc(r.name)}</b><div class="muted">${esc(r.label || r.slot)}${r.riders.length ? ` · worn by ${esc(r.riders.join(', '))}` : ''}</div><small class="sync-warning">${esc(why)}</small>${theirs}${r.paints?.length ? `<small class="muted" style="display:block">Its paint (${esc(r.paints.join(', '))}) needs it too.</small>` : ''}
     <div class="friend-session-actions">${r.source ? `<button class="btn btn-sm" data-missing-post="${i}">${icon('globe')}Open ${esc(r.source.title || 'its MXB Mods page')}</button>` : ''}<button class="btn btn-sm btn-primary" data-missing-find="${i}">${icon('search')}Search Get Mods</button></div></div></div>`;
 }
 function drawMissingGear() {
