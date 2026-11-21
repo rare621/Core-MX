@@ -70,7 +70,10 @@ function obOnlineHtml() {
   const signedIn = !!(sv && sv.connected);
   return `<h2 class="setup-h">Online features</h2><p class="setup-p">Optional, and you can do this later in Friends. Nothing is sent until you choose to.</p>
     <div class="set-card ob-online"><div class="ob-online-row">${icon('steam')}<div><b>Sign in with Steam</b><span class="muted">Friends, live servers, the leaderboard and gear sharing use your Steam account. Steam's own sign-in page opens in your browser; CoreMX never sees your password.</span></div>
-      ${signedIn ? `<span class="ok-chip">${icon('check')}Signed in</span>` : sv && sv.signingIn ? '<span class="muted">Waiting for Steam…</span>' : `<button class="btn btn-primary" data-ob-signin>${icon('steam')}Sign in</button>`}</div></div>
+      ${sv && sv.signingIn ? '<span class="muted">Waiting for Steam…</span>'
+        : signedIn && sv.verified === false ? `<button class="btn btn-primary" data-ob-signin>${icon('steam')}Verify with Steam</button>`
+        : signedIn ? `<span class="ok-chip">${icon('check')}Signed in</span>`
+        : `<button class="btn btn-primary" data-ob-signin>${icon('steam')}Sign in</button>`}</div>${signedIn && sv.verified === false ? '<p class="muted" style="margin:8px 0 0 40px">Your account was made before CoreMX signed in with Steam. Verifying once confirms this Steam ID is really yours; your friends and settings stay.</p>' : ''}</div>
     <div class="set-card ob-online"><div class="ob-online-row">${icon('box')}<div><b>CoreMX game plugin</b><span class="muted">Shows friends in their own gear in game, tells CoreMX which server you're on, and adds the in-game overlay: press <b>F8</b> in MX Bikes to change your gear or see the riders on your server.</span></div>
       ${p && p.installed ? `<span class="ok-chip">${icon('check')}Installed</span>` : p && p.available ? `<button class="btn" data-ob-plugin>${icon('download')}Install</button>` : '<span class="muted">Set your game folder first</span>'}</div></div>`;
 }
