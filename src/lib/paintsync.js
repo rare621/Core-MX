@@ -237,9 +237,13 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
     }
     // A paint from the same MXB Mods download as a model you now have (a helmet with its paints in a
     // locked package, which can't be looked inside) came with that model.
+    // Also when neither has a page on record: the owner couldn't send the model, and its paint
+    // failed with it (a paint in a locked package). If it's really not in the package, the in-game
+    // overlay still shows it missing.
     for (const u of unavailable) {
-      if (u.state !== 'unavailable' || !u.source || !modelOf[u.slot]) continue;
-      const model = unavailable.find((m) => m.slot === modelOf[u.slot] && m.state === 'have' && m.source && m.source.postId === u.source.postId);
+      if (u.state !== 'unavailable' || !modelOf[u.slot] || /paid|store-protected|tied to your account|account-bound/i.test(u.error || '')) continue;
+      const model = unavailable.find((m) => m.slot === modelOf[u.slot] && m.state === 'have' && m.included !== 'bike'
+        && (m.source && u.source ? m.source.postId === u.source.postId : !u.source));
       if (model) u.state = 'have';
     }
     report.push({ ...lo, items, unavailable });

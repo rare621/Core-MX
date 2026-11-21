@@ -1,12 +1,15 @@
 // Gear another rider wears that their CoreMX couldn't send (bigger than the sync limit, locked by its
-// creator), fetched from MXB Mods instead, automatically:
-//  1. The MXB Mods page their CoreMX installed it from, if known: the same download if the page still
-//     lists it, else the page's only free download. The link is read from the page itself, never
-//     taken from the other app.
-//  2. No page known, or that download failed or wasn't there: a search of MXB Mods by the model's name.
-//     Only a strong match installs (a download whose name or file name contains the model's name, or a
-//     title that does with a single download); anything less is "no match", never a guess.
-// One attempt per item per run. Paid and account-bound items are never fetched.
+// creator), fetched from MXB Mods instead, automatically, in this order:
+//  1. The MXB Mods page their CoreMX installed it from, if known.
+//  2. The shared gear catalog (service v27): pages and downloads other riders' CoreMX installed this
+//     very file from (reported from the files an install really wrote, see main.js reportCatalog).
+//  3. A search of MXB Mods by the model's name. Only a strong match installs (a download whose name or
+//     file name contains the model's name, or a title that does with a single download).
+//  4. Nothing worked: "nomatch" / "failed", and the player picks (the Missing gear window).
+// A page's download link is always read from the page itself, never taken from another app or the
+// catalog as is: the same download if the page still lists it, else the page's only free download.
+// An install that finished without the item counts against that catalog entry and the next option
+// is tried. One run per item per app start. Paid and account-bound items are never fetched.
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const MODEL_TAB = { helmet: 'helmets', boots: 'boots', protection: 'protection', rider: 'riders' };
@@ -39,15 +42,15 @@ function matchDownload(post, name) {
   return null;
 }
 
-function create({ site, startJob, jobStatus, isInstalled, enabled = () => true, onChange = () => {}, maxPosts = 8 }) {
-  const items = new Map();   // "slot|name" -> { state, jobId, postId, title, link, error, via }
+function create({ site, startJob, jobStatus, isInstalled, lookup = async () => ({}), reportBad = () => {}, enabled = () => true, onChange = () => {}, maxPosts = 8 }) {
+  const items = new Map();   // "slot|name" -> item
   const keyOf = (slot, name) => `${slot}|${String(name || '').toLowerCase()}`;
 
-  // The state shown for an item: searching, installing, installed, nomatch, failed (or null: not tried).
+  // What to show for an item: searching, installing, installed, nomatch, failed (null: not tried).
   function status(slot, name) {
     const s = items.get(keyOf(slot, name));
     if (!s) return null;
-    const out = { state: s.state, title: s.title, link: s.link, postId: s.postId, error: s.error };
+    const out = { state: s.state, via: s.via, title: s.title, link: s.link, postId: s.postId, error: s.error };
     if (s.jobId) {
       const j = jobStatus(s.jobId);
       if (j && j.status === 'done') out.state = 'installed';
@@ -57,66 +60,97 @@ function create({ site, startJob, jobStatus, isInstalled, enabled = () => true, 
     return out;
   }
 
-  async function fromPage(source, item, who) {
+  // Install `source` ({ postId, link, download }) if its page still offers that download.
+  async function fromPage(source, item, via) {
     const postId = Number(source && source.postId);
-    if (!Number.isSafeInteger(postId) || postId <= 0 || !/^https:\/\/mxb-mods\.com\//i.test(String(source.link || ''))) return false;
+    if (!Number.isSafeInteger(postId) || postId <= 0 || item.tried.has(postId) || !/^https:\/\/mxb-mods\.com\//i.test(String(source.link || ''))) return false;
+    item.tried.add(postId);
     if (isInstalled(postId)) return false;   // installed, yet the item is still missing: not this download
-    const post = await site.post(postId);
+    const post = await site.post(postId).catch(() => null);
+    if (!post) return false;
     const free = freeDownloads(post);
     const dl = free.find((d) => d.url === source.download) || (free.length === 1 ? free[0] : null);
     if (!dl) return false;
-    Object.assign(item, { state: 'installing', via: 'page', postId, title: post.title, link: post.link, jobId: startJob(post, dl, who) });
+    Object.assign(item, { state: 'installing', via, postId, title: post.title, link: post.link, error: null, jobId: startJob(post, dl, item.who) });
     return true;
   }
 
-  async function bySearch(slot, name, item, who, skip) {
-    const tab = MODEL_TAB[slot];
-    if (!tab || norm(name).length < MIN_NAME) return false;
-    const seen = new Set(skip ? [skip] : []), posts = [];
-    for (const query of queries(name)) {
+  async function fromCatalog(item) {
+    if (!item.catalogKey) return false;
+    if (!item.catalogList) item.catalogList = (await Promise.resolve(lookup([item.catalogKey])).catch(() => ({})))[item.catalogKey] || [];
+    const list = item.catalogList;
+    for (const e of list) if (await fromPage(e, item, 'catalog')) return true;
+    return false;
+  }
+
+  async function bySearch(item) {
+    const tab = MODEL_TAB[item.slot];
+    if (!tab || norm(item.name).length < MIN_NAME) return false;
+    const posts = [], seen = new Set(item.tried);
+    for (const query of queries(item.name)) {
       const r = await site.search({ query, tab, perPage: 12, orderby: 'relevance' }).catch(() => ({ posts: [] }));
       for (const p of r.posts || []) if (!seen.has(p.id) && posts.length < maxPosts) { seen.add(p.id); posts.push(p); }
     }
     for (const summary of posts) {
       if (isInstalled(summary.id)) continue;
       const post = await site.post(summary.id).catch(() => null);
-      const dl = post && matchDownload(post, name);
+      const dl = post && matchDownload(post, item.name);
       if (!dl) continue;
-      Object.assign(item, { state: 'installing', via: 'search', postId: post.id || summary.id, title: post.title, link: post.link, jobId: startJob(post, dl, who) });
+      const postId = post.id || summary.id;
+      item.tried.add(postId);
+      Object.assign(item, { state: 'installing', via: 'search', postId, title: post.title, link: post.link, error: null, jobId: startJob(post, dl, item.who) });
       return true;
     }
     return false;
   }
 
-  async function run(slot, name, source, who, item, skipPost) {
+  // The next option not tried yet; the last one sets nomatch / failed.
+  async function next(item) {
     try {
-      if (!skipPost && source && await fromPage(source, item, who)) return;
-      if (await bySearch(slot, name, item, who, skipPost)) return;
-      Object.assign(item, { state: MODEL_TAB[slot] ? 'nomatch' : 'failed', jobId: null, error: MODEL_TAB[slot] ? null : 'Not on MXB Mods' });
+      if (!item.steps.page) { item.steps.page = true; if (item.source && await fromPage(item.source, item, 'page')) return onChange(); }
+      // Every catalog entry in turn (one that didn't contain the item moves on to the next).
+      if (!item.steps.catalog) { if (await fromCatalog(item)) return onChange(); item.steps.catalog = true; }
+      if (!item.steps.search) { item.steps.search = true; if (await bySearch(item)) return onChange(); }
+      Object.assign(item, { state: MODEL_TAB[item.slot] ? 'nomatch' : 'failed', jobId: null, error: item.error || (MODEL_TAB[item.slot] ? null : 'Not found on MXB Mods') });
     } catch (e) { Object.assign(item, { state: 'failed', jobId: null, error: e.message }); }
     onChange();
   }
 
   // Fetch one item the other rider couldn't send. Returns at once; the state follows in status().
-  function find({ slot, name, source = null, who = '' }) {
+  // catalogKey: from src/lib/gear-keys.js keyForItem.
+  function find({ slot, name, source = null, who = '', catalogKey = null }) {
     if (!enabled() || !name) return;
     const key = keyOf(slot, name);
     if (items.has(key)) return;
-    const item = { state: 'searching', slot, name, source, who };
+    const item = { state: 'searching', slot, name, source, who, catalogKey, tried: new Set(), steps: {} };
     items.set(key, item);
-    run(slot, name, source, who, item, null);
+    next(item);
   }
 
-  // A download this started failed: try the name search next (once), skipping that page.
+  // A download this started failed: go on with the next option.
   function jobFailed(jobId) {
     for (const item of items.values()) {
-      if (item.jobId !== jobId || item.via !== 'page') continue;
-      Object.assign(item, { state: 'searching', via: 'search-after-page', jobId: null });
-      run(item.slot, item.name, null, item.who, item, item.postId);
+      if (item.jobId !== jobId) continue;
+      const error = (jobStatus(jobId) || {}).error;
+      Object.assign(item, { state: 'searching', jobId: null, error: error || null });
+      next(item);
     }
   }
 
-  return { find, status, jobFailed };
+  // The install finished but the item is still not there: it wasn't in that download. Counts against
+  // the catalog entry it came from, and the next option is tried. Once per install.
+  function stillMissing(slot, name) {
+    const item = items.get(keyOf(slot, name));
+    if (!item || !item.jobId || item.checkedJob === item.jobId) return;
+    const j = jobStatus(item.jobId);
+    if (!j || j.status !== 'done') return;
+    item.checkedJob = item.jobId;
+    if (item.via === 'catalog' && item.catalogKey) reportBad(item.catalogKey, item.postId);
+    Object.assign(item, { state: 'searching', jobId: null, error: `${item.title || 'That download'} didn't include it` });
+    next(item);
+  }
+
+  return { find, status, jobFailed, stillMissing };
 }
 
 module.exports = { create, queries, matchDownload, norm };

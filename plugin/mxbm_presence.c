@@ -1439,7 +1439,7 @@ static int riderWait(const LookStatus *st, char *line) {
     else if (!strcmp(w.code, "bike")) sprintf(line, "%.32s: comes with a bike you don't have", w.label);
     else if (!strcmp(w.code, "paid")) sprintf(line, "%.36s: paid, not shared", w.label);
     else if (!strcmp(w.code, "installing")) sprintf(line, "%.30s: CoreMX is installing it from MXB Mods...", w.label);
-    else if (!strcmp(w.code, "nomatch")) sprintf(line, "%.30s: not found on MXB Mods, see CoreMX Friends", w.label);
+    else if (!strcmp(w.code, "nomatch")) sprintf(line, "%.30s: not found, choose it in CoreMX (Missing gear)", w.label);
     else sprintf(line, "%.36s: couldn't be downloaded", w.label);
   }
   return 1;
