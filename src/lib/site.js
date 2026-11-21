@@ -288,13 +288,23 @@ async function archiveLiveries({ brand, query, page, perPage, cursor }, cats) {
   return { posts, page, total: 0, totalPages: more ? page + 1 : page, nextCursor: { archivePage } };
 }
 
+// Every word of the search is in the title or the page address, whatever the dashes, underscores and
+// punctuation: "ZD - Kato Cycle Club" (the game's track name) finds "ZD – Kato Cycle Club".
+const searchWords = (s) => String(s || '').toLowerCase().replace(/['’`´]/g, '').normalize('NFKD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+function titleMatches(p, query) {
+  const want = searchWords(query);
+  if (!want.length) return true;
+  const have = new Set([...searchWords(p.title), ...searchWords(String(p.link || '').replace(/^https?:\/\/[^/]+/i, ''))]);
+  return want.every((w) => have.has(w));
+}
+
 async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, cursor }, cats) {
   const deadline = AbortSignal.timeout(20000);
   const t = browseCategory(tab, kind), scoped = scope === 'addons' ? { ...t, cats: ADDON_CATEGORIES[tab] || Object.values(ADDON_CATEGORIES).flat() } : t;
   const matches = (p) => (!scoped.cats || p.categories.some((id) => scoped.cats.includes(id) || scoped.cats.includes(cats[id]?.parent)))
     && (!scoped.exclude || !p.categories.some((id) => scoped.exclude.includes(id)))
     && (!p.contentKind || tab === 'all' || p.contentKind === tab)
-    && (!query || p.title.toLowerCase().includes(query.toLowerCase()));
+    && (!query || titleMatches(p, query));
   const sort = orderby === 'relevance' && !query ? 'best-match' : orderby;
   let featured = [];
   if (sort === 'best-match' || sort.startsWith('popular')) {
@@ -537,4 +547,4 @@ function shopProduct(address) {
   } catch { return null; }
 }
 
-module.exports = { popularRows, BROWSE_TABS, LIVERY_BRANDS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone };
+module.exports = { popularRows, BROWSE_TABS, LIVERY_BRANDS, search, post, postBySlug, postsByIds, categories, UA, hostOf, dependenciesFromHtml, dependenciesFromText, browseCategory, gearKind, isAddonPost, ADDON_CATEGORIES, needsCustomModel, listingRequirements, shopProduct, summarizePost, standalone, titleMatches };
