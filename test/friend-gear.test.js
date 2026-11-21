@@ -82,3 +82,24 @@ test('a page already installed (the item still missing) is not downloaded again'
   assert.deepEqual(started, []);
   assert.equal(fg.status('helmet', 'Bellmoto10-FCR').state, 'nomatch');
 });
+
+test('nothing found is looked for again after a while, not on every sync', async () => {
+  const searched = [];
+  const fg = friendGear.create({
+    site: { post: async () => null, search: async ({ query }) => { searched.push(query); return { posts: [] }; } },
+    startJob: () => 'job', jobStatus: () => null, isInstalled: () => false, retryAfter: 40,
+  });
+  fg.find({ slot: 'helmet', name: 'Bellmoto10-FCR' });
+  await tick();
+  assert.equal(fg.status('helmet', 'Bellmoto10-FCR').state, 'nomatch');
+  fg.find({ slot: 'helmet', name: 'Bellmoto10-FCR' });
+  await tick();
+  assert.equal(searched.length, 2, 'too soon: not again');
+  await new Promise((r) => setTimeout(r, 50));
+  fg.find({ slot: 'helmet', name: 'Bellmoto10-FCR' });
+  await tick();
+  assert.equal(searched.length, 4, 'later: searched again');
+  fg.find({ slot: 'suitPaint', name: 'OPOlitPROpub' });
+  await tick();
+  assert.equal(fg.status('suitPaint', 'OPOlitPROpub').state, 'nomatch', 'paints end as no match too');
+});

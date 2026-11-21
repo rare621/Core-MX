@@ -69,7 +69,7 @@ function noteMissingGear(st) {
 }
 const GEAR_ICON = { helmet: 'helmet', helmetPaint: 'helmet', gogglesPaint: 'helmet', bikePaint: 'bike', boots: 'boot', bootsPaint: 'boot', glovesPaint: 'glove' };
 function missingRowHtml(r, i) {
-  const why = r.find ? findLabel(r.find).replace(/ Find (it|the right one) below\.$/, '') : r.error || 'Couldn\'t be sent';
+  const why = r.find ? findLabel(r.find).replace(/ Find (it|the right one) below\.$/, '') : BOUND.test(r.error || '') ? 'Tied to their account (bought, or locked to them by its creator), so it can\'t be sent. You need your own copy.' : r.error || 'Couldn\'t be sent';
   return `<div class="friend-gear-row"><span class="slot-ico">${icon(GEAR_ICON[r.slot] || 'shirt')}</span><div><b>${esc(r.name)}</b><div class="muted">${esc(r.label || r.slot)}${r.riders.length ? ` · worn by ${esc(r.riders.join(', '))}` : ''}</div><small class="sync-warning">${esc(why)}</small>
     <div class="friend-session-actions">${r.source ? `<button class="btn btn-sm" data-missing-post="${i}">${icon('globe')}Open ${esc(r.source.title || 'its MXB Mods page')}</button>` : ''}<button class="btn btn-sm btn-primary" data-missing-find="${i}">${icon('search')}Search Get Mods</button></div></div></div>`;
 }
@@ -765,7 +765,7 @@ function findLabel(f) {
   return f.state === 'searching' ? 'Too big or locked to send. Looking for it on MXB Mods…'
     : f.state === 'installing' ? `Installing it from MXB Mods: ${f.title || 'download'}…`
     : f.state === 'installed' ? `Installed ${f.title || 'the MXB Mods download'}, but this item wasn't in it. Find the right one below.`
-    : f.state === 'nomatch' ? 'Too big or locked to send, and no match found on MXB Mods. Find it below.'
+    : f.state === 'nomatch' ? 'Couldn\'t be sent, and no match found on MXB Mods (CoreMX looks again every 10 minutes). Find it below.'
     : `Couldn't install it from MXB Mods${f.error ? `: ${f.error}` : ''}. Find it below.`;
 }
 // Only when every automatic option failed: the player's turn.

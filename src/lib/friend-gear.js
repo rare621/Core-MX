@@ -42,7 +42,7 @@ function matchDownload(post, name) {
   return null;
 }
 
-function create({ site, startJob, jobStatus, isInstalled, lookup = async () => ({}), reportBad = () => {}, enabled = () => true, onChange = () => {}, maxPosts = 8 }) {
+function create({ site, startJob, jobStatus, isInstalled, lookup = async () => ({}), reportBad = () => {}, enabled = () => true, onChange = () => {}, maxPosts = 8, retryAfter = 10 * 60 * 1000 }) {
   const items = new Map();   // "slot|name" -> item
   const keyOf = (slot, name) => `${slot}|${String(name || '').toLowerCase()}`;
 
@@ -113,8 +113,8 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
       // Pages only (a file that can also come through the service): no name search; the service next.
       if (item.pageOnly) { Object.assign(item, { state: 'nopage', jobId: null }); return onChange(item); }
       if (!item.steps.search) { item.steps.search = true; if (await bySearch(item)) return onChange(); }
-      Object.assign(item, { state: MODEL_TAB[item.slot] ? 'nomatch' : 'failed', jobId: null, error: item.error || (MODEL_TAB[item.slot] ? null : 'Not found on MXB Mods') });
-    } catch (e) { Object.assign(item, { state: 'failed', jobId: null, error: e.message }); }
+      Object.assign(item, { state: 'nomatch', jobId: null, doneAt: Date.now() });
+    } catch (e) { Object.assign(item, { state: 'failed', jobId: null, error: e.message, doneAt: Date.now() }); }
     onChange();
   }
 
@@ -128,6 +128,11 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
     const old = items.get(key);
     if (old) {
       if (!pageOnly && old.pageOnly && old.state === 'nopage') { Object.assign(old, { pageOnly: false, state: 'searching' }); next(old); }
+      // Nothing found earlier: look again after a while (someone may have added the page since).
+      else if (['nomatch', 'failed'].includes(old.state) && Date.now() - (old.doneAt || 0) >= retryAfter) {
+        Object.assign(old, { state: 'searching', error: null, steps: {}, tried: new Set(), catalogList: null, pageOnly: pageOnly && old.pageOnly });
+        next(old);
+      }
       return;
     }
     const item = { state: 'searching', slot, name, source, who, catalogKey, pageOnly, tried: new Set(), steps: {} };

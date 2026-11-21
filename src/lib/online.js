@@ -122,9 +122,21 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   }
   // A file the service couldn't deliver either: its download failed, the owner's upload hasn't come
   // after 3 minutes ('stalled'), or their CoreMX is closed ('offline'). The name search, then the player.
+  // The owner's CoreMX being closed for a moment (they haven't opened it yet, a restart) isn't a
+  // failure: only after 10 minutes offline does it move on. A failed download or a stalled upload
+  // (3 minutes) moves on at once.
+  const offlineSince = new Map();
+  const OFFLINE_GRACE = 10 * 60 * 1000;
+  function givenUp(it, now = Date.now()) {
+    if (it.state === 'failed' || it.state === 'stalled') return true;
+    if (it.state !== 'offline') return false;
+    if (!offlineSince.has(it.sha256)) offlineSince.set(it.sha256, now);
+    return now - offlineSince.get(it.sha256) >= OFFLINE_GRACE;
+  }
   function noteFailedItems(results) {
+    for (const r of results || []) for (const it of r.items || []) if (it.state !== 'offline') offlineSince.delete(it.sha256);
     for (const r of results || []) for (const it of r.items || []) {
-      if (!['failed', 'stalled', 'offline'].includes(it.state) || !it.value) continue;
+      if (!it.value || !givenUp(it)) continue;
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       findGear({ slot: it.slot, name: it.value, source: it.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(it.slot, it.value, cur, r.bike) });
     }
@@ -153,7 +165,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     for (const r of [...(paint.report || []), ...looksReports]) {
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       for (const it of r.items || []) {
-        if (!it.find || !DONE.has(it.find.state) || !['failed', 'stalled', 'offline'].includes(it.state)) continue;
+        if (!it.find || !DONE.has(it.find.state) || !givenUp(it)) continue;
         const key = `${it.slot}|${String(it.value).toLowerCase()}`;
         const row = rows.get(key) || { slot: it.slot, name: it.value, label: it.label, error: it.error || null, source: it.source || null, find: it.find, riders: [] };
         if (r.name && !row.riders.includes(r.name)) row.riders.push(r.name);

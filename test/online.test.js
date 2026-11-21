@@ -408,3 +408,24 @@ test('gear a rider could not send is installed from its MXB Mods page once, and 
   assert.equal(second[0].unavailable[0].state, 'have');
   assert.equal(asked.length, 1);
 });
+
+test('a rider whose CoreMX is offline gets 10 minutes before CoreMX looks elsewhere or asks you', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-offline-grace-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sha = 'd'.repeat(64);
+  const loadout = { id: 'rider', name: 'Rider', bike: 'Fixture', num: 2, equipped: [{ slot: 'suitPaint', value: 'Kit' }], unavailable: [],
+    items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: 10, needs: [], available: false }] };
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 27 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : /want$/.test(url) ? { states: { [sha]: 'offline' } } : {})));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const asked = [];
+  const { client } = fixture({
+    store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 'fixture-token', received: {} } : key === 'friends' ? [] : undefined, set: () => {} },
+    modsDir: () => root, haveMod: async () => true, findGear: (req) => asked.push(req.name),
+  });
+  assert.equal((await client.syncServerRiders('Server', ['rider']))[0].items[0].state, 'offline');
+  assert.deepEqual(asked, [], 'just offline: wait for their CoreMX');
+  now += 11 * 60 * 1000;
+  await client.syncServerRiders('Server', ['rider']);
+  assert.deepEqual(asked, ['Kit'], 'still offline after 10 minutes: look on MXB Mods');
+});
