@@ -180,3 +180,11 @@ test('plugin licence files are not copied into the plugins folder', () => {
   assert.equal(map(p).LICENSE, null);
   assert.equal(map(p)['mxbmrp3.dlo'], 'plugins/mxbmrp3.dlo');
 });
+
+test('a plugin made for several PiBoSo games installs only its MX Bikes .dlo', () => {
+  // MXBMRP3's zip: one .dlo per game (GP Bikes and Kart Racing Pro ones too) and a data folder.
+  const p = plan(files('mxbmrp3.dlo', 'mxbmrp3_gpb.dlo', 'mxbmrp3_krp.dlo', 'mxbmrp3_data/fonts/a.fnt', 'README.txt'), [40, 56]);
+  assert.deepEqual(map(p), { 'mxbmrp3.dlo': 'plugins/mxbmrp3.dlo', 'mxbmrp3_gpb.dlo': null, 'mxbmrp3_krp.dlo': null, 'mxbmrp3_data/fonts/a.fnt': 'plugins/mxbmrp3_data/fonts/a.fnt', 'README.txt': null });
+  const wrapped = plan(files('pack/plugins/tool.dlo', 'pack/plugins/tool_gpb.dlo'), [40, 56]);
+  assert.deepEqual(map(wrapped), { 'pack/plugins/tool.dlo': 'plugins/tool.dlo', 'pack/plugins/tool_gpb.dlo': null });
+});

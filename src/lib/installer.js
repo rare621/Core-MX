@@ -412,6 +412,10 @@ function plan(files, ctx, opts = {}) {
   // existing settings (.ini / .cfg) are kept when it is updated.
   const pluginsAt = (rel) => rel.split('/').findIndex((seg, i, all) => i < all.length - 1 && seg.toLowerCase() === 'plugins');
   const hasPluginsFolder = kind === 'plugin' && files.some((f) => pluginsAt(f.rel) >= 0);
+  // Some plugins ship one .dlo per PiBoSo game (MXBMRP3: mxbmrp3.dlo for MX Bikes, mxbmrp3_gpb.dlo for
+  // GP Bikes, mxbmrp3_krp.dlo for Kart Racing Pro). Only the MX Bikes one goes in; the others are for
+  // other games and are not copied.
+  const otherGame = (rel) => kind === 'plugin' && /_(gpb|krp|wrs)\.dl[oi]$/i.test(rel) && files.some((x) => /\.dlo$/i.test(x.rel) && !/_(gpb|krp|wrs)\.dl[oi]$/i.test(x.rel));
   const menuDest = kind === 'menuUi' ? menuDestinations(files) : null;
   // Translations: MX Bikes/ui/<language>.str; the language is chosen per profile in game.
   const special = kind === 'stand' ? standDestinations(files) : kind === 'pitboard' ? pitboardDestinations(files)
@@ -447,6 +451,7 @@ function plan(files, ctx, opts = {}) {
       const dest = at < 0 ? null : ['plugins', ...segs.slice(at + 1)].join('/');
       const exists = dest && ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest));
       const keep = exists && /\.(ini|cfg)$/i.test(dest);
+      if (otherGame(f.rel)) { entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: null, status: 'skip', how: 'other-game' }); continue; }
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest: keep ? null : dest, status: !dest || keep ? 'skip' : exists ? 'overwrite' : 'new', how: keep ? 'keep-settings' : 'game' });
       continue;
     }
@@ -463,7 +468,7 @@ function plan(files, ctx, opts = {}) {
     if (gameRoot) {
       const segs = f.rel.split('/').slice(strip);
       const fname = segs[segs.length - 1];
-      const skip = segs.length === 1 && (/\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname) || /^(license|licence|readme|changelog|notice|authors|credits|copying)$/i.test(fname));
+      const skip = otherGame(f.rel) || segs.length === 1 && (/\.(txt|md|url|pdf|html?|docx?|rtf|lnk|jpe?g|png|webp|gif)$/i.test(fname) || /^(license|licence|readme|changelog|notice|authors|credits|copying)$/i.test(fname));
       const dest = kind === 'animationGame' ? (/\.anm$/i.test(fname) ? `rider/animations/mx/${fname}` : null)
         : skip ? null : kind === 'plugin' ? (segs[0].toLowerCase() === 'plugins' ? segs.join('/') : ['plugins', ...segs].join('/')) : segs.join('/');
       const status = !dest ? 'skip' : ctx.installDir && fs.existsSync(path.join(ctx.installDir, dest)) ? 'overwrite' : 'new';
