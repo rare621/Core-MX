@@ -86,10 +86,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     }
     annotate(results);
   }
-  // A file you don't have from another rider: its MXB Mods page first (theirs, or the shared catalog),
-  // then the service (R2). Returns the fetch state while it's being installed from MXB Mods.
+  // Order for a file another rider shares: the service (R2) first; if that fails, the upload stalls or
+  // their CoreMX is closed, its MXB Mods page, the shared catalog, a name search, then the player (see
+  // noteFailedItems). Pages before R2 only with the setting online.pagesFirst = true (off by default).
   function viaPage(lo, it) {
-    if (cfg().pagesFirst === false) return null;
+    if (cfg().pagesFirst !== true) return null;
     const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     const name = it.value || cur[it.slot];
     if (!name) return null;
