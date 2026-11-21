@@ -52,3 +52,13 @@ test('a rider found on the server by name (their plugin not reporting) still sho
   ], game);
   assert.deepEqual(out.map((l) => [l.name, l.num, l.bikeId]), [['YaBoiChase917', 917, 'MX2OEM_2023_Kawasaki_KX250'], ['P', 5, 'B']]);
 });
+
+test('a paint for paid boots is not looked for or shown as its own problem: the boots are', () => {
+  const report = { items: [], unavailable: [
+    { slot: 'boots', label: 'A_Boots', state: 'unavailable', error: 'This file is tied to your account. Your friend needs their own copy.' },
+    { slot: 'bootsPaint', label: 'Boot paint: Black White Orange', state: 'unavailable', find: { state: 'nomatch' } },
+    { slot: 'suitPaint', label: 'Rider kit: OPOlitPROpub', state: 'unavailable', find: { state: 'nomatch' } },
+  ] };
+  const lines = looksText([{ id: 'r', num: 917, bikeId: 'b', equipped: [] }], [], 1, { r: report }).trim().split('\n').filter((l) => l.startsWith('wait'));
+  assert.deepEqual(lines, ['wait\t917\tb\tpaid\tA_Boots', 'wait\t917\tb\tnomatch\tOPOlitPROpub']);
+});

@@ -15,6 +15,14 @@ const PAINT_EVERY = 60 * 1000;
 const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint'];
 // Not fetched from MXB Mods for you: bought, or tied to the owner's account.
 const UNFETCHABLE = /paid|store-protected|tied to your account|account-bound/i;
+// A paint for a model that can't be fetched (paid, or tied to the owner's account) is no use without
+// that model: not looked for, not asked about. Returns the model's name, or null.
+const PAINT_MODEL = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
+function blockedBy(report, slot) {
+  const m = PAINT_MODEL[slot];
+  const u = m && (report.unavailable || []).find((x) => x.slot === m && x.state !== 'have' && UNFETCHABLE.test(x.error || ''));
+  return u ? String(u.label || '').replace(/^[^:]*:\s*/, '') || m : null;
+}
 const catalogKeys = require('./gear-keys');
 const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
 // "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
@@ -24,11 +32,11 @@ const WAIT_ITEM = { page: 'installing', waiting: 'uploading', uploading: 'upload
 function waitLines(lo, report, clean) {
   if (!report) return [];
   const out = [];
-  for (const it of report.items || []) if (WAIT_ITEM[it.state]) out.push([WAIT_ITEM[it.state], it.value || it.label]);
+  for (const it of report.items || []) if (WAIT_ITEM[it.state] && !blockedBy(report, it.slot)) out.push([WAIT_ITEM[it.state], it.value || it.label]);
   for (const u of report.unavailable || []) {
-    if (u.state === 'have') continue;
+    if (u.state === 'have' || blockedBy(report, u.slot)) continue;
     const find = u.find && { searching: 'installing', installing: 'installing', nomatch: 'nomatch', failed: 'nomatch', installed: 'nomatch' }[u.find.state];
-    if (find) { out.push([find, String(u.label || '').replace(/^[^:]*:s*/, '')]); continue; }
+    if (find) { out.push([find, String(u.label || '').replace(/^[^:]*:\s*/, '')]); continue; }
     const code = u.included === 'bike' ? 'bike' : /paid|store-protected|tied to your account|account-bound/i.test(u.error || '') ? 'paid' : null;
     if (code) out.push([code, String(u.label || '').replace(/^[^:]*:\s*/, '')]);
   }
@@ -97,7 +105,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         const key = `${r.id}|${u.slot}|${String(cur[u.slot] || '').toLowerCase()}`;
         if (u.state === 'unavailable') {
           seenMissing.add(key);
-          if (!UNFETCHABLE.test(u.error || '')) {
+          if (!UNFETCHABLE.test(u.error || '') && !blockedBy(r, u.slot)) {
             findGear({ slot: u.slot, name: cur[u.slot], source: u.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(u.slot, cur[u.slot], cur, r.bike) });
             if (gearStatus(u.slot, cur[u.slot])?.state === 'installed') gearStillMissing(u.slot, cur[u.slot]);
           }
@@ -136,7 +144,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   function noteFailedItems(results) {
     for (const r of results || []) for (const it of r.items || []) if (it.state !== 'offline') offlineSince.delete(it.sha256);
     for (const r of results || []) for (const it of r.items || []) {
-      if (!it.value || !givenUp(it)) continue;
+      if (!it.value || !givenUp(it) || blockedBy(r, it.slot)) continue;
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       findGear({ slot: it.slot, name: it.value, source: it.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(it.slot, it.value, cur, r.bike) });
     }
@@ -165,7 +173,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     for (const r of [...(paint.report || []), ...looksReports]) {
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       for (const it of r.items || []) {
-        if (!it.find || !DONE.has(it.find.state) || !givenUp(it)) continue;
+        if (!it.find || !DONE.has(it.find.state) || !givenUp(it) || blockedBy(r, it.slot)) continue;
         const key = `${it.slot}|${String(it.value).toLowerCase()}`;
         const row = rows.get(key) || { slot: it.slot, name: it.value, label: it.label, error: it.error || null, source: it.source || null, find: it.find, riders: [] };
         if (r.name && !row.riders.includes(r.name)) row.riders.push(r.name);
@@ -174,9 +182,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       for (const u of r.unavailable || []) {
         const name = cur[u.slot];
         if (u.state !== 'unavailable' || !name || u.included === 'bike' || /paid|store-protected/i.test(u.error || '')) continue;
+        if (blockedBy(r, u.slot)) continue;
         if (!(u.find ? DONE.has(u.find.state) : /tied to your account|account-bound/i.test(u.error || ''))) continue;
         const key = `${u.slot}|${String(name).toLowerCase()}`;
-        const row = rows.get(key) || { slot: u.slot, name, label: u.label, error: u.error, source: u.source || null, find: u.find || null, riders: [] };
+        const paints = [...(r.unavailable || []), ...(r.items || []).filter((it) => it.state !== 'have' && it.state !== 'downloaded')].filter((p) => PAINT_MODEL[p.slot] === u.slot).map((p) => cur[p.slot] || p.value).filter(Boolean);
+        const row = rows.get(key) || { slot: u.slot, name, label: u.label, error: u.error, source: u.source || null, find: u.find || null, riders: [], paints };
         if (r.name && !row.riders.includes(r.name)) row.riders.push(r.name);
         rows.set(key, row);
       }
