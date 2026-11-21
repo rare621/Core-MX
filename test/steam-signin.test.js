@@ -93,3 +93,20 @@ test('Steam saying the answer is not genuine stops the sign-in', async (t) => {
   assert.equal(r.link, null);
   assert.equal(r.done, undefined);
 });
+
+test('behind the website proxy, Steam sends people back to the public address, not 127.0.0.1', async (t) => {
+  const { base, call } = await service(t);
+  const viaProxy = await fetch(base + '/v1/auth/steam/start', { method: 'POST', headers: { 'content-type': 'application/json', 'x-coremx-public-origin': 'https://coremx.app' }, body: '{}' }).then((r) => r.json());
+  assert.match(new URL(viaProxy.url).searchParams.get('openid.return_to'), /^https:\/\/coremx\.app\/v1\/auth\/steam\/return\?state=/);
+  assert.equal(new URL(viaProxy.url).searchParams.get('openid.realm'), 'https://coremx.app');
+  const bad = await fetch(base + '/v1/auth/steam/start', { method: 'POST', headers: { 'content-type': 'application/json', 'x-coremx-public-origin': 'javascript:alert(1)' }, body: '{}' }).then((r) => r.json());
+  assert.match(new URL(bad.url).searchParams.get('openid.return_to'), /^http:\/\/127\.0\.0\.1:/, 'anything that is not an https origin is ignored');
+  const direct = (await call(null, '/v1/auth/steam/start', {})).data;
+  assert.match(new URL(direct.url).searchParams.get('openid.return_to'), /^http:\/\/127\.0\.0\.1:/);
+});
+
+test('--publicurl sets the return address', async (t) => {
+  const { call } = await service(t, ['--publicurl', 'https://coremx.app']);
+  const r = (await call(null, '/v1/auth/steam/start', {})).data;
+  assert.match(new URL(r.url).searchParams.get('openid.return_to'), /^https:\/\/coremx\.app\/v1\/auth\/steam\/return\?state=/);
+});
