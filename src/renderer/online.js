@@ -34,7 +34,7 @@ async function renderOnline(c) {
   }).join('');
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar"><h2>Online</h2>${onlineTabs()}<span class="grow"></span><button class="btn" data-act="address-discovery">${icon('globe')}Automatic addresses</button></div>
-    <div class="scroller"><div class="online-layout"><section class="online-main">
+    <div class="scroller"><div id="onlineAlert"></div><div class="online-layout"><section class="online-main">
       <div class="section-title" style="display:flex">Live servers<span class="grow"></span><span id="allSrvMeta" class="muted" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
       <div id="allServers"><div class="loadmore"><div class="spinner"></div></div></div>
       </section><aside class="online-side">
