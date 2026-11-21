@@ -1,9 +1,7 @@
-CoreMX 1.0.48
+CoreMX 1.0.49
 
-- Sign in with Steam now confirms account ownership through Steam. Existing accounts keep their friends and settings when their owners sign in. Older app versions cannot create new accounts on service v24 by default.
-- Gear sync sends creators' original files, never decrypted copies. Sync keeps needed files available, removes unused uploads sooner, and offers clearer cleanup and waiting states.
-- Online servers with the same name stay separate; stale hosted sessions disappear when the host leaves. Join warns when other riders use bikes you do not have.
-- First-time setup now has a guided tour and tips. Friends has a leaderboard tab, and the in-game overlay has refreshed panels and rider details.
-- Installer categories, update checks, and several setup and documentation details have been improved.
+- Steam sign-in now returns to `https://coremx.app` when the online service runs behind the website proxy.
+- Existing online accounts get a clear **Verify with Steam** option at startup, in onboarding, and on the Friends page.
+- Service v25 requires Steam verification for online features. The app explains what is paused and lets riders verify or come back later. Announcements remain available and appear only once per PC.
 
-Includes **CoreMX-server-v24.zip**. The live service was v22 when this release was prepared. **Update and restart the online service** to enable Steam-verified sign-in and the new online and sync behavior. Stop the server, replace its code from the ZIP, and restart it. Keep `mxbm-data.json`, `admin.key`, `mxbm-files`, and your private `r2.json`; see `server/README.md`. Users should update the app to 1.0.48, then sign in with Steam to verify existing accounts.
+Includes **CoreMX-server-v25.zip**. The live service was v24 when this release was prepared. **Publish the app first, then update and restart the online service**; version 1.0.48 does not show the verification prompt required by v25. Stop the server, replace its code from the ZIP, and restart it. Keep `mxbm-data.json`, `admin.key`, `mxbm-files`, and your private `r2.json`; see `server/README.md`. Existing account owners should update CoreMX to 1.0.49 and choose **Verify with Steam** to keep using online features.
