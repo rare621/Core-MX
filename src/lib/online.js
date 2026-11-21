@@ -13,6 +13,8 @@ const PAINT_EVERY = 60 * 1000;
 
 // Live looks file for the plugin (see doSyncLooks below and plugin/mxbm_presence.c).
 const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint'];
+// Not fetched from MXB Mods for you: bought, or tied to the owner's account.
+const UNFETCHABLE = /paid|store-protected|tied to your account|account-bound/i;
 const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
 // "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
 // sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
@@ -24,6 +26,8 @@ function waitLines(lo, report, clean) {
   for (const it of report.items || []) if (WAIT_ITEM[it.state]) out.push([WAIT_ITEM[it.state], it.value || it.label]);
   for (const u of report.unavailable || []) {
     if (u.state === 'have') continue;
+    const find = u.find && { searching: 'installing', installing: 'installing', nomatch: 'nomatch', failed: 'nomatch', installed: 'nomatch' }[u.find.state];
+    if (find) { out.push([find, String(u.label || '').replace(/^[^:]*:s*/, '')]); continue; }
     const code = u.included === 'bike' ? 'bike' : /paid|store-protected|tied to your account|account-bound/i.test(u.error || '') ? 'paid' : null;
     if (code) out.push([code, String(u.label || '').replace(/^[^:]*:\s*/, '')]);
   }
@@ -44,7 +48,7 @@ function looksText(loadouts, reload, stamp, reports = {}) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, installSource = () => {}, portMapper = null, firewall = null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, findGear = () => {}, gearStatus = () => null, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -72,10 +76,27 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         const key = `${r.id}|${u.slot}|${String(cur[u.slot] || '').toLowerCase()}`;
         if (u.state === 'unavailable') {
           seenMissing.add(key);
-          if (u.source && !/paid|store-protected/i.test(u.error || '')) installSource(u.source, r.name || '');
+          if (!UNFETCHABLE.test(u.error || '')) findGear({ slot: u.slot, name: cur[u.slot], source: u.source || null, who: r.name || '' });
         } else if (u.state === 'have' && seenMissing.delete(key)) pendingReload.add(RELOAD_FOR[u.slot]);
       }
     }
+    annotate(results);
+  }
+  // Each missing item's MXB Mods fetch state (u.find: searching, installing, installed, nomatch, failed).
+  function annotate(results) {
+    for (const r of results || []) {
+      const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
+      for (const u of r.unavailable || []) {
+        const st = u.state === 'unavailable' && cur[u.slot] ? gearStatus(u.slot, cur[u.slot]) : null;
+        if (st) u.find = st; else delete u.find;
+      }
+    }
+  }
+  // A fetch moved on: show it in CoreMX and in the game.
+  function refreshGearStatus() {
+    annotate(paint.report);
+    onChange(status());
+    if (current?.inEvent) { looksKey = ''; syncLooks(); }
   }
   function noteDownloads(results) {
     noteUnavailable(results);
@@ -683,6 +704,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!(store.get('friends') || []).some((f) => f.code === friendId)) throw new Error('Add this rider as a friend first');
     await syncFriends();
     const results = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, friendId });
+    annotate(results);
     if (results[0]) {
       const old = (paint.report || []).find((lo) => lo.id === friendId);
       const viewKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.sha256, it.state, it.needs, it.error]), lo.equipped, lo.unavailable]);
@@ -723,6 +745,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const loadouts = await serverRiderLoadouts(server, where);
     const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
     markNeeded(report);
+    noteUnavailable(report);
     await paintsync.requestMissing(call, report); // their owners start uploading now
     return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
   }
@@ -771,7 +794,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
     if (reload.size) await onInstalled();
     const reports = Object.fromEntries(results.map((r) => [r.id, r]));
-    const states = results.map((r) => [r.id, (r.items || []).map((it) => it.state), (r.unavailable || []).map((u) => u.state)]);
+    const states = results.map((r) => [r.id, (r.items || []).map((it) => it.state), (r.unavailable || []).map((u) => [u.state, u.find?.state])]);
     const key = JSON.stringify([riders.map((r) => [r.num, r.bikeId, r.equipped]), states]) + [...reload].join();
     if (key === looksKey && !reload.size) return;
     looksKey = key;
@@ -816,7 +839,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, refreshGearStatus, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

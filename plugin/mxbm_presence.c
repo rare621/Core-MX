@@ -1401,10 +1401,10 @@ static const GameList *ovModelList(int row) {
 
 /* The first reason code CoreMX gave for this rider's missing items (uploading first), or NULL. */
 static const char *riderWaitCode(const LookStatus *st) {
-  static const char *const ORDER[5] = { "uploading", "offline", "bike", "paid", "failed" };
+  static const char *const ORDER[7] = { "uploading", "installing", "offline", "bike", "paid", "nomatch", "failed" };
   int k, i;
   lock();
-  for (k = 0; k < 5; k++) for (i = 0; i < g_waitCount; i++)
+  for (k = 0; k < 7; k++) for (i = 0; i < g_waitCount; i++)
     if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { unlock(); return ORDER[k]; }
   unlock();
   return NULL;
@@ -1423,10 +1423,10 @@ static unsigned char *riderRecord(unsigned char *base, const LookStatus *st) {
 
 /* The most useful reason CoreMX gave for this rider's missing items (uploading first). */
 static int riderWait(const LookStatus *st, char *line) {
-  static const char *const ORDER[5] = { "uploading", "offline", "bike", "paid", "failed" };
+  static const char *const ORDER[7] = { "uploading", "installing", "offline", "bike", "paid", "nomatch", "failed" };
   LookWait w; int found = 0, k, i;
   lock();
-  for (k = 0; k < 5 && !found; k++)
+  for (k = 0; k < 7 && !found; k++)
     for (i = 0; i < g_waitCount; i++)
       if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { w = g_waits[i]; found = 1; break; }
   unlock();
@@ -1438,6 +1438,8 @@ static int riderWait(const LookStatus *st, char *line) {
     else if (!strcmp(w.code, "offline")) sprintf(line, "%.28s: waiting for %.24s%s CoreMX to come online", w.label, who, sfx);
     else if (!strcmp(w.code, "bike")) sprintf(line, "%.32s: comes with a bike you don't have", w.label);
     else if (!strcmp(w.code, "paid")) sprintf(line, "%.36s: paid, not shared", w.label);
+    else if (!strcmp(w.code, "installing")) sprintf(line, "%.30s: CoreMX is installing it from MXB Mods...", w.label);
+    else if (!strcmp(w.code, "nomatch")) sprintf(line, "%.30s: not found on MXB Mods, see CoreMX Friends", w.label);
     else sprintf(line, "%.36s: couldn't be downloaded", w.label);
   }
   return 1;
@@ -1751,7 +1753,7 @@ static void riderTodo(unsigned char *base, LookStatus *st, char *status, char *t
   else if (waiting) { strcpy(status, "Ready: pits & back"); sprintf(todo, "Go to the pits and back to the track to see their %.30s", st->models); *dot = 0xFFFFB46C; }
   else if (st->missing) {
     const char *code = riderWaitCode(st);
-    strcpy(status, code && !strcmp(code, "uploading") ? "Uploading" : code && !strcmp(code, "offline") ? "Their CoreMX is off" : code && !strcmp(code, "paid") ? "Paid gear" : "Missing items");
+    strcpy(status, code && !strcmp(code, "uploading") ? "Uploading" : code && !strcmp(code, "offline") ? "Their CoreMX is off" : code && !strcmp(code, "paid") ? "Paid gear" : code && !strcmp(code, "installing") ? "Installing" : code && !strcmp(code, "nomatch") ? "Needs you" : "Missing items");
     if (!riderWait(st, todo)) {
       if (st->firstMissing[0]) sprintf(todo, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
       else sprintf(todo, "%d item%s not available to you yet", st->missing, st->missing == 1 ? "" : "s");
