@@ -3611,7 +3611,8 @@ api.on('jobs:update', (j) => {
   refreshInlineDownloads();
   if ((!prev || prev.status !== j.status) && $('.dl-summary')) $('.dl-summary').outerHTML = downloadSummaryHtml([...S.jobs.values()]);
   if (prev && prev.status !== j.status) {
-    if (j.status === 'done') toast(`Installed <b>${esc(j.title)}</b>`, 'ok', 4500);
+    if (j.status === 'done' && j.appId) appSavedPopup(j);
+    else if (j.status === 'done') toast(`Installed <b>${esc(j.title)}</b>`, 'ok', 4500);
     if (j.status === 'error' && j.error !== 'Cancelled') toast(`<b>${esc(j.title)}</b>: ${esc(j.error)}`, 'err', 7000);
     if (j.status === 'browser') toast(`<b>${esc(j.title)}</b> needs the browser window — click its download button there.`, 'info', 6000);
     renderRail();
@@ -3620,6 +3621,22 @@ api.on('jobs:update', (j) => {
   if (S.view === 'downloads' && (!S.dlTab || S.dlTab === 'downloads')) updateJobInPlace(j);
   else if (S.view === 'downloads' && S.dlTab === 'recent' && j.status === 'done') renderRecentInstalls($('#content'));
 });
+// A program (setup .exe, or a tool in a zip) or files for making mods were downloaded: they are saved
+// to Downloads, not installed into the game, and CoreMX never runs programs. Say where to start them.
+function appSavedPopup(j) {
+  const m = modal({
+    title: j.appFiles ? 'Files saved to Downloads' : 'Program downloaded, not installed yet', size: 'sm',
+    body: j.appFiles
+      ? `<p><b>${esc(j.title)}</b> is a set of files for making mods (fonts, templates or 3D models), not something the game loads.</p><p>They're saved in your Downloads folder. Open them any time from <b>My Mods → Apps</b>.</p>`
+      : `<p><b>${esc(j.title)}</b> comes as a program (an installer or a tool). CoreMX never runs programs by itself, so nothing is in your game yet.</p><p>To install it: <b>My Mods → Apps</b>, then <b>Run</b>. Close MX Bikes first if it's a plugin.</p>`,
+    foot: `<span class="grow"></span><button class="btn" data-close>OK</button><button class="btn btn-primary" data-app-open>${icon('folder')}Open Apps</button>`,
+  });
+  m.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-app-open]')) return;
+    m.close();
+    S.lib.scope = 'mods'; S.lib.tab = 'apps'; go('library');
+  });
+}
 api.on('jobs:review', (id) => {
   const j = S.jobs.get(id);
   if (j) toast(`<b>${esc(j.title)}</b> is ready — review where it goes.`, 'info', 4000);

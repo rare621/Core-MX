@@ -566,7 +566,7 @@ async function handleImage(request) {
 function jobView(j) {
   const p = j.plan;
   return {
-    id: j.id, title: j.title, postId: j.postId, url: j.url, link: j.link, image: j.image, status: j.status, error: j.error,
+    id: j.id, title: j.title, postId: j.postId, appId: j.appId || null, appFiles: !!(j.appId && (store.get('apps') || []).find((a) => a.id === j.appId)?.files), url: j.url, link: j.link, image: j.image, status: j.status, error: j.error,
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
     createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.equipCandidates, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
