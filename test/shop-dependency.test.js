@@ -13,14 +13,16 @@ test('a declared numbered helmet matches installed variants without accepting an
 
 test('shop popup downloads record their product separately from the requesting paint listing', () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  let download, fields;
-  const context = vm.createContext({ session: { fromPartition: () => ({ setUserAgent() {}, on: (_, fn) => { download = fn; } }) }, site: { UA: 'test' }, browserJobs: new Map(), jobs: new Map(), shopDownloads: new Map([[42, { shop: 'mxbs', link: 'https://mxbikes-shop.com/downloads/6-helmet/' }]]), newJob: (f) => { fields = f; return { ...f, stageDir: 'test-stage' }; }, send() {}, emitJob() {}, fs: { mkdirSync() {} }, path, hosts: { safeName: (name) => name } });
+  let download, fields, hidden = 0;
+  const shopWindow = { isDestroyed: () => false, hide: () => { hidden++; } };
+  const context = vm.createContext({ session: { fromPartition: () => ({ setUserAgent() {}, on: (_, fn) => { download = fn; } }) }, site: { UA: 'test' }, browserJobs: new Map(), jobs: new Map(), shopDownloads: new Map([[42, { shop: 'mxbs', link: 'https://mxbikes-shop.com/downloads/6-helmet/' }]]), newJob: (f) => { fields = f; return { ...f, stageDir: 'test-stage' }; }, send() {}, emitJob() {}, fs: { mkdirSync() {} }, path, hosts: { safeName: (name) => name }, mainWin: null, BrowserWindow: { fromWebContents: () => shopWindow } });
   vm.runInContext(source.slice(source.indexOf('function setupDownloadsSession()'), source.indexOf('function registerIpc()')), context);
   context.setupDownloadsSession();
   download({}, { getFilename: () => '6Helmet.pkz', setSavePath() {}, on() {}, once() {} }, { id: 42 });
   assert.equal(fields.shopKey, 'https://mxbikes-shop.com/downloads/6-helmet/');
   assert.equal(fields.link, fields.shopKey);
   assert.equal(fields.postId, undefined);
+  assert.equal(hidden, 1, 'the shop window is put away while the file downloads');
 });
 
 test('shop dependency action opens a shop popup instead of starting a paint download or external browser', async () => {
