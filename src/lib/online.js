@@ -70,7 +70,8 @@ const ADMIN_STEAM_ID = '76561198098586128';
 
 function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, findGear = () => {}, gearStatus = () => null, gearStillMissing = () => {}, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
-  let gameRunning = false, pluginUpdating = false;
+  let gameRunning = false, pluginUpdating = false, pluginLoaded = null;
+  const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
   let lastSent = '';
   let lastSentAt = 0;
   let lastError = null;
@@ -267,7 +268,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
       pluginCache = { key, installed: !!installed, available: !!available, needsUpdate };
     }
-    return { installed: pluginCache.installed, available: pluginCache.available, needsUpdate: pluginCache.needsUpdate, path: target };
+    return { installed: pluginCache.installed, available: pluginCache.available, needsUpdate: pluginCache.needsUpdate, path: target, loaded: pluginLoaded };
   }
 
   // ---------- backend calls ----------
@@ -358,6 +359,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // stays removed).
     if (!gameRunning) updatePluginIfNeeded();
     if (!gameRunning) next = null; // stale file from a game that has closed
+    // The plugin writes its game's process id: none, or a closed process, while MX Bikes runs means the
+    // plugin isn't loaded in this game (installed after the game started).
+    pluginLoaded = gameRunning ? !!(next && Number(next.pid) > 0 && pidAlive(Number(next.pid))) : null;
     if (next && next.inEvent && next.server) {
       // Remember which address this server name had when we joined it from the app.
       const known = cfg().addresses || {};

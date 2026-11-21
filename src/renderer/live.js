@@ -160,6 +160,21 @@ function setupCardHtml(st, where) {
   return `<div class="set-card live-setup"><h3>Live servers & friends</h3>${pluginRow}${svcRow}</div>`;
 }
 
+// What stops online features from working, big and at the top of Online and Friends: not signed in
+// with Steam, not verified, no game plugin, an old plugin, or MX Bikes started before the plugin.
+function setupAlertHtml(st) {
+  if (!st) return '';
+  const p = st.plugin, sv = st.service, out = [];
+  const row = (ico, title, text, button) => `<div class="setup-alert">${icon(ico)}<div><b>${title}</b><span>${text}</span></div>${button || ''}</div>`;
+  if (sv.signingIn) out.push(row('steam', sv.signingIn.confirmed ? 'Steam confirmed your account' : 'Waiting for Steam…', sv.signingIn.confirmed ? 'If your browser asks, allow it to open CoreMX.' : "Sign in on Steam's page in your browser.", '<button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button>'));
+  else if (!sv.connected && sv.defaultUrl) out.push(row('steam', "You're not signed in with Steam", 'Friends, live servers, gear sharing and other riders in your overlay are off until you sign in. Steam’s own page opens in your browser.', `<button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Sign in with Steam</button>`));
+  else if (sv.connected && sv.verified === false) out.push(row('steam', 'Verify your account with Steam', 'Online features are off until you do. Friends and settings stay.', `<button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button>`));
+  if (p.available && !p.installed) out.push(row('alert', "The game plugin isn't installed", `Without it friends can't see which server you're on, riders on your server don't see your gear, and the in-game overlay doesn't work.${st.game.running ? ' Close MX Bikes first.' : ''}`, '<button class="btn btn-sm btn-primary" data-act="live-plugin-install">Install plugin</button>'));
+  else if (p.needsUpdate) out.push(row('alert', 'Update the game plugin', st.game.running ? 'Close MX Bikes and CoreMX updates it by itself.' : 'This version of CoreMX comes with a newer plugin.', st.game.running ? '' : '<button class="btn btn-sm btn-primary" data-act="live-plugin-install">Update plugin</button>'));
+  else if (p.installed && st.game.running && p.loaded === false) out.push(row('alert', 'Restart MX Bikes to turn on the plugin', 'MX Bikes was already running when the plugin was installed, and the game only loads plugins when it starts. Until then friends can’t see your server and the overlay is off.'));
+  return out.join('');
+}
+
 // "You're on <server> · <track>" while the plugin reports a session.
 function drawYouAreOn() {
   const box = $('#youAreOn');
@@ -191,7 +206,10 @@ async function drawLiveServers(refresh) {
   if (!box) return;
   const st = await liveStatus();
   const meta = $('#allSrvMeta');
-  const setup = setupCardHtml(st, 'servers');
+  const alertBox = $('#onlineAlert'), alertHtml = setupAlertHtml(st);
+  // The banners at the top say what to do; the setup card would only repeat them.
+  const setup = !alertHtml ? setupCardHtml(st, 'servers') : st && !st.service.connected ? '<div class="set-card muted">Live servers show here once you’re signed in with Steam.</div>' : '';
+  if (alertBox && alertBox._lastHtml !== alertHtml) { alertBox.innerHTML = alertHtml; alertBox._lastHtml = alertHtml; }
   if (!st || !st.service.connected) { if (box._lastHtml !== setup) { box.innerHTML = setup; box._lastHtml = setup; } if (meta) meta.textContent = ''; return; }
   await refreshLiveList('servers', refresh);
   if ($('#allServers') !== box) return;
@@ -549,7 +567,7 @@ async function renderFriends(c) {
 
   const ps = st && st.paintSync;
   const steam = S.accounts.steam || {};
-  const banner = !st ? '' : !connected && (st.service.needsSignIn || st.service.signingIn)
+  const banner = !st ? '' : setupAlertHtml(st) && (!connected || st.service.verified === false || st.service.signingIn) ? '' : !connected && (st.service.needsSignIn || st.service.signingIn)
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div>${st.service.signingIn ? (st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser.") : '<b>Sign in with Steam</b> to see friends, live servers and share gear. Steam\'s own page opens in your browser.'}</div>${st.service.signingIn ? '<button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button>' : `<button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Sign in with Steam</button>`}</div>`
     : !connected
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div><b>You're offline.</b> ${st.service.defaultUrl ? "Friends' status and paint sync are paused until the online service is reachable." : 'Online features are not set up in this copy of the app.'}</div>${st.service.defaultUrl ? `<button class="btn btn-sm" data-act="live-connect">Try again</button>` : ''}</div>`
@@ -559,7 +577,8 @@ async function renderFriends(c) {
     ? `<div class="fr-banner tip">${icon('steam')}<div>${st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser."}</div><button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button></div>`
     : `<div class="fr-banner on"><span class="fr-dot ride"></span><div>Online as <b>${esc(st.service.name || steam.name || '')}</b>${st.service.error ? ` · <span style="color:var(--warn)">${esc(st.service.error)}</span>` : ''}</div>
         ${ps && ps.enabled ? `<span class="muted" style="font-size:12px">${ps.busy ? 'Syncing paints…' : ps.at ? `Paints synced ${esc(timeAgo(ps.at))}` : ''}</span>` : ''}</div>`;
-  const pluginTip = st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
+  const alert = setupAlertHtml(st);
+  const pluginTip = alert ? '' : st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
     ? `<div class="fr-banner tip">${icon('info')}<div>${st.plugin.needsUpdate ? 'Close MX Bikes and update the game plugin to report server sessions.' : 'Install the game plugin so friends can see which server you\'re on.'}</div><button class="btn btn-sm" data-act="live-plugin-install">${st.plugin.needsUpdate ? 'Update plugin' : 'Install'}</button></div>` : '';
   const missing = connected ? (ps?.needsYou || []).length : 0;
   const missingTip = missing ? `<div class="fr-banner tip">${icon('alert')}<div><b>${missing} item${missing === 1 ? '' : 's'} of other riders' gear</b> CoreMX couldn't find by itself.</div><button class="btn btn-sm btn-primary" data-missing-open-all>Missing gear</button></div>` : '';
@@ -600,8 +619,8 @@ async function renderFriends(c) {
     <div class="toolbar"><h2>Friends</h2>${c.id === 'content' ? `<div class="seg-tabs"><button class="${tab === 'friends' ? 'active' : ''}" data-friends-tab="friends">${icon('users')}Friends</button><button class="${tab === 'board' ? 'active' : ''}" data-friends-tab="board">${icon('clock')}Leaderboard</button><button class="${tab === 'sync' ? 'active' : ''}" data-friends-tab="sync">${icon('settings')}Sync settings</button></div>` : ''}<div class="grow"></div>
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
       ${c.id === 'content' ? '' : `<button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button>`}</div>
-    <div class="scroller">${tab === 'board' ? `<div class="fr-page">${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${missingTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
-      <aside class="fr-side">${meCard}${banner}${pluginTip}${missingTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
+    <div class="scroller">${tab === 'board' ? `<div class="fr-page">${alert}${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${alert}${banner}${pluginTip}${missingTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
+      <aside class="fr-side">${alert}${meCard}${banner}${pluginTip}${missingTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
       <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
       ${S.live.friendsErr && connected ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length

@@ -990,3 +990,13 @@ select option { background: var(--panel); }
 
 /* Verify with Steam pop-up */
 .verify-list { margin: 8px 0 12px; padding-left: 20px; line-height: 1.6; }
+
+/* What stops online features from working (Online and Friends): hard to miss. */
+.setup-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 16px; margin: 0 0 14px; border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, var(--panel, transparent)); }
+.setup-alert > svg { flex: none; width: 22px; height: 22px; color: var(--warn); }
+.setup-alert > div { flex: 1 1 200px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.setup-alert b { font-size: 14px; }
+.setup-alert span { color: var(--muted, inherit); font-size: 12.5px; line-height: 1.4; }
+.setup-alert .btn { flex: none; }
+.fr-side .setup-alert .btn { flex: 1 1 100%; justify-content: center; }
