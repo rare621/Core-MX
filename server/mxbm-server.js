@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 25;
+const VERSION = 26;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -66,6 +66,12 @@ const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
 
 const SERVER_TTL = 2 * 60 * 1000;    // live rows only: the manager reports every 30 seconds
 const ONLINE_TTL = 2 * 60 * 1000;    // a rider counts as online for 2 min after their last report
+// When each account's CoreMX last talked to the service at all (any signed-in request), in memory. An
+// app counts as online from this too, so older or not-yet-verified apps (whose reports v25+ refuses)
+// still show in the online count and in Admin.
+const lastHeard = new Map();
+const heardRecently = (id, now = Date.now()) => now - (lastHeard.get(id) || 0) < ONLINE_TTL;
+const onlineCount = () => { const now = Date.now(), ids = new Set(); for (const [id, p] of presence) if (now - p.at < ONLINE_TTL) ids.add(id); for (const [id, at] of lastHeard) if (now - at < ONLINE_TTL) ids.add(id); return ids.size; };
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
@@ -264,9 +270,9 @@ function adminActivity(days = 30) {
   for (const { date } of daily) for (const id of db.activity[date] || []) counted.set(id, (counted.get(id) || 0) + 1);
   // One row per account (Steam ID), so a name never shows twice for the same person.
   const users = Object.entries(db.users).map(([id, u]) => {
-    const p = presence.get(id), online = !!(p && now - p.at < ONLINE_TTL), st = (online && p.state) || {};
+    const p = presence.get(id), reporting = !!(p && now - p.at < ONLINE_TTL), online = reporting || heardRecently(id, now), st = (reporting && p.state) || {};
     return { id, name: u.name || '', createdAt: u.createdAt || null, lastSeen: u.lastSeen || null, online, inGame: !!st.inGame, server: st.inEvent ? str(st.server, 64) : '', track: st.inEvent ? str(st.trackName || st.trackId, 64) : '', activeDays: counted.get(id) || 0 };
-  }).sort((a, b) => (b.online - a.online) || ((b.lastSeen || 0) - (a.lastSeen || 0)));
+  }).sort((a, b) => (b.online - a.online) || (b.inGame - a.inGame) || ((b.lastSeen || 0) - (a.lastSeen || 0)));
   const within = (ms) => users.filter((u) => u.lastSeen && now - u.lastSeen < ms).length;
   return {
     summary: { accounts: users.length, onlineNow: users.filter((u) => u.online).length, inGame: users.filter((u) => u.online && u.inGame).length, today: (db.activity[dayKey(now)] || []).length,
@@ -281,6 +287,7 @@ function auth(req) {
   const h = hash(m[1]);
   for (const [id, u] of Object.entries(db.users)) if (u.tokenHash === h || (Array.isArray(u.tokens) && u.tokens.includes(h))) {
     markActive(id);
+    lastHeard.set(id, Date.now());
     // Any signed-in request means the user has CoreMX open (synced files stay while seen within INACTIVE_MS).
     if (Date.now() - (u.lastSeen || 0) > 60000) { u.lastSeen = Date.now(); save(); }
     return { id, user: u };
@@ -340,7 +347,7 @@ function presenceView(id, viewer = []) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'on-demand', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'on-demand', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: onlineCount(), servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // Old apps (before Sign in with Steam) claimed a Steam ID without proof. Closed unless
   // --openregister yes; accounts made this way are not verified.
@@ -507,7 +514,7 @@ const routes = {
       cleanServers();
     }
     save();
-    return [200, { ok: true, activeUsers: [...presence.values()].filter((p) => Date.now() - p.at < ONLINE_TTL).length, upload: toUpload(me.user) }];
+    return [200, { ok: true, activeUsers: onlineCount(), upload: toUpload(me.user) }];
   },
 
   'GET /v1/servers': async (req, body, me) => {
