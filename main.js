@@ -581,7 +581,12 @@ function jobView(j) {
     },
   };
 }
-function emitJob(j) { if (['done', 'error'].includes(j.status)) { j.completedAt = j.completedAt || Date.now(); recentInstalls.pruneHistory(jobs); } send('jobs:update', jobView(j)); }
+function emitJob(j) {
+  if (['done', 'error'].includes(j.status)) { j.completedAt = j.completedAt || Date.now(); recentInstalls.pruneHistory(jobs); }
+  // Friend gear installed: sync again so the game is told to load it (see online.js noteUnavailable).
+  if (j.friendGear && j.status === 'done' && !j.friendSynced) { j.friendSynced = true; setTimeout(() => online?.syncPaints().catch(() => {}), 1500); }
+  send('jobs:update', jobView(j));
+}
 
 function newJob(fields) {
   const id = crypto.randomUUID();
@@ -644,9 +649,42 @@ async function runDownload(j) {
     const file = await hosts.download(j.url, path.join(j.stageDir, 'dl'), ses, (r, t) => { j.received = r; j.total = t; emitJob(j); }, j.abort.signal);
     await afterDownload(j, file);
   } catch (e) {
+    // A friend's gear CoreMX fetched by itself never opens a window (the player may be in the game).
+    if (e.needsBrowser && j.friendGear) return fail(j, new Error('This download only works in a browser. Open its MXB Mods page from Downloads to get it.'));
     if (e.needsBrowser) return openBrowserFor(j, e.url, e.message);
     fail(j, e);
   }
+}
+
+// Gear a rider on your server or a friend wears that their CoreMX couldn't send (bigger than the sync
+// limit, or locked by its creator), from a free MXB Mods page: downloaded and installed here, once per
+// page per run. The download link comes from the MXB Mods page itself, never from the other app:
+// the one they installed if the page still lists it, else the page's only download. Pages with
+// several downloads to choose from, paid downloads, or already installed are left to the player.
+const friendGearTried = new Set();
+async function installFriendGear(src, who) {
+  const postId = Number(src && src.postId);
+  if (!Number.isSafeInteger(postId) || postId <= 0 || friendGearTried.has(postId)) return;
+  if (!/^https:\/\/mxb-mods\.com\//i.test(String(src.link || ''))) return;
+  if (store.get('settings').friendGearInstall === false) return;
+  if (Object.values(store.get('installs') || {}).some((r) => Number(r.postId) === postId)) return;
+  if ([...jobs.values()].some((j) => Number(j.postId) === postId && !['done', 'error'].includes(j.status))) return;
+  friendGearTried.add(postId);
+  const post = await site.post(postId);
+  const free = (post.downloads || []).filter((d) => d && d.url && !d.shop && !isServerDownloadInfo(d));
+  const dl = free.find((d) => d.url === src.download) || (free.length === 1 ? free[0] : null);
+  if (!dl) return;
+  const j = newJob({
+    title: post.title || src.title || 'Friend gear', postId, url: dl.url, image: post.image, link: post.link, modified: post.modified,
+    categories: post.categories, categoryNames: post.categoryNames, dependencies: post.dependencies, friendGear: true, friendName: String(who || '').slice(0, 40),
+  });
+  runDownload(j);
+}
+// The same test as the Get Mods page: a track's cut-down "Server Version" download.
+function isServerDownloadInfo(d) {
+  const flag = String(d.flag || ''), label = String(d.label || '');
+  if (flag.trim()) return /\bserver\b/i.test(flag) && !/\bplayer\b/i.test(flag);
+  return /\bserver\b/i.test(label) && !/\bplayer\b/i.test(label);
 }
 
 function fail(j, e) {
@@ -2247,6 +2285,7 @@ app.whenReady().then(async () => {
       return gearAssets.hasModel({ modsDir: modsDir(), rider: n.rider || 'default_mx', stockPkz: stockRiderPkz() }, sub, n.name);
     },
     onInstalled: async () => { await scan(); writeSyncedList(); send('library:changed', {}); },
+    installSource: (src, who) => installFriendGear(src, who).catch((e) => console.warn('Friend gear install:', e.message)),
     onChange: (st) => send('online:status', st),
   });
   online.start();

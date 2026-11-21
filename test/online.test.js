@@ -384,3 +384,27 @@ test('when the service asks for a Steam-verified account, CoreMX stops asking fo
   await assert.rejects(f.client.syncFriends(), /Verify/);
   assert.equal(urls.length, before, 'nothing is sent');
 });
+
+test('gear a rider could not send is installed from its MXB Mods page once, and not again once you have it', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-source-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = { postId: 77, title: 'Bell Moto 10', link: 'https://mxb-mods.com/bell-moto-10/', download: 'https://example.test/helmet.zip' };
+  const loadout = { id: 'rider', name: 'Rider', bike: 'Fixture', num: 2, items: [], equipped: [{ slot: 'helmet', value: 'Big' }],
+    unavailable: [{ slot: 'helmet', label: 'Big', error: 'Too big or locked to send.', source }, { slot: 'boots', label: 'Paid', error: 'Paid mod — not installing.', source: { ...source, postId: 78 } }] };
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 26 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : {})));
+  const cfg = { url: 'https://example.test', token: 'fixture-token', received: {} };
+  const asked = [];
+  let installed = false;
+  const { client } = fixture({
+    store: { get: (key) => key === 'online' ? cfg : key === 'friends' ? [] : undefined, set: () => {} },
+    modsDir: () => root, haveMod: async (n) => n.kind === 'helmet' ? installed : true,
+    installSource: (src, who) => asked.push([src.postId, who]),
+  });
+  const first = await client.syncServerRiders('Server', ['rider']);
+  assert.equal(first[0].unavailable[0].state, 'unavailable');
+  assert.deepEqual(asked, [[77, 'Rider']], 'the free helmet is fetched; the paid one never is');
+  installed = true;
+  const second = await client.syncServerRiders('Server', ['rider']);
+  assert.equal(second[0].unavailable[0].state, 'have');
+  assert.equal(asked.length, 1);
+});
