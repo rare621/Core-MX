@@ -1402,10 +1402,18 @@ document.addEventListener('click', (e) => {
 
 const openPostRefreshers = new Set();
 let notificationRefresh = null;
+// Announcements deleted on this PC stay deleted here, whatever the service answers later.
+const deletedHere = () => { try { return new Set(JSON.parse(localStorage.getItem('coremx:deletedAnnouncements') || '[]')); } catch { return new Set(); } };
+function rememberDeleted(id) { const all = deletedHere(); all.add(id); try { localStorage.setItem('coremx:deletedAnnouncements', JSON.stringify([...all].slice(-200))); } catch {} }
+function withoutDeleted(inbox) {
+  if (!inbox || !Array.isArray(inbox.notifications)) return inbox;
+  const gone = deletedHere(), notifications = inbox.notifications.filter((n) => !(n.kind === 'announcement' && gone.has(n.id)));
+  return { ...inbox, notifications, unread: notifications.filter((n) => !n.read).length };
+}
 async function refreshNotifications() {
   if (notificationRefresh) return notificationRefresh;
   notificationRefresh = (async () => { try {
-    S.notifications = await api.invoke('online:notifications'); renderRail();
+    S.notifications = withoutDeleted(await api.invoke('online:notifications')); renderRail();
     showSharePopups(S.notifications.notifications || []);
     // An announcement pops up once: the service records it, and this PC remembers it too (in case
     // the service didn't get the note, or another CoreMX window showed it at the same time).
@@ -1478,7 +1486,7 @@ async function openNotifications() {
   try {
     const [shares, site] = await Promise.allSettled([api.invoke('online:notifications'), api.invoke('coremx:notifications')]);
     if (!m.isConnected) return;
-    if (shares.status === 'fulfilled') { S.notifications = shares.value; renderRail(); }
+    if (shares.status === 'fulfilled') { S.notifications = withoutDeleted(shares.value); renderRail(); }
     let items = S.notifications.notifications || [];
     const website = site.status === 'fulfilled' ? site.value : { notifications: [] };
     const expanded = { announcement: false, share: false, website: false };
@@ -1498,8 +1506,11 @@ async function openNotifications() {
       const del = e.target.closest('[data-notification-delete]');
       if (del) {
         del.disabled = true;
-        try { await api.invoke('online:deleteNotification', del.dataset.notificationDelete); items = items.filter((n) => n.id !== del.dataset.notificationDelete); renderInbox(); refreshNotifications(); }
-        catch (error) { del.disabled = false; toast(esc(cleanErr(error)), 'err'); }
+        const id = del.dataset.notificationDelete;
+        if (items.some((n) => n.id === id && n.kind === 'announcement')) rememberDeleted(id);
+        try { await api.invoke('online:deleteNotification', id); }
+        catch (error) { if (!deletedHere().has(id)) { del.disabled = false; toast(esc(cleanErr(error)), 'err'); return; } }
+        items = items.filter((n) => n.id !== id); renderInbox(); refreshNotifications();
         return;
       }
       const open = e.target.closest('[data-notification-open]'); if (!open) return;
@@ -3325,17 +3336,19 @@ async function renderAdminSettings(c) {
   if (S.admin.unlocked && S.admin.tab === 'admins') loadAdmins(c);
   else if (S.admin.unlocked) { wireAdminActivity(c); loadAdminActivity(c); }
   $('#adminUnlock')?.addEventListener('click', async (e) => {
-    e.currentTarget.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try { S.admin.stats = await api.invoke('online:adminUnlock', $('#adminKey').value); S.admin.unlocked = true; renderAdminSettings(c); }
-    catch (error) { e.currentTarget.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
+    catch (error) { btn.disabled = false; toast(esc(cleanErr(error)), 'err', 6000); }
   });
   $('#adminPublish')?.addEventListener('click', async (e) => {
     const title = $('#adminTitle').value.trim(), message = $('#adminMessage').value.trim();
     if (title.length < 3 || message.length < 5) { toast('Enter a title and description first.', 'err'); return; }
-    e.currentTarget.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try { await api.invoke('online:createAnnouncement', title, message); $('#adminTitle').value = ''; $('#adminMessage').value = ''; toast('Announcement published', 'ok'); }
     catch (error) { toast(esc(cleanErr(error)), 'err', 6000); }
-    finally { if (e.currentTarget.isConnected) e.currentTarget.disabled = false; }
+    finally { if (btn.isConnected) btn.disabled = false; }
   });
 }
 
