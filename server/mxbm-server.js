@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 24;
+const VERSION = 25;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -45,6 +45,14 @@ const STEAM_OPENID = arg('steamopenid', 'https://steamcommunity.com/openid/login
 const OPEN_REGISTER = /^(1|yes|true|on)$/i.test(String(arg('openregister', 'no')));
 const PUBLIC_URL = String(arg('publicurl', '') || '').replace(/\/+$/, '');
 const MAX_DEVICES = 5;
+// Online features need an account Steam has confirmed (Sign in with Steam). An older, unverified
+// account can only verify, read announcements and leave; everything else answers 403 "verify".
+// --requireverified no turns this off.
+const REQUIRE_VERIFIED = !/^(0|no|false|off)$/i.test(String(arg('requireverified', 'yes')));
+const UNVERIFIED_OK = new Set(['GET /v1/health', 'GET /v1/me', 'POST /v1/auth/steam/start', 'POST /v1/auth/steam/poll', 'POST /v1/unregister',
+  'GET /v1/notifications', 'POST /v1/notifications/read', 'POST /v1/notifications/seen', 'POST /v1/notifications/delete', 'GET /v1/admin/role']);
+const VERIFY_ERROR = { error: 'Verify your account with Steam to use CoreMX online.', code: 'verify' };
+const needsVerify = (me, key) => REQUIRE_VERIFIED && me && !me.user.verified && !UNVERIFIED_OK.has(key);
 const ADMIN_KEY_FILE = path.join(path.dirname(DATA), 'admin.key');
 const ADMIN_KEY = process.env.MXBM_ADMIN_KEY || (() => {
   try { return fs.readFileSync(ADMIN_KEY_FILE, 'utf8').trim(); }
@@ -911,6 +919,7 @@ const server = http.createServer(async (req, res) => {
   }
   const url = new URL(req.url, 'http://x');
   if (req.method === 'GET' && url.pathname === '/v1/auth/steam/return') return steamReturn(req, res, url).catch(() => send(res, 500, { error: 'server error' }));
+  if (needsVerify(me, `${req.method} ${url.pathname}`)) { req.resume(); return send(res, 403, VERIFY_ERROR); }
   const fm = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})$/);
   if (fm) return fileRoute(req, res, fm[1]);
   const fu = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})\/(upload|uploaded)$/);

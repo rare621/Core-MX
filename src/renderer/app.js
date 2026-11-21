@@ -1407,8 +1407,15 @@ async function refreshNotifications() {
   notificationRefresh = (async () => { try {
     S.notifications = await api.invoke('online:notifications'); renderRail();
     showSharePopups(S.notifications.notifications || []);
-    const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup);
+    // An announcement pops up once: the service records it, and this PC remembers it too (in case
+    // the service didn't get the note, or another CoreMX window showed it at the same time).
+    let shownHere = [];
+    try { shownHere = JSON.parse(localStorage.getItem('coremx:shownAnnouncements') || '[]'); } catch {}
+    const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && !shownHere.includes(n.id));
+    const quiet = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && shownHere.includes(n.id));
+    if (quiet.length) api.invoke('online:seenAnnouncements', quiet.map((n) => n.id)).catch(() => {});
     if (unseen.length) {
+      try { localStorage.setItem('coremx:shownAnnouncements', JSON.stringify([...shownHere, ...unseen.map((n) => n.id)].slice(-200))); } catch {}
       await api.invoke('online:seenAnnouncements', unseen.map((n) => n.id));
       unseen.forEach((n) => { n.seenPopup = true; });
       const latest = unseen[0];

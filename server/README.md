@@ -49,7 +49,8 @@ Accounts are created by **Sign in with Steam**: the app opens Steam's own sign-i
 - Accounts made the old way are "unverified". When the real owner signs in with Steam, the old tokens stop working (a claimed ID is taken back) and the account, with its friends, is kept and marked verified.
 - A verified account can be signed in on up to 5 PCs.
 - **Admin needs a verified account**, the owner included: sign in with Steam once in the new app.
-- The service builds Steam's return address from the request's `Host` / `X-Forwarded-Host` and `X-Forwarded-Proto` (Caddy sends these). If that is wrong behind another proxy, set `--publicurl https://coremx.app`.
+- **v25: online features need a verified account.** An unverified account can only verify, read announcements and unregister; everything else (presence, friends, servers, gear files, leaderboard) answers `403` with `code: "verify"`. CoreMX 1.0.49+ then asks the player to verify with Steam. `--requireverified no` turns this off. Deploy v25 after 1.0.49 is out (1.0.48 doesn't ask), or start it with `--requireverified no` until most players have updated.
+- **Return address:** behind the coremx.app website proxy (`coremx-website-proxy.js`), the proxy tells the service the public address. `start-server.cmd` also passes `--publicurl https://coremx.app`; set it to your own address if you run the service elsewhere.
 
 ## Announcements
 

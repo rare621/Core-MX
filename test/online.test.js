@@ -372,3 +372,15 @@ test('already online at start: CoreMX asks whether the account is Steam-verified
   f.client.stop();
   assert.equal(f.client.status().service.verified, false);
 });
+
+test('when the service asks for a Steam-verified account, CoreMX stops asking for anything else until it is', async (t) => {
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { urls.push(String(url)); return new Response(JSON.stringify({ error: 'Verify your account with Steam to use CoreMX online.', code: 'verify' }), { status: 403 }); });
+  const f = fixture();
+  await f.client.refresh().catch(() => {});
+  assert.equal(f.config().verified, false);
+  assert.equal(f.client.status().service.verified, false);
+  const before = urls.length;
+  await assert.rejects(f.client.syncFriends(), /Verify/);
+  assert.equal(urls.length, before, 'nothing is sent');
+});

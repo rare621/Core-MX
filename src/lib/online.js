@@ -171,7 +171,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     }
     return res;
   }
+  // Until the account is verified with Steam (service v25+), only these work; the rest is not sent.
+  const UNVERIFIED_OK = new Set(['GET /v1/health', 'GET /v1/me', 'POST /v1/auth/steam/start', 'POST /v1/auth/steam/poll', 'POST /v1/unregister',
+    'GET /v1/notifications', 'POST /v1/notifications/read', 'POST /v1/notifications/seen', 'POST /v1/notifications/delete', 'GET /v1/admin/role']);
   function call(method, route, body) {
+    if (cfg().token && cfg().verified === false && !UNVERIFIED_OK.has(`${method} ${route.split('?')[0]}`)) return Promise.reject(new Error('Verify your account with Steam to use CoreMX online.'));
     // Renderer polling and sync can ask for the same list at the same time.
     const key = JSON.stringify([cfg().url, cfg().token, method, route, body]);
     const share = method === 'GET' || route === '/v1/friends';
@@ -186,6 +190,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     // The token stopped working (signed in elsewhere took the account back, or the account was
     // removed): sign in with Steam again.
     if (res.status === 401 && cfg().token && !route.startsWith('/v1/auth/')) { setCfg({ token: null, id: null, verified: null }); needsSignIn = true; onChange(status()); }
+    // The service wants a Steam-verified account (v25+): stop asking for the rest until verified.
+    if (res.status === 403 && data.code === 'verify' && cfg().token && cfg().verified !== false) { setCfg({ verified: false }); onChange(status()); }
     if (!res.ok) throw new Error(data.error || `Online service answered ${res.status}`);
     return data;
   }
