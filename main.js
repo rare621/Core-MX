@@ -568,7 +568,7 @@ function jobView(j) {
   return {
     id: j.id, title: j.title, postId: j.postId, appId: j.appId || null, appFiles: !!(j.appId && (store.get('apps') || []).find((a) => a.id === j.appId)?.files), url: j.url, link: j.link, image: j.image, status: j.status, error: j.error,
     received: j.received, total: j.total, note: j.note, fileName: j.file ? path.basename(j.file) : null,
-    createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.equipCandidates, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
+    createdAt: j.createdAt, completedAt: j.completedAt, relocateKey: j.relocateKey, equipCandidates: j.friendGear || j.forOthers ? null : j.equipCandidates, friendGear: !!j.friendGear, forOthers: !!j.forOthers, friendName: j.friendName || null, installed: j.installed, filesDeleted: !!j.filesDeleted, modelWarningAccepted: !!j.modelWarningAccepted,
     plan: p && {
       kind: p.kind, kindLabel: p.kindLabel, base: p.base, root: p.root, variants: p.variants || [], needsVariant: !!p.needsVariant, askType: p.askType, kindHint: p.kindHint, detectReason: p.detectReason, options: p.options, paintModels: p.paintModels,
       paintModelsBase: p.paintModelsBase, paintGuess: p.paintGuess, counts: p.counts, installable: p.installable, bikeCompatibility: p.bikeCompatibility,
@@ -1340,7 +1340,7 @@ function registerIpc() {
   handle('jobs:start', (d) => {
     const j = newJob({
       title: d.title, postId: d.postId, shopKey: d.shopKey, url: d.url, image: d.image, link: d.link, modified: d.modified,
-      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, requireReview: !!d.requireReview || !!d.serverVersion, modelWarningAccepted: !!d.modelWarningAccepted, serverVersion: !!d.serverVersion,
+      categories: d.categories, categoryNames: d.categoryNames, dependencies: d.dependencies, forOthers: !!d.forOthers, friendName: d.friendName ? String(d.friendName).slice(0, 40) : undefined, requireReview: !!d.requireReview || !!d.serverVersion, modelWarningAccepted: !!d.modelWarningAccepted, serverVersion: !!d.serverVersion,
       ...(Array.isArray(d.categories) && d.categories.some((id) => Number(id) === 519) ? { opts: { kind: d.animationLocation === 'game' ? 'animationGame' : 'animation' } } : {}),
       animationLocation: d.animationLocation ?? null,
     });
