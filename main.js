@@ -585,6 +585,7 @@ function emitJob(j) {
   if (['done', 'error'].includes(j.status)) { j.completedAt = j.completedAt || Date.now(); recentInstalls.pruneHistory(jobs); }
   // Friend gear installed: sync again so the game is told to load it (see online.js noteUnavailable).
   if (j.friendGear && j.status === 'done' && !j.friendSynced) { j.friendSynced = true; setTimeout(() => online?.syncPaints().catch(() => {}), 1500); }
+  if (j.friendGear && j.status === 'error' && !j.friendSynced) { j.friendSynced = true; friendGear.jobFailed(j.id); online?.refreshGearStatus(); }
   send('jobs:update', jobView(j));
 }
 
@@ -656,36 +657,23 @@ async function runDownload(j) {
   }
 }
 
-// Gear a rider on your server or a friend wears that their CoreMX couldn't send (bigger than the sync
-// limit, or locked by its creator), from a free MXB Mods page: downloaded and installed here, once per
-// page per run. The download link comes from the MXB Mods page itself, never from the other app:
-// the one they installed if the page still lists it, else the page's only download. Pages with
-// several downloads to choose from, paid downloads, or already installed are left to the player.
-const friendGearTried = new Set();
-async function installFriendGear(src, who) {
-  const postId = Number(src && src.postId);
-  if (!Number.isSafeInteger(postId) || postId <= 0 || friendGearTried.has(postId)) return;
-  if (!/^https:\/\/mxb-mods\.com\//i.test(String(src.link || ''))) return;
-  if (store.get('settings').friendGearInstall === false) return;
-  if (Object.values(store.get('installs') || {}).some((r) => Number(r.postId) === postId)) return;
-  if ([...jobs.values()].some((j) => Number(j.postId) === postId && !['done', 'error'].includes(j.status))) return;
-  friendGearTried.add(postId);
-  const post = await site.post(postId);
-  const free = (post.downloads || []).filter((d) => d && d.url && !d.shop && !isServerDownloadInfo(d));
-  const dl = free.find((d) => d.url === src.download) || (free.length === 1 ? free[0] : null);
-  if (!dl) return;
-  const j = newJob({
-    title: post.title || src.title || 'Friend gear', postId, url: dl.url, image: post.image, link: post.link, modified: post.modified,
-    categories: post.categories, categoryNames: post.categoryNames, dependencies: post.dependencies, friendGear: true, friendName: String(who || '').slice(0, 40),
-  });
-  runDownload(j);
-}
-// The same test as the Get Mods page: a track's cut-down "Server Version" download.
-function isServerDownloadInfo(d) {
-  const flag = String(d.flag || ''), label = String(d.label || '');
-  if (flag.trim()) return /\bserver\b/i.test(flag) && !/\bplayer\b/i.test(flag);
-  return /\bserver\b/i.test(label) && !/\bplayer\b/i.test(label);
-}
+// Gear other riders wear that their CoreMX couldn't send: fetched from MXB Mods (see src/lib/friend-gear.js).
+const friendGear = require('./src/lib/friend-gear').create({
+  site,
+  startJob: (post, dl, who) => {
+    const j = newJob({
+      title: post.title || 'Friend gear', postId: post.id, url: dl.url, image: post.image, link: post.link, modified: post.modified,
+      categories: post.categories, categoryNames: post.categoryNames, dependencies: post.dependencies, friendGear: true, friendName: String(who || '').slice(0, 40),
+    });
+    runDownload(j);
+    return j.id;
+  },
+  jobStatus: (id) => { const j = jobs.get(id); return j ? { status: j.status, error: j.error } : null; },
+  isInstalled: (postId) => Object.values(store.get('installs') || {}).some((r) => Number(r.postId) === Number(postId))
+    || [...jobs.values()].some((j) => Number(j.postId) === Number(postId) && !['done', 'error'].includes(j.status)),
+  enabled: () => store.get('settings').friendGearInstall !== false,
+  onChange: () => online?.refreshGearStatus(),
+});
 
 function fail(j, e) {
   if (e.rollbackFailed) j.rollbackRecovery = true;
@@ -2285,7 +2273,8 @@ app.whenReady().then(async () => {
       return gearAssets.hasModel({ modsDir: modsDir(), rider: n.rider || 'default_mx', stockPkz: stockRiderPkz() }, sub, n.name);
     },
     onInstalled: async () => { await scan(); writeSyncedList(); send('library:changed', {}); },
-    installSource: (src, who) => installFriendGear(src, who).catch((e) => console.warn('Friend gear install:', e.message)),
+    findGear: (req) => friendGear.find(req),
+    gearStatus: (slot, name) => friendGear.status(slot, name),
     onChange: (st) => send('online:status', st),
   });
   online.start();

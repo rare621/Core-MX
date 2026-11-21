@@ -692,6 +692,24 @@ document.addEventListener('click', async (e) => {
 });
 
 // Search Get Mods for a model a friend's paint needs.
+const BOUND = /tied to your account|account-bound/i;
+// Gear a rider couldn't send, fetched from MXB Mods automatically (see src/lib/friend-gear.js).
+function findLabel(f) {
+  return f.state === 'searching' ? 'Too big or locked to send. Looking for it on MXB Mods…'
+    : f.state === 'installing' ? `Installing it from MXB Mods: ${f.title || 'download'}…`
+    : f.state === 'installed' ? `Installed ${f.title || 'the MXB Mods download'}, but this item wasn't in it. Find the right one below.`
+    : f.state === 'nomatch' ? 'Too big or locked to send, and no match found on MXB Mods. Find it below.'
+    : `Couldn't install it from MXB Mods${f.error ? `: ${f.error}` : ''}. Find it below.`;
+}
+// Only when every automatic option failed: the player's turn.
+function findButtons(u, slot) {
+  const done = u.find ? ['nomatch', 'failed', 'installed'].includes(u.find.state) : BOUND.test(u.error || '') || !u.source;
+  if (!done) return '';
+  const page = u.source ? `<button class="btn btn-sm" data-friend-post="${esc(String(u.source.postId))}">Open on MXB Mods</button>` : '';
+  const search = slot.value ? `<button class="btn btn-sm" data-friend-find="${esc(slot.value)}">Search Get Mods</button>` : '';
+  return page || search ? `<div class="sync-warning">${u.source ? esc(u.source.title) + ' ' : ''}${page}${search}</div>` : '';
+}
+
 function findMod(name) {
   S.getSrc = 'free'; S.browse.tab = 'all'; S.browse.query = String(name || '').replace(/[_]+/g, ' '); S.browse.sort = 'relevance';
   S.browse.posts = []; S.browse.page = 0; S.browse.totalPages = 1; S.browse.req = (S.browse.req || 0) + 1;
@@ -788,9 +806,9 @@ async function openFriendDetails(friend) {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
       if (unavailable && unavailable.state !== 'have' && /paid|store-protected/i.test(unavailable.error || '')) return '';
-      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? (unavailable.included === 'bike' ? 'Comes with the bike — you have it' : /paid|store-protected/i.test(unavailable.error || '') ? 'Paid mod — already installed' : 'Already installed') : unavailable.source ? 'Too big or locked to send. CoreMX installs it from MXB Mods for you (see Downloads).' : unavailable.error : unsharedLabel(slot, outfit.equipped);
+      const state = item ? stateLabels[item.state] || 'Shared' : unavailable ? unavailable.state === 'have' ? (unavailable.included === 'bike' ? 'Comes with the bike — you have it' : /paid|store-protected/i.test(unavailable.error || '') ? 'Paid mod — already installed' : 'Already installed') : unavailable.find ? findLabel(unavailable.find) : unavailable.source && !BOUND.test(unavailable.error || '') ? 'Too big or locked to send. CoreMX installs it from MXB Mods for you (see Downloads).' : unavailable.error : unsharedLabel(slot, outfit.equipped);
       const needs = item && item.needs || [];
-      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.source && unavailable.state !== 'have' ? `<div class="sync-warning">${esc(unavailable.source.title)} <button class="btn btn-sm" data-friend-post="${esc(String(unavailable.source.postId))}">Open on MXB Mods</button></div>` : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
+      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.state !== 'have' ? findButtons(unavailable, slot) : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
     $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'In a session — the server name appears once they ride out')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(prettyBikeId(outfit.bikeName || outfit.bike || ''))} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
     const list = $('.friend-gear-list', m);

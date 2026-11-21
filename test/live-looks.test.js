@@ -30,3 +30,13 @@ test('live looks file matches the layout the plugin parses', () => {
   // Every downloaded paint or model maps to a list the plugin knows how to reload.
   for (const kind of Object.values(RELOAD_FOR)) assert.match(kind, /^(bikepaints|helmets|helmetpaints|riderpaints|boots|bootpaints|protections|protectionpaints)$/);
 });
+
+test('gear CoreMX is fetching from MXB Mods, or found nothing for, tells the overlay so', () => {
+  const report = { items: [], unavailable: [
+    { slot: 'helmet', label: 'Big', state: 'unavailable', find: { state: 'searching' } },
+    { slot: 'boots', label: 'Boots: B', state: 'unavailable', find: { state: 'nomatch' } },
+    { slot: 'protection', label: 'P', state: 'unavailable', error: 'Paid mod — not installing.' },
+  ] };
+  const lines = looksText([{ id: 'r', num: 2, bikeId: 'b', equipped: [] }], [], 1, { r: report }).trim().split('\n').filter((l) => l.startsWith('wait'));
+  assert.deepEqual(lines, ['wait\t2\tb\tinstalling\tBig', 'wait\t2\tb\tnomatch\tB', 'wait\t2\tb\tpaid\tP']);
+});
