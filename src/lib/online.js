@@ -44,7 +44,7 @@ function looksText(loadouts, reload, stamp, reports = {}) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, portMapper = null, firewall = null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, installSource = () => {}, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -60,7 +60,25 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // Gear lists the running game must reload because files arrived outside a live-looks pass (friends
   // sync, Join): the plugin tries a missing name only once itself. Sent with the next looks file.
   const pendingReload = new Set();
+  // Gear a rider couldn't send (too big, locked, tied to their account) that you didn't have: once you
+  // have it (installed by hand, or by CoreMX from its MXB Mods page), the running game is asked to
+  // reload that list, as it loaded its lists before the file was there.
+  const seenMissing = new Set();
+  function noteUnavailable(results) {
+    for (const r of results || []) {
+      const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
+      for (const u of r.unavailable || []) {
+        if (u.included === 'bike' || !RELOAD_FOR[u.slot]) continue;
+        const key = `${r.id}|${u.slot}|${String(cur[u.slot] || '').toLowerCase()}`;
+        if (u.state === 'unavailable') {
+          seenMissing.add(key);
+          if (u.source && !/paid|store-protected/i.test(u.error || '')) installSource(u.source, r.name || '');
+        } else if (u.state === 'have' && seenMissing.delete(key)) pendingReload.add(RELOAD_FOR[u.slot]);
+      }
+    }
+  }
   function noteDownloads(results) {
+    noteUnavailable(results);
     for (const r of results || []) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) pendingReload.add(RELOAD_FOR[it.slot]);
     if (pendingReload.size && current?.inEvent) { looksKey = ''; syncLooks(); }
   }
@@ -747,6 +765,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, preloaded: riders, onProgress: () => {} });
     paintsync.touchReceived(received, results);
     setCfg({ received });
+    noteUnavailable(results);
     const reload = new Set(pendingReload);
     pendingReload.clear();
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);

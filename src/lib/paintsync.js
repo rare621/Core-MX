@@ -128,7 +128,7 @@ function modSources(installs) {
     return null;
   };
 }
-const SOURCE_MESSAGE = 'Could not sync this file. Open its MXB Mods page to install it manually.';
+const SOURCE_MESSAGE = 'Too big or locked to send. Riders get it from its MXB Mods page (CoreMX installs it for them).';
 // Files that come with the bike itself (its default tyre, a livery inside the bike's package): anyone
 // riding that bike has them, so they are not uploaded.
 const WITH_BIKE_MESSAGE = 'Comes with the bike';
@@ -218,12 +218,14 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
         continue;
       }
       const paid = /paid|store-protected/i.test(entry.error || '');
-      const accountBound = /tied to your account|account-bound/i.test(entry.error || '');
       let installed = false;
       const name = current[entry.slot], rider = current.rider || 'default_mx';
-      if ((paid || accountBound) && gear.validName(name)) {
+      // Anything the owner couldn't send (paid, tied to their account, too big, locked): you may have
+      // installed it yourself, then you have it. The app checks again on every sync.
+      if (gear.validName(name)) {
         if (['rider', 'helmet', 'boots', 'protection'].includes(entry.slot)) {
-          installed = await gear.hasModel({ modsDir, rider }, { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' }[entry.slot], name);
+          installed = have ? !!await have({ kind: entry.slot, name, rider }).catch(() => false)
+            : await gear.hasModel({ modsDir, rider }, { rider: 'riders', helmet: 'helmets', boots: 'boots', protection: 'protections' }[entry.slot], name);
         } else if (/Paint$/.test(entry.slot) && entry.slot !== 'bikePaint') {
           installed = !!await withLocalPreview(() => gear.paintSource({ modsDir, rider }, entry.slot, current));
         } else if (entry.slot === 'bikePaint' && gear.validName(lo.bike)) {
@@ -232,6 +234,13 @@ async function listFriends({ call, modsDir, received = {}, have, friendId, prelo
         }
       }
       unavailable.push({ ...entry, state: installed ? 'have' : 'unavailable', error: paid ? PAID_MESSAGE : entry.error });
+    }
+    // A paint from the same MXB Mods download as a model you now have (a helmet with its paints in a
+    // locked package, which can't be looked inside) came with that model.
+    for (const u of unavailable) {
+      if (u.state !== 'unavailable' || !u.source || !modelOf[u.slot]) continue;
+      const model = unavailable.find((m) => m.slot === modelOf[u.slot] && m.state === 'have' && m.source && m.source.postId === u.source.postId);
+      if (model) u.state = 'have';
     }
     report.push({ ...lo, items, unavailable });
   }

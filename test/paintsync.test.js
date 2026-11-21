@@ -110,6 +110,25 @@ test('store-protected equipped files are reported but never included in friend s
   assert.deepEqual(outfit.unavailable.filter((it) => /Paid mod/.test(it.error)).map((it) => it.slot).sort(), ['bikePaint', 'helmet']);
 });
 
+test('gear that could not be sent (too big) counts as had once the recipient installs it, with its paints from the same page', async (t) => {
+  const f = await fixture(t);
+  const source = { postId: 77, title: 'Bell Moto 10', link: 'https://mxb-mods.com/bell-moto-10/' };
+  const lo = { id: 'friend', name: 'Friend', bike: 'Fixture', items: [],
+    equipped: [{ slot: 'helmet', value: 'Big' }, { slot: 'helmetPaint', value: 'Team' }, { slot: 'bootsPaint', value: 'X' }],
+    unavailable: [
+      { slot: 'helmet', label: 'Big', error: 'Too big or locked to send.', source },
+      { slot: 'helmetPaint', label: 'Helmet paint: Team', error: 'Too big or locked to send.', source },
+      { slot: 'bootsPaint', label: 'Boots paint: X', error: 'Too big or locked to send.', source: { ...source, postId: 78 } },
+    ] };
+  const options = { preloaded: [lo], modsDir: f.receiver, have: (n) => n.kind === 'helmet' ? gear.hasModel({ modsDir: f.receiver }, 'helmets', n.name) : true };
+  let report = await sync.listFriends(options);
+  assert.deepEqual(report[0].unavailable.map((u) => u.state), ['unavailable', 'unavailable', 'unavailable']);
+  await f.write(f.receiver, 'rider/helmets/Big/helmet.edf', model('helmet'));
+  report = await sync.listFriends(options);
+  // The helmet is installed; its paint came in the same download; the boots paint (another page) did not.
+  assert.deepEqual(report[0].unavailable.map((u) => u.state), ['have', 'have', 'unavailable']);
+});
+
 test('account-bound models are identified before decoding, and installed recipient models enable their free paints', async (t) => {
   const f = await fixture(t);
   const bound = sealed(zip({ 'Helmet/helmet.edf': model('helmet') }), true, true);
