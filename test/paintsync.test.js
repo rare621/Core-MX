@@ -341,3 +341,12 @@ test('OEM tyres and liveries packed in the bike are not shared; riders with the 
   const withBike = await sync.listFriends({ call: async () => ({ loadouts: [lo] }), modsDir: f.receiver });
   assert.deepEqual(withBike[0].unavailable.map((u) => u.state), ['have', 'have']);
 });
+
+test('a rider kit with a number and name plate (w_number, w_name) is shared: no false "needs another rider model"', async (t) => {
+  const { multiPaint } = require('./helpers/paint');
+  const f = await fixture(t);
+  await f.write(f.source, 'rider/riders/default_mx/paints/Kit.pnt', multiPaint(['rider', 'gloves', 'w_number', 'w_name']));
+  const outfit = await sync.outfitFiles(f.source, f.prof, 'Fixture');
+  assert.ok(outfit.items.some((it) => it.slot === 'suitPaint'), JSON.stringify(outfit.unavailable));
+  assert.ok(!outfit.unavailable.some((u) => u.slot === 'suitPaint'));
+});

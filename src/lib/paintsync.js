@@ -32,7 +32,9 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
   const items = [], unavailable = [];
   const equipped = profile.SLOTS.map((s) => ({ slot: s.id, label: s.label, value: s.id === 'protection' && !c[s.id] ? 'None' : c[s.id] || s.default || '', state: 'default' }));
   let riderPaintError = null;
-  try { await validateRiderPaint({ modsDir, current: c }); } catch (e) { riderPaintError = e.message; }
+  // Checked against the game's own rider model (rider.pkz: its number and name plates too). Without
+  // it the check can't be right, so it's skipped: the paint was checked when it was equipped.
+  if (stockPkz) { try { await validateRiderPaint({ modsDir, stockPkz, current: c }); } catch (e) { riderPaintError = e.message; } }
   for (const kind of ['rider', 'helmet', 'boots', 'protection']) {
     if (kind === 'protection' && !c.protection) continue;
     const name = c[kind] || (kind === 'rider' ? 'default_mx' : 'default');
