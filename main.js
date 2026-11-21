@@ -1053,6 +1053,9 @@ function setupDownloadsSession() {
       // A download started in a shop/sign-in window (e.g. right after buying): install it too.
       const product = wc && shopDownloads.get(wc.id);
       j = newJob({ title: item.getFilename().replace(/\.[^.]+$/, ''), url: null, ...(product ? { link: product.link, shopKey: product.link } : {}) });
+      // The shop window it came from: hidden while the file downloads, closed when it's done.
+      const from = wc && BrowserWindow.fromWebContents(wc);
+      if (from && from !== mainWin) j.browserWin = from;
       send('jobs:started', j.id);
     }
     const dir = path.join(j.stageDir, 'dl');
@@ -1062,6 +1065,9 @@ function setupDownloadsSession() {
     j.browserDownload = item;
     item.setSavePath(file);
     j.status = 'downloading'; j.note = 'Downloading from browser…'; emitJob(j);
+    // Out of the way while it downloads (hidden, not closed, so the download can't be cut off);
+    // CoreMX shows the progress. Closed when the download is done.
+    if (j.browserWin && !j.browserWin.isDestroyed()) { j.browserWin.hide(); if (mainWin && !mainWin.isDestroyed()) mainWin.focus(); }
     item.on('updated', () => { j.received = item.getReceivedBytes(); j.total = item.getTotalBytes(); emitJob(j); });
     item.once('done', (_e, state) => {
       if (j.browserWin && !j.browserWin.isDestroyed()) { j.status = 'extracting'; j.browserWin.close(); }

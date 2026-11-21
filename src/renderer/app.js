@@ -3628,6 +3628,7 @@ async function offerEquip(job) {
 api.on('jobs:update', (j) => {
   const prev = S.jobs.get(j.id);
   S.jobs.set(j.id, j);
+  if (downloadWatch?.id === j.id) drawDownloadWatch();
   for (const old of [...S.jobs.values()].filter((job) => ['done', 'error'].includes(job.status)).sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt)).slice(10)) { S.jobs.delete(old.id); $(`[data-job="${old.id}"]`)?.remove(); }
   refreshInlineDownloads();
   if ((!prev || prev.status !== j.status) && $('.dl-summary')) $('.dl-summary').outerHTML = downloadSummaryHtml([...S.jobs.values()]);
@@ -3743,7 +3744,30 @@ function updateFor(postId, modified) {
 })();
 
 api.on('shops:changed', async () => { await refreshAccounts(); rerenderAccountsArea(); });
-api.on('jobs:started', () => { toast('Download started — it will install automatically', 'info', 2500); renderRail(); });
+// A download from a shop or browser window: a big window with its progress, closed by itself when the
+// download is done (the "what did you install" review then opens, or it installs), fails or is cancelled.
+let downloadWatch = null;
+function watchDownload(id) {
+  if (downloadWatch?.m.isConnected) downloadWatch.m.close();
+  const m = modal({ title: 'Downloading', size: 'sm', body: '<div data-dl-watch></div>',
+    foot: '<button class="btn" data-dl-cancel>Cancel download</button><span class="grow"></span><button class="btn btn-primary" data-close>Keep going in the background</button>',
+    onClose: () => { if (downloadWatch?.m === m) downloadWatch = null; } });
+  downloadWatch = { id, m };
+  $('[data-dl-cancel]', m).addEventListener('click', () => { api.invoke('jobs:cancel', id).catch(() => {}); m.close(); });
+  drawDownloadWatch();
+}
+function drawDownloadWatch() {
+  const w = downloadWatch;
+  if (!w || !w.m.isConnected) return;
+  const j = S.jobs.get(w.id);
+  if (j && ['review', 'installing', 'done', 'error'].includes(j.status)) { w.m.close(); return; }
+  const known = j && j.total > 0, pct = known ? Math.min(100, Math.floor(j.received / j.total * 100)) : 0;
+  const box = $('[data-dl-watch]', w.m);
+  if (box) box.innerHTML = `<p><b>${esc(j?.title || 'Your download')}</b></p><progress max="100" ${known ? `value="${pct}"` : ''} style="width:100%"></progress>
+    <p class="muted">${j?.status === 'extracting' ? 'Unpacking…' : known ? `${fmtSize(j.received)} of ${fmtSize(j.total)} · ${pct}%` : j?.received ? `${fmtSize(j.received)} downloaded` : 'Starting…'}</p>
+    <p class="muted">The shop window closes once the file is here. Then CoreMX asks where it goes, or installs it.</p>`;
+}
+api.on('jobs:started', (id) => { renderRail(); if (id) watchDownload(id); else toast('Download started — it will install automatically', 'info', 2500); });
 
 // ---------- Sideways-scrolling option bars ----------
 // Chip rows and tab bars scroll horizontally when the window is narrow: the mouse wheel moves them
