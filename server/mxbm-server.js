@@ -131,6 +131,13 @@ function catalogEntry(body) {
   if (download.length > 300 || !/^https?:\/\/\S+$/i.test(download)) return null;
   return { postId, link, title: str(body.title, 140), download };
 }
+// A free MXB Mods post a gear item can be installed from, as an app reports it, or null.
+function modSource(src) {
+  if (!src || !Number.isSafeInteger(src.postId) || src.postId <= 0 || !/^https:\/\/mxb-mods\.com\/[^\s"<>]*$/i.test(String(src.link || '')) || String(src.link).length > 300) return null;
+  return { postId: src.postId, title: str(src.title, 100), link: String(src.link), ...(/^https:\/\/[^\s"<>]+$/i.test(String(src.image || '')) && String(src.image).length <= 300 ? { image: String(src.image) } : {}),
+    ...(/^https?:\/\/[^\s"<>]+$/i.test(String(src.download || '')) && String(src.download).length <= 300 ? { download: String(src.download) } : {}),
+    ...(src.fileName ? { fileName: str(src.fileName, 120) } : {}) };
+}
 const catalogScore = (e) => (e.by || []).length - 2 * (e.bad || []).length;
 
 // ---------- helpers ----------
@@ -735,16 +742,15 @@ const routes = {
       slot: str(it && it.slot, 30), label: str(it && it.label, 100), path: str(it && it.path, 260), sha256: String(it && it.sha256 || ''),
       value: str(it && it.value, 100), rider: str(it && it.rider, 100), modelKind: ['rider', 'helmet', 'boots', 'protection', 'tyres'].includes(it && it.modelKind) ? it.modelKind : undefined,
       size: Number(it && it.size) || 0, needs: (Array.isArray(it && it.needs) ? it.needs : []).slice(0, 4).map((n) => ({ kind: str(n && n.kind, 20), name: str(n && n.name, 100), rider: str(n && n.rider, 100) })),
+      // v27: the free MXB Mods page the owner installed it from; other riders install from there first.
+      ...(modSource(it && it.source) ? { source: modSource(it.source) } : {}),
     })).filter((it) => /^[a-f0-9]{64}$/.test(it.sha256) && safeRel(it.path) && it.size > 0 && it.size <= MAX_FILE && !!it.modelKind === /\.pkz$/i.test(it.path));
     const equipped = (Array.isArray(body.equipped) ? body.equipped : []).slice(0, 24).map((it) => ({ slot: str(it && it.slot, 30), label: str(it && it.label, 100), value: str(it && it.value, 100), state: str(it && it.state, 20) }));
     const unavailable = (Array.isArray(body.unavailable) ? body.unavailable : []).slice(0, 24).map((it) => {
       const u = { slot: str(it && it.slot, 30), label: str(it && it.label, 100), error: str(it && it.error, 200), ...(it && it.included === 'bike' ? { included: 'bike' } : {}) };
       // A free MXB Mods post the item can be installed from (it can't be copied: too large or locked).
-      const src = it && it.source;
-      if (src && Number.isSafeInteger(src.postId) && src.postId > 0 && /^https:\/\/mxb-mods\.com\/[^\s"<>]*$/i.test(String(src.link || '')) && String(src.link).length <= 300)
-        u.source = { postId: src.postId, title: str(src.title, 100), link: String(src.link), ...(/^https:\/\/[^\s"<>]+$/i.test(String(src.image || '')) && String(src.image).length <= 300 ? { image: String(src.image) } : {}),
-          ...(/^https?:\/\/[^\s"<>]+$/i.test(String(src.download || '')) && String(src.download).length <= 300 ? { download: String(src.download) } : {}),
-          ...(src.fileName ? { fileName: str(src.fileName, 120) } : {}) };
+      const source = modSource(it && it.source);
+      if (source) u.source = source;
       return u;
     });
     me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };

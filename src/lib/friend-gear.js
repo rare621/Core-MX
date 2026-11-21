@@ -110,6 +110,8 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
       if (!item.steps.page) { item.steps.page = true; if (item.source && await fromPage(item.source, item, 'page')) return onChange(); }
       // Every catalog entry in turn (one that didn't contain the item moves on to the next).
       if (!item.steps.catalog) { if (await fromCatalog(item)) return onChange(); item.steps.catalog = true; }
+      // Pages only (a file that can also come through the service): no name search; the service next.
+      if (item.pageOnly) { Object.assign(item, { state: 'nopage', jobId: null }); return onChange(item); }
       if (!item.steps.search) { item.steps.search = true; if (await bySearch(item)) return onChange(); }
       Object.assign(item, { state: MODEL_TAB[item.slot] ? 'nomatch' : 'failed', jobId: null, error: item.error || (MODEL_TAB[item.slot] ? null : 'Not found on MXB Mods') });
     } catch (e) { Object.assign(item, { state: 'failed', jobId: null, error: e.message }); }
@@ -118,11 +120,17 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
 
   // Fetch one item the other rider couldn't send. Returns at once; the state follows in status().
   // catalogKey: from src/lib/gear-keys.js keyForItem.
-  function find({ slot, name, source = null, who = '', catalogKey = null }) {
+  // pageOnly: the owner's page and the catalog only, then 'nopage' (the file can come through the
+  // service instead). Asked again without pageOnly (that failed too), it goes on to the name search.
+  function find({ slot, name, source = null, who = '', catalogKey = null, pageOnly = false }) {
     if (!enabled() || !name) return;
     const key = keyOf(slot, name);
-    if (items.has(key)) return;
-    const item = { state: 'searching', slot, name, source, who, catalogKey, tried: new Set(), steps: {} };
+    const old = items.get(key);
+    if (old) {
+      if (!pageOnly && old.pageOnly && old.state === 'nopage') { Object.assign(old, { pageOnly: false, state: 'searching' }); next(old); }
+      return;
+    }
+    const item = { state: 'searching', slot, name, source, who, catalogKey, pageOnly, tried: new Set(), steps: {} };
     items.set(key, item);
     next(item);
   }

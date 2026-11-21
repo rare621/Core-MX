@@ -59,6 +59,13 @@ test('the service keeps one shared catalog: reports, lookups and installs that t
   assert.equal((await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr'] })).data.matches['helmets/bellmoto10-fcr'].length, 2);
   await call(c.token, '/v1/catalog/bad', { key: 'helmets/bellmoto10-fcr', postId: 5 });
   assert.deepEqual((await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr'] })).data.matches['helmets/bellmoto10-fcr'].map((e) => e.postId), [91257]);
+  // Shared items carry the page they were installed from to friends; anything not an MXB Mods page is dropped.
+  await call(a.token, '/v1/friends', { ids: [b.id] }); await call(b.token, '/v1/friends', { ids: [a.id] });
+  const item = { slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: 'b'.repeat(64), size: 10, needs: [] };
+  await call(a.token, '/v1/loadout', { bike: 'B', items: [{ ...item, source: { postId: 9, link: 'https://mxb-mods.com/kit/', download: 'https://a.test/k.zip' } }, { ...item, slot: 'glovesPaint', path: 'rider/riders/default_mx/gloves/G.pnt', sha256: 'c'.repeat(64), source: { postId: 9, link: 'https://evil.test/' } }], equipped: [], unavailable: [], onDemand: true });
+  const shared = (await call(b.token, '/v1/loadouts?pending=1')).data.loadouts[0].items;
+  assert.deepEqual(shared[0].source, { postId: 9, title: '', link: 'https://mxb-mods.com/kit/', download: 'https://a.test/k.zip' });
+  assert.equal(shared[1].source, undefined);
   // Kept after a restart.
   await new Promise((r) => setTimeout(r, 2600));   // the service writes its data at most 2 s after a change
   child.kill(); await new Promise((r) => child.once('exit', r));
@@ -93,4 +100,44 @@ test('the shared catalog is tried after the owner\'s page and before a name sear
   fg.stillMissing('helmet', 'Bellmoto10-FCR');
   assert.equal(bad.length, 1, 'once per install');
   assert.deepEqual(searched, [], 'no name search while the catalog has options');
+});
+
+test('a file that can also come through the service tries pages only, then the service, then the name search', async () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  const jobs = new Map(), started = [], searched = [], changes = [];
+  const fg = friendGear.create({
+    site: { post: async () => null, search: async ({ query }) => { searched.push(query); return { posts: [] }; } },
+    startJob: (post) => { started.push(post.id); return 'job'; },
+    jobStatus: (id) => jobs.get(id) || null,
+    isInstalled: () => false,
+    lookup: async () => ({}),
+    onChange: (item) => changes.push(item && item.state),
+  });
+  fg.find({ slot: 'helmet', name: 'Bellmoto10-FCR', catalogKey: 'helmets/bellmoto10-fcr', pageOnly: true });
+  await tick();
+  assert.equal(fg.status('helmet', 'Bellmoto10-FCR').state, 'nopage');
+  assert.deepEqual(searched, [], 'no name search before the service had its turn');
+  assert.ok(changes.includes('nopage'), 'says so, so the service is used right away');
+  fg.find({ slot: 'helmet', name: 'Bellmoto10-FCR', catalogKey: 'helmets/bellmoto10-fcr' });   // the service failed too
+  await tick();
+  assert.equal(searched.length, 2);
+  assert.equal(fg.status('helmet', 'Bellmoto10-FCR').state, 'nomatch');
+});
+
+test('a shared item keeps its MXB Mods page through the service, and others try it before downloading the file', async (t) => {
+  const paintsync = require('../src/lib/paintsync');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-viapage-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sha = 'a'.repeat(64), asked = [], downloaded = [];
+  const lo = { id: 'r', name: 'R', bike: 'B', equipped: [{ slot: 'suitPaint', value: 'Kit' }],
+    items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: 10, needs: [], available: true, source: { postId: 9, link: 'https://mxb-mods.com/kit/' } }], unavailable: [] };
+  const call = async (method, route, body) => { if (route === '/v1/want') asked.push(...body.shas); return {}; };
+  const viaPage = (l, it) => (it.source ? { state: 'installing', title: 'Kit page' } : null);
+  const report = await paintsync.fetchFriends({ call, download: async (s) => { downloaded.push(s); throw new Error('no'); }, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage });
+  assert.equal(report[0].items[0].state, 'page');
+  assert.deepEqual(downloaded, [], 'not downloaded through the service while its page installs');
+  assert.deepEqual(asked, [], 'and not asked for');
+  const plain = await paintsync.fetchFriends({ call, download: async (s) => { downloaded.push(s); throw new Error('no'); }, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage: () => null });
+  assert.equal(plain[0].items[0].state, 'failed');
+  assert.deepEqual(downloaded, [sha], 'no page: the service');
 });

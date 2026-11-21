@@ -141,7 +141,10 @@ async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, 
     return source ? { ...u, error: SOURCE_MESSAGE, source } : u;
   });
   if (appearance) outfit.unavailable.push(appearance);
-  const items = outfit.items, meta = items.map(({ buf, ...m }) => m);
+  // The free MXB Mods page each shared file was installed from: other riders install from there
+  // first (service v27), and use the file sent through the service only if that doesn't work.
+  const where = (p) => [p, p.replace(/\.pkz$/i, ''), p.replace(/^rider\/riders\/default_mx\/(paints|gloves)\//i, 'rider/$1/')];
+  const items = outfit.items, meta = items.map(({ buf, ...m }) => { const source = sourceFor(where(m.path)); return source ? { ...m, source } : m; });
   // onDemand: the service asks for a file only once someone needs it (see server/mxbm-server.js).
   const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable, onDemand: true };
   const r = await call('POST', '/v1/loadout', payload);
@@ -274,8 +277,16 @@ async function requestMissing(call, report, now = Date.now()) {
   }
 }
 
-async function fetchFriends({ call, download, modsDir, received, have, friendId, preloaded, onProgress = () => {} }) {
+// viaPage(lo, item): for a file you don't have, try its MXB Mods page first (the owner's, or the shared
+// catalog). A truthy answer means it's being installed from there: the file isn't asked for or
+// downloaded through the service this time (state 'page'). Falsy: the file comes through the service.
+async function fetchFriends({ call, download, modsDir, received, have, friendId, preloaded, viaPage = null, onProgress = () => {} }) {
   const report = await listFriends({ call, modsDir, received, have, friendId, preloaded });
+  if (viaPage) for (const lo of report) for (const it of lo.items) {
+    if (!['ready', 'waiting'].includes(it.state)) continue;
+    const page = await Promise.resolve(viaPage(lo, it)).catch(() => null);
+    if (page) { it.state = 'page'; it.page = page; }
+  }
   await requestMissing(call, report);
   const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
   let completed = 0;
