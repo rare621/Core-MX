@@ -1752,6 +1752,14 @@ function isServerDownload(d) {
   return /\bserver\b/i.test(label) && !/\bplayer\b/i.test(label);
 }
 
+// A download started from Missing gear or a friend's gear list (within 15 minutes of opening it from
+// there): gear for another rider, so it isn't offered for your own rider when it finishes.
+function othersGear() {
+  const pick = S.othersGearPick;
+  if (!pick || Date.now() - pick.at > 15 * 60 * 1000) { S.othersGearPick = null; return {}; }
+  S.othersGearPick = null;   // one download
+  return { forOthers: true, friendName: pick.who || '' };
+}
 async function startDownload(p, dl) {
   const serverVersion = isServerDownload(dl);
   if (serverVersion && !await confirmBox('Install the server version?', '<p>This is the <b>server version</b> of the track: a cut-down copy for running a dedicated server, with little or no scenery. If you ride it, the track looks empty or black.</p><p>To ride, install the player version (Recommended / Default) instead. CoreMX never lets the server version replace a player track you have installed.</p>', 'Install server version')) return false;
@@ -1763,7 +1771,7 @@ async function startDownload(p, dl) {
   const requireReview = modelWarning || animation;
   const id = await api.invoke('jobs:start', {
     title: p.title, postId: p.id, url: dl.url, image: p.image, link: p.link, modified: p.modified,
-    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, requireReview: requireReview || serverVersion, modelWarningAccepted: modelWarning, animationLocation, serverVersion,
+    categories: p.categories, categoryNames: p.categoryNames, dependencies: p.dependencies, ...othersGear(), requireReview: requireReview || serverVersion, modelWarningAccepted: modelWarning, animationLocation, serverVersion,
   });
   if (id && !S.jobs.has(id)) S.jobs.set(id, { id, title: p.title, url: dl.url, status: 'queued', createdAt: Date.now() });
   refreshInlineDownloads();
@@ -3625,12 +3633,14 @@ api.on('jobs:update', (j) => {
   if ((!prev || prev.status !== j.status) && $('.dl-summary')) $('.dl-summary').outerHTML = downloadSummaryHtml([...S.jobs.values()]);
   if (prev && prev.status !== j.status) {
     if (j.status === 'done' && j.appId) appSavedPopup(j);
+    // Gear CoreMX fetched so other riders look right in your game: never offered for your own rider.
+    else if (j.status === 'done' && (j.friendGear || j.forOthers)) toast(`Installed <b>${esc(j.title)}</b> so ${j.friendName ? `<b>${esc(j.friendName)}</b>'s` : 'other riders’'} gear shows in your game`, 'ok', 4500);
     else if (j.status === 'done') toast(`Installed <b>${esc(j.title)}</b>`, 'ok', 4500);
     if (j.status === 'error' && j.error !== 'Cancelled') toast(`<b>${esc(j.title)}</b>: ${esc(j.error)}`, 'err', 7000);
     if (j.status === 'browser') toast(`<b>${esc(j.title)}</b> needs the browser window — click its download button there.`, 'info', 6000);
     renderRail();
   } else if (!prev) renderRail();
-  if (j.status === 'done' && prev?.status !== 'done' && j.equipCandidates?.length) offerEquip(j);
+  if (j.status === 'done' && prev?.status !== 'done' && j.equipCandidates?.length && !j.friendGear && !j.forOthers) offerEquip(j);
   if (S.view === 'downloads' && (!S.dlTab || S.dlTab === 'downloads')) updateJobInPlace(j);
   else if (S.view === 'downloads' && S.dlTab === 'recent' && j.status === 'done') renderRecentInstalls($('#content'));
 });

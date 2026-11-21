@@ -93,6 +93,7 @@ function openMissingGear() {
     const r = rows[Number((post || find)?.dataset.missingPost ?? (post || find)?.dataset.missingFind)];
     if (!r) return;
     m.close();
+    S.othersGearPick = { at: Date.now(), who: r.riders[0] || '' };
     if (post && r.source) openPost({ id: r.source.postId, title: r.source.title, link: r.source.link, image: r.source.image });
     else findMod(r.name);
   });
@@ -915,9 +916,9 @@ async function openFriendDetails(friend) {
   });
   $('.modal-body', m).addEventListener('click', (e) => {
     const find = e.target.closest('[data-friend-find]');
-    if (find) { m.close(); findMod(find.dataset.friendFind); return; }
+    if (find) { S.othersGearPick = { at: Date.now(), who: friend.name || '' }; m.close(); findMod(find.dataset.friendFind); return; }
     const post = e.target.closest('[data-friend-post]');
-    if (post) { const src = (outfit?.unavailable || []).find((u) => u.source && String(u.source.postId) === post.dataset.friendPost)?.source; if (src) { m.close(); openPost({ id: src.postId, title: src.title, link: src.link, image: src.image }); } return; }
+    if (post) { S.othersGearPick = { at: Date.now(), who: friend.name || '' }; const src = (outfit?.unavailable || []).find((u) => u.source && String(u.source.postId) === post.dataset.friendPost)?.source; if (src) { m.close(); openPost({ id: src.postId, title: src.title, link: src.link, image: src.image }); } return; }
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     if (e.target.closest('[data-friend-track]')) { m.close(); findFriendTrack(friend, l); }
     if (e.target.closest('[data-friend-modal-join]') && l) {
