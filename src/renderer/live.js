@@ -51,9 +51,55 @@ function askToVerify() {
   });
 }
 
+// ---------- Missing gear ----------
+document.addEventListener('click', (e) => { if (e.target.closest('[data-missing-open-all]')) openMissingGear(); });
+// Gear other riders wear (friends, or riders on your server) that CoreMX couldn't get by itself: their
+// CoreMX couldn't send it, and neither its MXB Mods page, the shared catalog nor a search found it.
+// The player installs the right mod; CoreMX checks the files that install put in the game, and only
+// then shares which page it came from, so other riders get it automatically.
+let missingSeen = new Set();
+function noteMissingGear(st) {
+  const rows = st?.paintSync?.needsYou || [];
+  const fresh = rows.filter((r) => !missingSeen.has(`${r.slot}|${r.name}`.toLowerCase()));
+  for (const r of rows) missingSeen.add(`${r.slot}|${r.name}`.toLowerCase());
+  if ($('#missingGear')) { drawMissingGear(); return; }
+  if (!fresh.length) return;
+  toast(`<b>CoreMX couldn't find ${esc(fresh[0].name)}</b>${fresh[0].riders[0] ? ` (worn by ${esc(fresh[0].riders[0])})` : ''}${fresh.length > 1 ? ` and ${fresh.length - 1} more` : ''}. <button class="btn btn-sm" data-missing-open>Choose it</button>`, 'info', 12000);
+  $('#toasts').lastElementChild?.querySelector('[data-missing-open]')?.addEventListener('click', () => openMissingGear());
+}
+const GEAR_ICON = { helmet: 'helmet', helmetPaint: 'helmet', gogglesPaint: 'helmet', bikePaint: 'bike', boots: 'boot', bootsPaint: 'boot', glovesPaint: 'glove' };
+function missingRowHtml(r, i) {
+  const why = r.find ? findLabel(r.find).replace(/ Find (it|the right one) below\.$/, '') : r.error || 'Couldn\'t be sent';
+  return `<div class="friend-gear-row"><span class="slot-ico">${icon(GEAR_ICON[r.slot] || 'shirt')}</span><div><b>${esc(r.name)}</b><div class="muted">${esc(r.label || r.slot)}${r.riders.length ? ` · worn by ${esc(r.riders.join(', '))}` : ''}</div><small class="sync-warning">${esc(why)}</small>
+    <div class="friend-session-actions">${r.source ? `<button class="btn btn-sm" data-missing-post="${i}">${icon('globe')}Open ${esc(r.source.title || 'its MXB Mods page')}</button>` : ''}<button class="btn btn-sm btn-primary" data-missing-find="${i}">${icon('search')}Search Get Mods</button></div></div></div>`;
+}
+function drawMissingGear() {
+  const box = $('#missingGear');
+  if (!box) return;
+  const rows = S.live.status?.paintSync?.needsYou || [];
+  box.innerHTML = rows.length
+    ? `<p class="muted">Their CoreMX couldn't send these, and CoreMX couldn't find them on MXB Mods by itself. Install the right mod and they show in your game. CoreMX checks the files the install puts in your game, then remembers that page for every CoreMX rider.</p><div class="friend-gear-list">${rows.map(missingRowHtml).join('')}</div>`
+    : '<div class="set-card muted">Nothing missing. Gear other riders wear is installed or on its way.</div>';
+}
+function openMissingGear() {
+  if ($('#missingGear')) return;
+  const m = modal({ title: 'Missing gear', body: '<div id="missingGear"></div>', foot: '<span class="grow"></span><button class="btn" data-close>Close</button>' });
+  drawMissingGear();
+  m.addEventListener('click', (e) => {
+    const rows = S.live.status?.paintSync?.needsYou || [];
+    const post = e.target.closest('[data-missing-post]'), find = e.target.closest('[data-missing-find]');
+    const r = rows[Number((post || find)?.dataset.missingPost ?? (post || find)?.dataset.missingFind)];
+    if (!r) return;
+    m.close();
+    if (post && r.source) openPost({ id: r.source.postId, title: r.source.title, link: r.source.link, image: r.source.image });
+    else findMod(r.name);
+  });
+}
+
 api.on('online:status', (st) => {
   const previous = S.live.status;
   S.live.status = st;
+  noteMissingGear(st);
   if (st?.service?.connected && st.service.verified === false && !st.service.signingIn) askToVerify();
   const signKey = (x) => JSON.stringify([x?.service?.connected, x?.service?.needsSignIn, x?.service?.signingIn, x?.service?.verified]);
   if (previous && signKey(previous) !== signKey(st) && (S.view === 'friends' || S.view === 'online')) { S.live.friends = null; setTimeout(() => (S.view === 'friends' ? renderFriends($('#content')) : renderOnline($('#content'))), 0); }
@@ -515,6 +561,8 @@ async function renderFriends(c) {
         ${ps && ps.enabled ? `<span class="muted" style="font-size:12px">${ps.busy ? 'Syncing paints…' : ps.at ? `Paints synced ${esc(timeAgo(ps.at))}` : ''}</span>` : ''}</div>`;
   const pluginTip = st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
     ? `<div class="fr-banner tip">${icon('info')}<div>${st.plugin.needsUpdate ? 'Close MX Bikes and update the game plugin to report server sessions.' : 'Install the game plugin so friends can see which server you\'re on.'}</div><button class="btn btn-sm" data-act="live-plugin-install">${st.plugin.needsUpdate ? 'Update plugin' : 'Install'}</button></div>` : '';
+  const missing = connected ? (ps?.needsYou || []).length : 0;
+  const missingTip = missing ? `<div class="fr-banner tip">${icon('alert')}<div><b>${missing} item${missing === 1 ? '' : 's'} of other riders' gear</b> CoreMX couldn't find by itself.</div><button class="btn btn-sm btn-primary" data-missing-open-all>Missing gear</button></div>` : '';
 
   // Your own card: who you are and what your friends are up to.
   const counts = { ride: rows.filter((r) => r.s[0] === 'ride').length, on: rows.filter((r) => r.s[0] === 'on').length };
@@ -552,8 +600,8 @@ async function renderFriends(c) {
     <div class="toolbar"><h2>Friends</h2>${c.id === 'content' ? `<div class="seg-tabs"><button class="${tab === 'friends' ? 'active' : ''}" data-friends-tab="friends">${icon('users')}Friends</button><button class="${tab === 'board' ? 'active' : ''}" data-friends-tab="board">${icon('clock')}Leaderboard</button><button class="${tab === 'sync' ? 'active' : ''}" data-friends-tab="sync">${icon('settings')}Sync settings</button></div>` : ''}<div class="grow"></div>
       ${connected ? `<button class="btn btn-icon" data-act="live-friends-refresh" title="Refresh">${icon('refresh')}</button>` : ''}
       ${c.id === 'content' ? '' : `<button class="btn btn-primary" data-act="friends-add">${icon('user')}Add friends</button>`}</div>
-    <div class="scroller">${tab === 'board' ? `<div class="fr-page">${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
-      <aside class="fr-side">${meCard}${banner}${pluginTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
+    <div class="scroller">${tab === 'board' ? `<div class="fr-page">${banner}<div id="lapBoard"><div class="loadmore"><div class="spinner"></div></div></div></div></div></div></div>` : tab === 'sync' ? `<div class="fr-page">${banner}${pluginTip}${missingTip}${friendSyncTabHtml(st)}<div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div></div></div></div></div>` : `<div class="fr-page fr-layout">
+      <aside class="fr-side">${meCard}${banner}${pluginTip}${missingTip}${S.view === 'friends' && c.id !== 'content' ? friendSettingsHtml(st) : ''}</aside>
       <section class="fr-main"><div class="friends-sync-overlay" id="friendsSyncOverlay">${friendProgressHtml()}</div>
       ${S.live.friendsErr && connected ? `<div class="notice danger">${icon('alert')}<div>${esc(S.live.friendsErr)}</div></div>` : ''}
       ${S.friends.length

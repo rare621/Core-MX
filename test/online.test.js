@@ -398,11 +398,11 @@ test('gear a rider could not send is installed from its MXB Mods page once, and 
   const { client } = fixture({
     store: { get: (key) => key === 'online' ? cfg : key === 'friends' ? [] : undefined, set: () => {} },
     modsDir: () => root, haveMod: async (n) => n.kind === 'helmet' ? installed : true,
-    findGear: (req) => asked.push([req.source && req.source.postId, req.who, req.name]),
+    findGear: (req) => asked.push([req.source && req.source.postId, req.who, req.name, req.catalogKey]),
   });
   const first = await client.syncServerRiders('Server', ['rider']);
   assert.equal(first[0].unavailable[0].state, 'unavailable');
-  assert.deepEqual(asked, [[77, 'Rider', 'Big']], 'the free helmet is fetched; the paid one never is');
+  assert.deepEqual(asked, [[77, 'Rider', 'Big', 'helmets/big']], 'the free helmet is fetched; the paid one never is');
   installed = true;
   const second = await client.syncServerRiders('Server', ['rider']);
   assert.equal(second[0].unavailable[0].state, 'have');

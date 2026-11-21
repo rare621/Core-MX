@@ -15,6 +15,7 @@ const PAINT_EVERY = 60 * 1000;
 const LOOK_FIELDS = ['bikePaint', 'rider', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint'];
 // Not fetched from MXB Mods for you: bought, or tied to the owner's account.
 const UNFETCHABLE = /paid|store-protected|tied to your account|account-bound/i;
+const catalogKeys = require('./gear-keys');
 const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
 // "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
 // sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
@@ -48,7 +49,7 @@ function looksText(loadouts, reload, stamp, reports = {}) {
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
-function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, findGear = () => {}, gearStatus = () => null, portMapper = null, firewall = null }) {
+function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, findGear = () => {}, gearStatus = () => null, gearStillMissing = () => {}, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
   let gameRunning = false, pluginUpdating = false;
   let lastSent = '';
@@ -76,7 +77,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         const key = `${r.id}|${u.slot}|${String(cur[u.slot] || '').toLowerCase()}`;
         if (u.state === 'unavailable') {
           seenMissing.add(key);
-          if (!UNFETCHABLE.test(u.error || '')) findGear({ slot: u.slot, name: cur[u.slot], source: u.source || null, who: r.name || '' });
+          if (!UNFETCHABLE.test(u.error || '')) {
+            findGear({ slot: u.slot, name: cur[u.slot], source: u.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(u.slot, cur[u.slot], cur, r.bike) });
+            if (gearStatus(u.slot, cur[u.slot])?.state === 'installed') gearStillMissing(u.slot, cur[u.slot]);
+          }
         } else if (u.state === 'have' && seenMissing.delete(key)) pendingReload.add(RELOAD_FOR[u.slot]);
       }
     }
@@ -92,9 +96,32 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       }
     }
   }
+  // Gear CoreMX couldn't get by itself, from friends and from riders on your server: the Missing gear
+  // window. One row per item, with who wears it.
+  let looksReports = [];
+  const DONE = new Set(['nomatch', 'failed', 'installed']);
+  function needsYou() {
+    const rows = new Map();
+    for (const r of [...(paint.report || []), ...looksReports]) {
+      const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
+      for (const u of r.unavailable || []) {
+        const name = cur[u.slot];
+        if (u.state !== 'unavailable' || !name || u.included === 'bike' || /paid|store-protected/i.test(u.error || '')) continue;
+        if (!(u.find ? DONE.has(u.find.state) : /tied to your account|account-bound/i.test(u.error || ''))) continue;
+        const key = `${u.slot}|${String(name).toLowerCase()}`;
+        const row = rows.get(key) || { slot: u.slot, name, label: u.label, error: u.error, source: u.source || null, find: u.find || null, riders: [] };
+        if (r.name && !row.riders.includes(r.name)) row.riders.push(r.name);
+        rows.set(key, row);
+      }
+    }
+    return [...rows.values()];
+  }
+  let needsYouSig = '';
+  function noteNeedsYou() { const sig = JSON.stringify(needsYou()); if (sig !== needsYouSig) { needsYouSig = sig; onChange(status()); } }
   // A fetch moved on: show it in CoreMX and in the game.
   function refreshGearStatus() {
     annotate(paint.report);
+    annotate(looksReports);
     onChange(status());
     if (current?.inEvent) { looksKey = ''; syncLooks(); }
   }
@@ -468,7 +495,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         needsSignIn: !c.token && needsSignIn, signingIn: signing ? { confirmed: signing.confirmed } : null, verified: c.token ? (c.verified ?? null) : null },
       serverShare: c.serverShare !== false,
       upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT, doubleNat: !!upnp.doubleNat, firewall: upnp.firewall || null, hosting: !!upnp.hostingSince },
-      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting },
+      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting, needsYou: needsYou() },
     };
   }
 
@@ -772,7 +799,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // plugin/mxbm_presence.c. Only riders on the bike their shared loadout is for are included.
   let looksRun = null, looksKey = '';
   function looksPath() { return path.join(userDir(), 'mxbm_looks.txt'); }
-  function clearLooks() { looksKey = ''; fsp.rm(looksPath(), { force: true }).catch(() => {}); }
+  function clearLooks() { looksKey = ''; looksReports = []; noteNeedsYou(); fsp.rm(looksPath(), { force: true }).catch(() => {}); }
   function syncLooks() {
     if (looksRun) return looksRun;
     looksRun = doSyncLooks().catch((e) => { paint.looksError = e.message; }).finally(() => { looksRun = null; });
@@ -789,6 +816,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     paintsync.touchReceived(received, results);
     setCfg({ received });
     noteUnavailable(results);
+    looksReports = results;
+    noteNeedsYou();
     const reload = new Set(pendingReload);
     pendingReload.clear();
     for (const r of results) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) reload.add(RELOAD_FOR[it.slot]);
@@ -800,6 +829,23 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     looksKey = key;
     await fsp.writeFile(looksPath() + '.tmp', looksText(riders, [...reload], Date.now(), reports));
     await fsp.rename(looksPath() + '.tmp', looksPath());
+  }
+
+  // ---------- gear catalog (service v27) ----------
+  // Which MXB Mods page and download each gear file comes from, shared by every CoreMX: see
+  // server/mxbm-server.js. false/{} when signed out, not verified, or the service is older.
+  const catalogReady = () => !!cfg().token && cfg().verified !== false;
+  async function reportCatalog(entry) {
+    if (!catalogReady()) return false;
+    try { await call('POST', '/v1/catalog/report', entry); return true; } catch { return false; }
+  }
+  async function catalogLookup(keys) {
+    if (!catalogReady() || !keys.length) return {};
+    try { return (await call('POST', '/v1/catalog/lookup', { keys })).matches || {}; } catch { return {}; }
+  }
+  async function catalogBad(key, postId) {
+    if (!catalogReady()) return;
+    await call('POST', '/v1/catalog/bad', { key, postId }).catch(() => {});
   }
 
   async function setServerShare(on) {
@@ -839,7 +885,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, refreshGearStatus, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, refreshGearStatus, reportCatalog, catalogLookup, catalogBad, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

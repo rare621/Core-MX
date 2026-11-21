@@ -584,6 +584,7 @@ function jobView(j) {
 function emitJob(j) {
   if (['done', 'error'].includes(j.status)) { j.completedAt = j.completedAt || Date.now(); recentInstalls.pruneHistory(jobs); }
   // Friend gear installed: sync again so the game is told to load it (see online.js noteUnavailable).
+  if (j.status === 'done' && j.postId && !j.catalogQueued) { j.catalogQueued = true; setTimeout(() => reportCatalog(), 3000); }
   if (j.friendGear && j.status === 'done' && !j.friendSynced) { j.friendSynced = true; setTimeout(() => online?.syncPaints().catch(() => {}), 1500); }
   if (j.friendGear && j.status === 'error' && !j.friendSynced) { j.friendSynced = true; friendGear.jobFailed(j.id); online?.refreshGearStatus(); }
   send('jobs:update', jobView(j));
@@ -657,6 +658,36 @@ async function runDownload(j) {
   }
 }
 
+// ---------- gear catalog ----------
+// Every install from an MXB Mods page tells the service which gear files that download really put on
+// this PC (keys from src/lib/gear-keys.js), so other riders' CoreMX can fetch gear that couldn't be
+// sent. Only the files an install wrote count, never a player's say-so. Paid installs are never sent.
+const gearKeys = require('./src/lib/gear-keys');
+function catalogReports(rec) {
+  if (!rec || rec.shopKey || !Number(rec.postId) || !/^https:\/\/mxb-mods\.com\//i.test(String(rec.link || ''))) return [];
+  const per = rec.downloads && Object.keys(rec.downloads).length ? Object.entries(rec.downloads) : rec.source ? [[rec.source, rec.files]] : [];
+  return per.filter(([url, files]) => /^https?:\/\//i.test(url) && url.length <= 300 && Array.isArray(files))
+    .map(([download, files]) => ({ postId: Number(rec.postId), link: rec.link, title: rec.title, download, keys: gearKeys.keysForFiles(files).slice(0, 300) }))
+    .filter((r) => r.keys.length);
+}
+let catalogBusy = false;
+async function reportCatalog() {
+  if (catalogBusy || !online) return;
+  catalogBusy = true;
+  try {
+    for (const [key, rec] of Object.entries(store.get('installs') || {})) {
+      const reports = catalogReports(rec);
+      const sig = reports.length ? crypto.createHash('sha1').update(JSON.stringify(reports)).digest('hex').slice(0, 16) : null;
+      if (!sig || rec.catalogSig === sig) continue;
+      let sent = true;
+      for (const r of reports) { if (!await online.reportCatalog(r)) { sent = false; break; } await new Promise((done) => setTimeout(done, 250)); }
+      if (!sent) break;   // signed out, not verified or an older service: try again later
+      store.update('installs', (all) => { if (all[key]) all[key].catalogSig = sig; return all; });
+    }
+  } catch (e) { console.warn('Gear catalog:', e.message); }
+  finally { catalogBusy = false; }
+}
+
 // Gear other riders wear that their CoreMX couldn't send: fetched from MXB Mods (see src/lib/friend-gear.js).
 const friendGear = require('./src/lib/friend-gear').create({
   site,
@@ -669,6 +700,8 @@ const friendGear = require('./src/lib/friend-gear').create({
     return j.id;
   },
   jobStatus: (id) => { const j = jobs.get(id); return j ? { status: j.status, error: j.error } : null; },
+  lookup: (keys) => online ? online.catalogLookup(keys) : {},
+  reportBad: (key, postId) => online?.catalogBad(key, postId),
   isInstalled: (postId) => Object.values(store.get('installs') || {}).some((r) => Number(r.postId) === Number(postId))
     || [...jobs.values()].some((j) => Number(j.postId) === Number(postId) && !['done', 'error'].includes(j.status)),
   enabled: () => store.get('settings').friendGearInstall !== false,
@@ -2275,10 +2308,13 @@ app.whenReady().then(async () => {
     onInstalled: async () => { await scan(); writeSyncedList(); send('library:changed', {}); },
     findGear: (req) => friendGear.find(req),
     gearStatus: (slot, name) => friendGear.status(slot, name),
+    gearStillMissing: (slot, name) => friendGear.stillMissing(slot, name),
     onChange: (st) => send('online:status', st),
   });
   online.start();
   watchPluginFiles();
+  setTimeout(() => reportCatalog(), 60 * 1000).unref();
+  setInterval(() => reportCatalog(), 30 * 60 * 1000).unref();
   setTimeout(checkFrostmod, 8000).unref();
   setTimeout(checkFrostmod, 30000).unref();
   setTimeout(writeUninstallList, 5000).unref();

@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 26;
+const VERSION = 27;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -75,11 +75,12 @@ const onlineCount = () => { const now = Date.now(), ids = new Set(); for (const 
 const MAX_BODY = 64 * 1024, MAX_RIDERS = 128, MAX_SERVERS = 3000, MAX_FRIENDS = 300;
 
 // ---------- state ----------
-let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [] }, cacheCleanupSafe = false;
+let db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [], catalog: {} }, cacheCleanupSafe = false;
 try {
   const saved = JSON.parse(fs.readFileSync(DATA, 'utf8'));
   if (!saved.users || typeof saved.users !== 'object' || Array.isArray(saved.users)) throw new Error('Invalid user database');
-  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [], ...saved }; cacheCleanupSafe = true;
+  db = { users: {}, servers: {}, announcements: [], r2: {}, activity: {}, wants: {}, admins: [], catalog: {}, ...saved }; cacheCleanupSafe = true;
+  if (!db.catalog || typeof db.catalog !== 'object' || Array.isArray(db.catalog)) db.catalog = {};
 } catch (error) { if (error.code === 'ENOENT') cacheCleanupSafe = true; }
 const cacheReaders = new Map();
 const { liveFiles } = require('./cache-cleanup');
@@ -112,6 +113,25 @@ function saveNow() {
   try { fs.writeFileSync(DATA + '.tmp', JSON.stringify(db)); fs.renameSync(DATA + '.tmp', DATA); } catch (e) { console.error('Could not save:', e.message); }
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, () => { saveNow(); process.exit(0); });
+
+// ---------- gear catalog ----------
+// key: "<kind>/<name>" or "<kind>/<model>/<name>" (lowercase), as made by src/lib/gear-keys.js.
+const CATALOG_KINDS = new Set(['helmets', 'boots', 'protections', 'riders', 'tyres', 'bikes', 'helmetpaints', 'goggles', 'bootpaints', 'protectionpaints', 'suits', 'gloves', 'bikepaints']);
+const CATALOG_MAX_KEYS = 300000, CATALOG_PER_KEY = 6, CATALOG_VOTERS = 50, CATALOG_KEYS_PER_REPORT = 300;
+function catalogKey(v) {
+  const k = String(v == null ? '' : v);
+  if (k.length > 160 || k !== k.toLowerCase() || /[\u0000-\u001f\u007f\\:*?"<>|]/.test(k)) return null;
+  const parts = k.split('/');
+  if (parts.length < 2 || parts.length > 3 || !CATALOG_KINDS.has(parts[0]) || parts.slice(1).some((p) => !p || p === '.' || p === '..' || p.length > 64 || p !== p.trim())) return null;
+  return k;
+}
+function catalogEntry(body) {
+  const postId = Number(body && body.postId), link = String(body && body.link || ''), download = String(body && body.download || '');
+  if (!Number.isSafeInteger(postId) || postId <= 0 || link.length > 300 || !/^https:\/\/mxb-mods\.com\/\S*$/i.test(link)) return null;
+  if (download.length > 300 || !/^https?:\/\/\S+$/i.test(download)) return null;
+  return { postId, link, title: str(body.title, 140), download };
+}
+const catalogScore = (e) => (e.by || []).length - 2 * (e.bad || []).length;
 
 // ---------- helpers ----------
 const str = (v, n = 100) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
@@ -661,6 +681,50 @@ const routes = {
     if (!me) return [401, { error: 'not signed in' }];
     const ids = (Array.isArray(body.ids) ? body.ids : []).filter(isSteamId).slice(0, 500);
     return [200, { known: ids.filter((id) => db.users[id]).map((id) => ({ id, name: db.users[id].name })) }];
+  },
+
+  // ---------- gear catalog ----------
+  // Which MXB Mods page and download a gear file comes from, built from what CoreMX installs put on
+  // riders' PCs (the app reports the files an install really placed, never a player's pick). Another
+  // rider's CoreMX uses it for gear that couldn't be sent, and says when an install didn't contain the
+  // item: entries with more of those than confirmations are no longer handed out.
+  'POST /v1/catalog/report': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const entry = catalogEntry(body);
+    if (!entry) return [400, { error: 'Invalid catalog report.' }];
+    const keys = [...new Set((Array.isArray(body.keys) ? body.keys : []).map(catalogKey).filter(Boolean))].slice(0, CATALOG_KEYS_PER_REPORT);
+    let added = 0;
+    for (const key of keys) {
+      const list = db.catalog[key] || (Object.keys(db.catalog).length < CATALOG_MAX_KEYS ? (db.catalog[key] = []) : null);
+      if (!list) break;
+      let e = list.find((x) => x.postId === entry.postId && x.download === entry.download);
+      if (!e) { e = { ...entry, by: [], bad: [], at: Date.now() }; list.push(e); }
+      Object.assign(e, { link: entry.link, title: entry.title });
+      if (!e.by.includes(me.id)) { e.by = [...e.by, me.id].slice(-CATALOG_VOTERS); added++; }
+      e.bad = e.bad.filter((id) => id !== me.id);
+      list.sort((a, b) => catalogScore(b) - catalogScore(a));
+      list.length = Math.min(list.length, CATALOG_PER_KEY);
+    }
+    if (added) save();
+    return [200, { ok: true, keys: keys.length }];
+  },
+  'POST /v1/catalog/lookup': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const keys = [...new Set((Array.isArray(body.keys) ? body.keys : []).map(catalogKey).filter(Boolean))].slice(0, 40);
+    const matches = {};
+    for (const key of keys) {
+      const list = (db.catalog[key] || []).filter((e) => catalogScore(e) > 0).sort((a, b) => catalogScore(b) - catalogScore(a)).slice(0, 3);
+      if (list.length) matches[key] = list.map((e) => ({ postId: e.postId, link: e.link, title: e.title, download: e.download, votes: catalogScore(e) }));
+    }
+    return [200, { matches }];
+  },
+  'POST /v1/catalog/bad': async (req, body, me) => {
+    if (!me) return [401, { error: 'not signed in' }];
+    const key = catalogKey(body.key), postId = Number(body.postId);
+    const e = key && (db.catalog[key] || []).find((x) => x.postId === postId);
+    if (!e) return [200, { ok: true }];
+    if (!e.bad.includes(me.id)) { e.bad = [...e.bad, me.id].slice(-CATALOG_VOTERS); e.by = e.by.filter((id) => id !== me.id); save(); }
+    return [200, { ok: true }];
   },
 
   // ---------- paint sync ----------
