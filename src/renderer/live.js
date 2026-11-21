@@ -485,6 +485,10 @@ async function renderFriends(c) {
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div>${st.service.signingIn ? (st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser.") : '<b>Sign in with Steam</b> to see friends, live servers and share gear. Steam\'s own page opens in your browser.'}</div>${st.service.signingIn ? '<button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button>' : `<button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Sign in with Steam</button>`}</div>`
     : !connected
     ? `<div class="fr-banner off"><span class="fr-dot off"></span><div><b>You're offline.</b> ${st.service.defaultUrl ? "Friends' status and paint sync are paused until the online service is reachable." : 'Online features are not set up in this copy of the app.'}</div>${st.service.defaultUrl ? `<button class="btn btn-sm" data-act="live-connect">Try again</button>` : ''}</div>`
+    : st.service.verified === false && !st.service.signingIn
+    ? `<div class="fr-banner tip">${icon('steam')}<div>Online as <b>${esc(st.service.name || steam.name || '')}</b>. <b>Verify with Steam</b> once to confirm this Steam ID is yours (needed for Admin). Friends and settings stay.</div><button class="btn btn-sm btn-primary" data-act="live-signin">${icon('steam')}Verify with Steam</button></div>`
+    : st.service.signingIn
+    ? `<div class="fr-banner tip">${icon('steam')}<div>${st.service.signingIn.confirmed ? '<b>Steam confirmed your account.</b> If your browser asks, allow it to open CoreMX.' : "<b>Waiting for Steam…</b> Sign in on Steam's page in your browser."}</div><button class="btn btn-sm" data-act="live-signin-cancel">Cancel</button></div>`
     : `<div class="fr-banner on"><span class="fr-dot ride"></span><div>Online as <b>${esc(st.service.name || steam.name || '')}</b>${st.service.error ? ` · <span style="color:var(--warn)">${esc(st.service.error)}</span>` : ''}</div>
         ${ps && ps.enabled ? `<span class="muted" style="font-size:12px">${ps.busy ? 'Syncing paints…' : ps.at ? `Paints synced ${esc(timeAgo(ps.at))}` : ''}</span>` : ''}</div>`;
   const pluginTip = st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
@@ -502,7 +506,7 @@ async function renderFriends(c) {
     tab, c.id, S.view, S.friends, S.live.friendsErr, S.live.friendQuery,
     S.live.showAllFriends, S.friends.some((f) => !live.has(f.code)) && S.live.friendsLoading,
     (S.live.friends || []).map((f) => [f.id, f.status, f.online, f.online ? 0 : f.lastSeen, f.server, f.trackName, f.trackId, f.session, f.inEvent, f.inGame, f.address, f.avatar]),
-    st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.defaultUrl, st?.service?.share,
+    st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.verified, st?.service?.signingIn, st?.service?.needsSignIn, st?.service?.defaultUrl, st?.service?.share,
     st?.serverShare, st?.plugin?.available, st?.plugin?.installed, st?.plugin?.needsUpdate,
     st?.paintSync?.enabled, st?.paintSync?.error,
     st?.paintSync?.received, st?.paintSync?.friends, steam.name, steam.avatarData,

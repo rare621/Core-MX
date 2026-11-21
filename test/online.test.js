@@ -362,3 +362,13 @@ test('a token that stops working (account taken back) asks to sign in again', as
   assert.equal(f.config().token, null);
   assert.equal(f.client.status().service.needsSignIn, true);
 });
+
+test('already online at start: CoreMX asks whether the account is Steam-verified, so it can offer Verify', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(String(url).endsWith('/v1/me') ? { id: 'fixture-account', name: 'Fixture', verified: false } : { friends: [] })));
+  const f = fixture();
+  f.set({ url: 'http://67.84.130.214:60000' });
+  f.client.start();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  f.client.stop();
+  assert.equal(f.client.status().service.verified, false);
+});

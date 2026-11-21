@@ -403,7 +403,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const c = cfg();
     if (c.url && defaultUrl && c.url !== defaultUrl) setCfg({ url: defaultUrl, ...(sameService(c.url) ? {} : { token: null, id: null }) });
     if (defaultUrl && !cfg().token && !c.optedOut) connect().catch((e) => { lastError = e.message; onChange(status()); });
-    else if (c.token) syncPaints().catch(() => {});
+    else if (c.token) { syncPaints().catch(() => {}); checkVerified(); }   /* already online: is the account Steam-verified? */
     // Existing installs otherwise keep the old DLO forever after an app upgrade.
     // Windows locks loaded plugins: never replace one while the game is open.
     updatePluginIfNeeded();
