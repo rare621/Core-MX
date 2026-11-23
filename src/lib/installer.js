@@ -304,7 +304,10 @@ function plan(files, ctx, opts = {}) {
   let kind = files.some((f) => /\.dlo$/i.test(f.rel)) ? 'plugin' : opts.kind || recipe?.kind || ((!ctx.categories || !ctx.categories.length || catKind === 'custom') && ctx.kindHint) || catKind;
   let autoKind = !opts.kind;
   const visualBikeFiles = files.some((f) => /\.edf$/i.test(f.rel)) && !files.some((f) => /\.(engn|geom)$/i.test(f.rel));
-  if (autoKind && visualBikeFiles && (kind === 'bike' || files.some((f) => /(?:^|\/)bikes\//i.test(f.rel)) || /model[\s_-]*swap/i.test(text + ' ' + (ctx.categoryNames || []).join(' ')))) kind = 'bikeSwap';
+  // A bike's look without its physics: a model swap. Also a "... Swap" post whose files are a bike's
+  // parts (chassis, steering, suspension), wherever it was posted (Modpacks, Other).
+  const bikeParts = files.some((f) => /(?:^|\/)(?:chassis|steer|fsusp|rsusp)\.hrc$/i.test(f.rel));
+  if (autoKind && visualBikeFiles && (kind === 'bike' || files.some((f) => /(?:^|\/)bikes\//i.test(f.rel)) || /model[\s_-]*swap/i.test(text + ' ' + (ctx.categoryNames || []).join(' ')) || bikeParts && /\bswap\b/i.test(ctx.title || ''))) kind = 'bikeSwap';
   if (autoKind && !recipe) {
     const content = files.filter((f) => !NOT_CONTENT.test(f.rel));
     // Paints posted under Fonts or Stands are a bike livery / rider kit (a stand's look is a bike paint).
@@ -658,7 +661,7 @@ function plan(files, ctx, opts = {}) {
   warnings.push(...serverNote);
   if (ambiguousAnimations.size) warnings.push('This download contains multiple variants for the same animation file. Install one variant at a time; CoreMX will not pick one silently.');
   if ((kind === 'animation' || kind === 'animationGame') && ctx.animationLocation === null) warnings.push('The creator did not specify whether this animation belongs in the game install folder or mods folder. Check the installation instructions and change the content type below if needed.');
-  const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && (/\.pnt$/i.test(e.rel) || setupNeedsBike && /\.st[pt]$/i.test(e.rel)) && (needsPaintTarget || needsRiderTarget) || e.how === 'choose-variant').length;
+  const awaitingTarget = entries.filter((e) => e.status === 'unresolved' && (/\.pnt$/i.test(e.rel) || kind === 'bikeSwap' || setupNeedsBike && /\.st[pt]$/i.test(e.rel)) && (needsPaintTarget || needsRiderTarget) || e.how === 'choose-variant').length;
   if (pick.waiting) warnings.push('This download has several versions for the same place (for example one per brand), and the game uses one at a time. Choose the one you want below.');
   if (kind === 'setup' && !ctx.profile) warnings.push('Create a rider profile in MX Bikes first: setups are saved in your profile.');
   if (!installable && !awaitingTarget && !needsSoundBike && !ambiguousAnimations.size) warnings.push('Choose the content type or destination folder to continue.');

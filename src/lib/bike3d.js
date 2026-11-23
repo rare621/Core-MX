@@ -99,8 +99,10 @@ function mounts(g, wheelRadii = {}) {
   };
 }
 
+// Other names exporters give a part: the game's own p_mx/m_sm wheels are "wheel_front"/"wheel_rear".
+const PART_ALIASES = { fwheel: ['wheel_front', 'front_wheel', 'frontwheel'], rwheel: ['wheel_rear', 'rear_wheel', 'rearwheel'] };
 function selectNode(nodes, requested, expected) {
-  const names = [...new Set([requested, expected, expected + 'a'].filter(Boolean).map((n) => n.toLowerCase()))];
+  const names = [...new Set([requested, expected, expected + 'a', ...(PART_ALIASES[expected] || [])].filter(Boolean).map((n) => n.toLowerCase()))];
   for (const name of names) {
     const exact = nodes.find((node) => node.name.toLowerCase() === name);
     if (exact) return exact;
@@ -110,6 +112,12 @@ function selectNode(nodes, requested, expected) {
   for (const name of [...new Set([requested, expected].filter(Boolean).map((n) => n.toLowerCase()))]) {
     const variants = nodes.filter((node) => node.name.toLowerCase().startsWith(name));
     if (variants.length === 1) return variants[0];
+  }
+  // A wheel model holding both wheels under other names ("wheel_sm_front"): the one part that says front/rear.
+  const side = { fwheel: /front/i, rwheel: /rear/i }[expected];
+  if (side && nodes.length > 1) {
+    const sided = nodes.filter((node) => side.test(node.name));
+    if (sided.length === 1) return sided[0];
   }
   // A separately exported part may have an arbitrary root name. A combined
   // scene must never be used wholesale when its requested part is unresolved.

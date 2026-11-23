@@ -787,6 +787,14 @@ async function afterDownload(j, file) {
     const inspected = await paintCompat.inspect(j.files, modsDir(), stockRiderPkz(), j.opts?.kind || j.ctx.kindHint || installer.kindFromCategories(j.ctx.categories));
     Object.assign(j.ctx, inspected, { dependencies: [...(j.dependencies || []), ...inspected.dependencies] });
     if (!j.ctx.categories.length && !j.ctx.kindHint && inspected.knownBodyPaintFiles.length && inspected.knownBodyPaintFiles.length === j.files.filter((f) => /\.pnt$/i.test(f.rel)).length) { j.ctx.kindHint = 'riderKit'; j.ctx.detectReason = 'paint-textures'; }
+    // Loose paints in a category without a type (Modpacks, Other...) or uploaded: what they paint says
+    // what they are (rider kit, gloves, bike livery), when every paint agrees. Paints in folders that
+    // already say where they go are left to the folder structure.
+    else if (!j.ctx.kindHint && (!j.ctx.categories.length || installer.kindFromCategories(j.ctx.categories) === 'custom')) {
+      const content = j.files.filter((f) => !/\.(txt|md|url|pdf|html?|docx?|rtf|jpe?g|png|webp|gif|psd)$/i.test(f.rel));
+      const kinds = content.every((f) => /\.pnt$/i.test(f.rel) && !/(?:^|\/)(?:bikes|rider|mods)\//i.test(f.rel)) ? content.map((f) => paintCompat.paintKind(inspected.paintTextures[f.rel] || [])) : [];
+      if (kinds.length && kinds.every((k) => k && k === kinds[0])) { j.ctx.kindHint = kinds[0]; j.ctx.detectReason = 'paint-textures'; }
+    }
     if (j.abort.signal.aborted) throw new Error('Cancelled');
     j.plan = installer.plan(j.files, j.ctx, j.opts || {});
     if (j.plan.requiresModelWarning) j.requireReview = true;

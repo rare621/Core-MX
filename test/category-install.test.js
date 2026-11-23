@@ -188,3 +188,27 @@ test('a plugin made for several PiBoSo games installs only its MX Bikes .dlo', (
   const wrapped = plan(files('pack/plugins/tool.dlo', 'pack/plugins/tool_gpb.dlo'), [40, 56]);
   assert.deepEqual(map(wrapped), { 'pack/plugins/tool.dlo': 'plugins/tool.dlo', 'pack/plugins/tool_gpb.dlo': null });
 });
+
+test('modpacks: a bike swap posted as "... Swap" with loose bike parts asks only which bike (checked 2026-11-22)', () => {
+  const parts = files('chassis.hrc', 'fsusp.hrc', 'gfx.cfg', 'model.edf', 'rsusp.hrc', 'steer.hrc');
+  const ask = plan(parts, [93], { title: 'Triumph Swap  (For Ktm.Husqvarna.GasGas)' });
+  assert.equal(ask.kind, 'bikeSwap');
+  assert.ok(!ask.warnings.some((w) => /content type/.test(w)), 'asks for the bike, not the type');
+  const placed = plan(parts, [93], { title: 'Triumph Swap  (For Ktm.Husqvarna.GasGas)' }, { paintTarget: 'MX1OEM_2023_KTM_450_SX-F' });
+  assert.equal(map(placed)['model.edf'], 'bikes/MX1OEM_2023_KTM_450_SX-F/model.edf');
+});
+
+test('modpacks: a loose paint is placed by what it paints (rider kit, gloves, bike livery)', () => {
+  const { paintKind } = require('../src/lib/paint-compat');
+  // Paci's gear and yz250f bike graphics (two .pnt downloads), and the OPO kit's PRO paint.
+  assert.equal(paintKind(['rider']), 'riderKit');
+  assert.equal(paintKind(['face_parts', 'face_parts_n', 'rider', 'rider_n']), 'riderKit');
+  assert.equal(paintKind(['gloves']), 'gloves');
+  assert.equal(paintKind(['plastics', 'wheel']), 'bikePaint');
+  assert.equal(paintKind(['plastics', 'rider']), null, 'mixed: ask');
+  assert.equal(paintKind(['helmet']), null);
+  const kit = plan(files('Paci 169 gear.pnt'), [93], { title: 'Paci’s gear and yz250f bike graphics', kindHint: 'riderKit' });
+  assert.equal(map(kit)['Paci 169 gear.pnt'], 'rider/riders/default_mx/paints/Paci 169 gear.pnt');
+  const livery = plan(files('Paci 169 bike.pnt'), [93], { title: 'Paci’s gear and yz250f bike graphics', kindHint: 'bikePaint' });
+  assert.equal(livery.kind, 'bikePaint', 'a livery: the bike is picked in the review (no year given)');
+});

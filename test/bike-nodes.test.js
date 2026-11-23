@@ -47,3 +47,16 @@ test('combined variant scene produces one mesh per bike part instead of stacked 
     assert.equal(part.meshes[0].name, roles[part.slot] + '450f');
   }
 });
+
+test('the game\'s own wheel models (both wheels in one file, named wheel_front / wheel_sm_rear) are found', () => {
+  const nodes = (...names) => names.map((name) => ({ name }));
+  // tyres.pkz p_mx: fwheel.hrc level0 names no part, rwheel.hrc names "rwheela"; the EDF has wheel_front, wheel_rear.
+  assert.equal(selectNode(nodes('wheel_front', 'wheel_rear'), undefined, 'fwheel').name, 'wheel_front');
+  assert.equal(selectNode(nodes('wheel_front', 'wheel_rear'), 'rwheela', 'rwheel').name, 'wheel_rear');
+  // tyres.pkz m_sm
+  assert.equal(selectNode(nodes('wheel_sm_front', 'wheel_sm_rear'), undefined, 'fwheel').name, 'wheel_sm_front');
+  assert.equal(selectNode(nodes('wheel_sm_front', 'wheel_sm_rear'), 'rwheela', 'rwheel').name, 'wheel_sm_rear');
+  // OEM wheels and wheel mods keep working
+  assert.equal(selectNode(nodes('thefwheel', 'therwheela'), 'thefwheel', 'fwheel').name, 'thefwheel');
+  assert.equal(selectNode(nodes('Plane.001'), undefined, 'fwheel').name, 'Plane.001');
+});

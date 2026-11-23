@@ -53,6 +53,19 @@ function isBodyPaint(relative, names, kind = 'custom') {
   return textures.includes('rider');
 }
 
+// What a loose paint is, from the textures it paints: a rider kit (jersey & pants: rider, maybe the
+// face and number/name plates), gloves, or a bike livery (plastics, frame, wheels...). null: can't tell.
+const KIT_TEXTURES = new Set(['rider', 'skin', 'face_parts', 'w_number', 'w_name', 'abhoodie']);
+const BIKE_TEXTURES = /^(plastics?|frame|chassis|wheels?|rims?|hubs?|spokes?|seat|tank|forks?|swingarm|exhaust|pipe|silencer|muffler|engine|radiators?|shrouds?|fenders?|airbox|graphics|decals|bodywork|bike|number_?plates?|sideplates?)\d*$/;
+function paintKind(names) {
+  const textures = clean(names);
+  if (!textures.length) return null;
+  if (textures.includes('rider') && textures.every((t) => KIT_TEXTURES.has(t) || t === 'gloves')) return 'riderKit';
+  if (textures.every((t) => t === 'gloves')) return 'gloves';
+  if (textures.some((t) => BIKE_TEXTURES.test(t)) && !textures.some((t) => KIT_TEXTURES.has(t) || /helmet|goggle|boot|glove|protect/.test(t))) return 'bikePaint';
+  return null;
+}
+
 async function inspect(files, modsDir, stockPkz, context = 'custom') {
   const kind = context === true ? 'riderKit' : context === false ? 'custom' : context;
   const paintTextures = {}, unreadablePaints = [];
@@ -82,4 +95,4 @@ async function validateRiderPaint({ modsDir, stockPkz, current }) {
   const missing = missingTextures(names, selected?.textures || []);
   if (missing.length) throw new Error(`This paint needs a matching rider model (${missing.join(', ')}). Install and select that model before equipping the paint.`);
 }
-module.exports = { inspect, riderModels, missingTextures, validateRiderPaint, isBodyPaint };
+module.exports = { inspect, riderModels, missingTextures, validateRiderPaint, isBodyPaint, paintKind };
