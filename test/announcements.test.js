@@ -116,3 +116,23 @@ test('the owner adds admins by friend code; they use the server key; only the ow
   assert.equal((await call(friend.token, '/v1/admin/status', { key })).status, 403);
   assert.equal((await call(owner.token, '/v1/admin/admins/add', { key, id: '76561198098586128' })).status, 400, 'the owner is always an admin');
 });
+
+test('announcements last a day: older ones are not delivered at all', async (t) => {
+  const fsp = require('node:fs/promises'), os = require('node:os'), path = require('node:path'), { spawn } = require('node:child_process');
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'coremx-ann-life-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const now = Date.now();
+  await fsp.writeFile(path.join(root, 'service.json'), JSON.stringify({ users: {}, announcements: [
+    { id: 'fresh', title: 'Fresh news', message: 'Hello riders', at: now - 3600 * 1000 },
+    { id: 'old', title: 'CoreMX Maintenance', message: 'Online features may pause', at: now - 3 * 86400000 },
+  ] }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (chunk) => { const m = chunk.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const me = await (await fetch(`http://127.0.0.1:${port}/v1/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ steamId: '76561198000000071', name: 'New PC' }) })).json();
+  const inbox = await (await fetch(`http://127.0.0.1:${port}/v1/notifications`, { headers: { authorization: `Bearer ${me.token}` } })).json();
+  assert.deepEqual(inbox.notifications.filter((n) => n.kind === 'announcement').map((n) => n.id), ['fresh']);
+});

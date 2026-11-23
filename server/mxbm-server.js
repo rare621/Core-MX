@@ -348,8 +348,10 @@ function adminAllowed(me, key) {
   if (!isAdmin(me) || !me.user?.verified || !ADMIN_KEY || typeof key !== 'string') return false;
   return crypto.timingSafeEqual(Buffer.from(hash(key)), Buffer.from(hash(ADMIN_KEY)));
 }
+const ANNOUNCEMENT_LIFE = 24 * 60 * 60 * 1000;
 function announcementInbox(user) {
-  const cutoff = Date.now() - 30 * 86400000;
+  // An announcement lasts a day: older ones aren't delivered (not in Notifications, no pop-up).
+  const cutoff = Date.now() - ANNOUNCEMENT_LIFE;
   const deleted = new Set(user.deletedAnnouncements || []), read = new Set(user.readAnnouncements || []), seen = new Set(user.seenAnnouncements || []);
   return (db.announcements || []).filter((a) => a.at >= cutoff && !deleted.has(a.id)).map((a) => ({ ...a, kind: 'announcement', read: read.has(a.id), seenPopup: seen.has(a.id) }));
 }

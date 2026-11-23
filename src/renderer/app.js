@@ -1407,7 +1407,8 @@ const deletedHere = () => { try { return new Set(JSON.parse(localStorage.getItem
 function rememberDeleted(id) { const all = deletedHere(); all.add(id); try { localStorage.setItem('coremx:deletedAnnouncements', JSON.stringify([...all].slice(-200))); } catch {} }
 function withoutDeleted(inbox) {
   if (!inbox || !Array.isArray(inbox.notifications)) return inbox;
-  const gone = deletedHere(), notifications = inbox.notifications.filter((n) => !(n.kind === 'announcement' && gone.has(n.id)));
+  // Announcements last a day: older ones aren't shown at all (not in Notifications, no pop-up).
+  const gone = deletedHere(), notifications = inbox.notifications.filter((n) => !(n.kind === 'announcement' && (gone.has(n.id) || Date.now() - (Number(n.at) || 0) > 86400000)));
   return { ...inbox, notifications, unread: notifications.filter((n) => !n.read).length };
 }
 async function refreshNotifications() {
@@ -1419,9 +1420,8 @@ async function refreshNotifications() {
     // the service didn't get the note, or another CoreMX window showed it at the same time).
     let shownHere = [];
     try { shownHere = JSON.parse(localStorage.getItem('coremx:shownAnnouncements') || '[]'); } catch {}
-    // Only a fresh announcement (under 2 days old) pops up. Older ones go to Notifications quietly, so a
-    // new PC or a fresh install doesn't pop up last week's news.
-    const fresh = (n) => Date.now() - (Number(n.at) || 0) < 2 * 86400000;
+    // Only an announcement under a day old pops up (older ones aren't listed at all, see withoutDeleted).
+    const fresh = (n) => Date.now() - (Number(n.at) || 0) < 86400000;
     const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && !shownHere.includes(n.id) && fresh(n));
     const quiet = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && (shownHere.includes(n.id) || !fresh(n)));
     if (quiet.length) api.invoke('online:seenAnnouncements', quiet.map((n) => n.id)).catch(() => {});
