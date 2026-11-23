@@ -154,7 +154,7 @@ async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, 
   let completed = 0;
   for (const it of missing) {
     onProgress({ phase: 'uploading', label: it.label, completed, total: missing.length, loaded: 0, size: it.size });
-    await upload(it.sha256, it.buf);
+    await upload(it.sha256, it.buf, (loaded) => onProgress({ phase: 'uploading', label: it.label, completed, total: missing.length, loaded, size: it.size }));
     onProgress({ phase: 'uploading', label: it.label, completed: ++completed, total: missing.length, loaded: it.size, size: it.size });
   }
   if (missing.length) await call('POST', '/v1/loadout', payload);

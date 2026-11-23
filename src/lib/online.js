@@ -73,6 +73,36 @@ function looksText(loadouts, reload, stamp, reports = {}) {
   return lines.join('\n') + '\n';
 }
 
+// PUT a file to an upload link (R2), reporting bytes sent. No overall time limit (a 300 MB helmet on
+// a slow connection takes a while): it gives up only when nothing has been sent for 2 minutes.
+function putFile(target, buf, onBytes = () => {}, idleMs = 2 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(target), lib = url.protocol === 'https:' ? require('https') : require('http');
+    let idle = null, done = false;
+    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(idle); fn(v); };
+    const req = lib.request(url, { method: 'PUT', headers: { 'content-length': buf.length } }, (res) => {
+      res.resume();
+      res.on('end', () => finish(resolve, { ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode }));
+      res.on('error', (e) => finish(reject, e));
+    });
+    const touch = () => { clearTimeout(idle); idle = setTimeout(() => req.destroy(Object.assign(new Error('no progress for 2 minutes'), { code: 'stalled' })), idleMs); };
+    req.on('error', (e) => finish(reject, e));
+    let sent = 0, acked = 0;
+    const CHUNK = 256 * 1024;
+    const pump = () => {
+      while (sent < buf.length) {
+        const part = buf.subarray(sent, Math.min(sent + CHUNK, buf.length));
+        sent += part.length;
+        const more = req.write(part, () => { acked += part.length; touch(); onBytes(acked); });
+        if (!more) { req.once('drain', pump); return; }
+      }
+      req.end();
+    };
+    touch();
+    pump();
+  });
+}
+
 const JOIN_WINDOW = 5 * 60 * 1000; // a server we see within 5 min of an app join gets that join's address
 const ADMIN_STEAM_ID = '76561198098586128';
 
@@ -354,7 +384,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return data;
   }
   // Paint files: raw bytes by SHA-256.
-  async function upload(sha, buf) {
+  async function upload(sha, buf, onBytes = () => {}) {
     // Newer services hand out a link to upload straight to cloud storage (R2), so the file doesn't
     // travel through the service PC's connection. Older services answer 404 here: upload as before.
     const ask = await request(`/v1/files/${sha}/upload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) });
@@ -362,8 +392,8 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!ask.ok && ask.status !== 404) throw new Error(((await ask.json().catch(() => ({}))).error) || `Upload failed (${ask.status})`);
     if (grant && grant.existed) return;
     if (grant && grant.url) {
-      const put = await fetch(grant.url, { method: 'PUT', body: buf, signal: AbortSignal.timeout(300000) })
-        .catch((e) => { throw new Error(`Upload failed (${e.cause ? e.cause.code || e.cause.message : e.message})`); });
+      const put = await putFile(grant.url, buf, onBytes)
+        .catch((e) => { throw new Error(`Upload failed (${e.code || e.message})`); });
       if (!put.ok) throw new Error(`Upload failed (${put.status})`);
       const done = await request(`/v1/files/${sha}/uploaded`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120000) });
       if (!done.ok) { const d = await done.json().catch(() => ({})); throw new Error(d.error || `Upload check failed (${done.status})`); }
@@ -998,4 +1028,4 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   };
 }
 
-module.exports = { create, PLUGIN, STATE_FILE, looksText, RELOAD_FOR, withGameRider };
+module.exports = { create, PLUGIN, STATE_FILE, looksText, RELOAD_FOR, withGameRider, putFile };

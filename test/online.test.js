@@ -429,3 +429,23 @@ test('a rider whose CoreMX is offline gets 10 minutes before CoreMX looks elsewh
   await client.syncServerRiders('Server', ['rider']);
   assert.deepEqual(asked, ['Kit'], 'still offline after 10 minutes: look on MXB Mods');
 });
+
+test('uploads to R2 report bytes sent, have no overall time limit, and give up on a dead connection', async (t) => {
+  const http = require('node:http');
+  let got = null, headers = null;
+  const server = http.createServer((req, res) => {
+    if (req.url === '/dead') return; // reads nothing, never answers
+    const parts = []; headers = req.headers;
+    req.on('data', (c) => parts.push(c)); req.on('end', () => { got = Buffer.concat(parts); res.end('ok'); });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const buf = crypto.randomBytes(3 * 1024 * 1024 + 123), seen = [];
+  const r = await online.putFile(`${base}/ok`, buf, (n) => seen.push(n));
+  assert.equal(r.ok, true);
+  assert.ok(got.equals(buf), 'the whole file arrives unchanged');
+  assert.equal(headers['content-length'], String(buf.length), 'sized upload (cloud storage needs it)');
+  assert.ok(seen.length > 5 && seen.at(-1) === buf.length && seen.every((n, i) => i === 0 || n >= seen[i - 1]), 'progress counts up to the size');
+  await assert.rejects(online.putFile(`${base}/dead`, crypto.randomBytes(8 * 1024 * 1024), () => {}, 300), /no progress|stalled|socket|hang up|ECONNRESET/i);
+});
