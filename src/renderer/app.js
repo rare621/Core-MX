@@ -1419,8 +1419,11 @@ async function refreshNotifications() {
     // the service didn't get the note, or another CoreMX window showed it at the same time).
     let shownHere = [];
     try { shownHere = JSON.parse(localStorage.getItem('coremx:shownAnnouncements') || '[]'); } catch {}
-    const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && !shownHere.includes(n.id));
-    const quiet = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && shownHere.includes(n.id));
+    // Only a fresh announcement (under 2 days old) pops up. Older ones go to Notifications quietly, so a
+    // new PC or a fresh install doesn't pop up last week's news.
+    const fresh = (n) => Date.now() - (Number(n.at) || 0) < 2 * 86400000;
+    const unseen = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && !shownHere.includes(n.id) && fresh(n));
+    const quiet = (S.notifications.notifications || []).filter((n) => n.kind === 'announcement' && !n.seenPopup && (shownHere.includes(n.id) || !fresh(n)));
     if (quiet.length) api.invoke('online:seenAnnouncements', quiet.map((n) => n.id)).catch(() => {});
     if (unseen.length) {
       try { localStorage.setItem('coremx:shownAnnouncements', JSON.stringify([...shownHere, ...unseen.map((n) => n.id)].slice(-200))); } catch {}
