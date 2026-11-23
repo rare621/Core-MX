@@ -69,7 +69,8 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
     const post = await site.post(postId).catch(() => null);
     if (!post) return false;
     const free = freeDownloads(post);
-    const dl = free.find((d) => d.url === source.download) || (free.length === 1 ? free[0] : null);
+    // exact: this very download was installed in the background with the same file (catalog v28): only it.
+    const dl = free.find((d) => d.url === source.download) || (!item.exact && free.length === 1 ? free[0] : null);
     if (!dl) return false;
     Object.assign(item, { state: 'installing', via, postId, title: post.title, link: post.link, error: null, jobId: startJob(post, dl, item.who) });
     return true;
@@ -122,7 +123,9 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
   // catalogKey: from src/lib/gear-keys.js keyForItem.
   // pageOnly: the owner's page and the catalog only, then 'nopage' (the file can come through the
   // service instead). Asked again without pageOnly (that failed too), it goes on to the name search.
-  function find({ slot, name, source = null, who = '', catalogKey = null, pageOnly = false }) {
+  // exact: source is a catalog entry with this exact file (same SHA-256), installed in the background
+  // by other riders: only that download is used, and no other catalog page.
+  function find({ slot, name, source = null, who = '', catalogKey = null, pageOnly = false, exact = false }) {
     if (!enabled() || !name) return;
     const key = keyOf(slot, name);
     const old = items.get(key);
@@ -135,7 +138,7 @@ function create({ site, startJob, jobStatus, isInstalled, lookup = async () => (
       }
       return;
     }
-    const item = { state: 'searching', slot, name, source, who, catalogKey, pageOnly, tried: new Set(), steps: {} };
+    const item = { state: 'searching', slot, name, source, who, catalogKey, pageOnly, exact, tried: new Set(), steps: exact ? { catalog: true } : {} };
     items.set(key, item);
     next(item);
   }

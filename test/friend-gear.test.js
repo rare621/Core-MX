@@ -103,3 +103,11 @@ test('nothing found is looked for again after a while, not on every sync', async
   await tick();
   assert.equal(fg.status('suitPaint', 'OPOlitPROpub').state, 'nomatch', 'paints end as no match too');
 });
+
+test('an exact match only uses that very download, never another one from the same page', async () => {
+  const { fg, started } = setup({ posts: { 9: page(9, 'Kit pack', [{ label: 'New version', url: 'https://a.test/v2.zip' }]) } });
+  fg.find({ slot: 'suitPaint', name: 'Kit', source: { postId: 9, link: 'https://mxb-mods.com/kit/', download: 'https://a.test/v1.zip' }, pageOnly: true, exact: true });
+  await tick();
+  assert.deepEqual(started, [], 'the page changed its download: not the same file, so the service sends it');
+  assert.equal(fg.status('suitPaint', 'Kit').state, 'nopage');
+});

@@ -649,6 +649,7 @@ async function runDownload(j) {
   j.status = 'downloading'; emitJob(j);
   try {
     const file = await hosts.download(j.url, path.join(j.stageDir, 'dl'), ses, (r, t) => { j.received = r; j.total = t; emitJob(j); }, j.abort.signal);
+    j.background = true;   // straight from its link, no browser window: other CoreMX can fetch it the same way
     await afterDownload(j, file);
   } catch (e) {
     // A friend's gear CoreMX fetched by itself never opens a window (the player may be in the game).
@@ -663,20 +664,47 @@ async function runDownload(j) {
 // this PC (keys from src/lib/gear-keys.js), so other riders' CoreMX can fetch gear that couldn't be
 // sent. Only the files an install wrote count, never a player's say-so. Paid installs are never sent.
 const gearKeys = require('./src/lib/gear-keys');
-function catalogReports(rec) {
+// v28: with each one-file gear item's SHA-256 (a .pkz model or a .pnt paint, the exact bytes gear sync
+// sends) and whether the download worked in the background. Hashes are kept per file (size and time)
+// so a file is read once, not on every report.
+async function catalogReports(rec, cache, changed = {}) {
   if (!rec || rec.shopKey || !Number(rec.postId) || !/^https:\/\/mxb-mods\.com\//i.test(String(rec.link || ''))) return [];
   const per = rec.downloads && Object.keys(rec.downloads).length ? Object.entries(rec.downloads) : rec.source ? [[rec.source, rec.files]] : [];
-  return per.filter(([url, files]) => /^https?:\/\//i.test(url) && url.length <= 300 && Array.isArray(files))
-    .map(([download, files]) => ({ postId: Number(rec.postId), link: rec.link, title: rec.title, download, keys: gearKeys.keysForFiles(files).slice(0, 300) }))
-    .filter((r) => r.keys.length);
+  const out = [];
+  for (const [download, files] of per) {
+    if (!/^https?:\/\//i.test(download) || download.length > 300 || !Array.isArray(files)) continue;
+    const keys = gearKeys.keysForFiles(files).slice(0, 250);
+    if (!keys.length) continue;
+    const shas = {};
+    for (const rel of files) {
+      if (!/\.(pkz|pnt)$/i.test(rel) || /^(game|user):/.test(rel)) continue;
+      const [key] = gearKeys.keysForFile(rel);
+      if (!key || !keys.includes(key)) continue;
+      const abs = path.resolve(modsDir(), rel);
+      if (!insideRoots(abs)) continue;
+      const st = await fsp.stat(abs).catch(() => null);
+      if (!st || !st.isFile() || st.size > 600 * 1048576) continue;
+      const stamp = st.size + ':' + Math.round(st.mtimeMs);
+      if (!cache[rel] || cache[rel].stamp !== stamp) { cache[rel] = { stamp, sha: await fileSha256(abs) }; changed.hashed = true; }
+      shas[key] = cache[rel].sha;
+    }
+    out.push({ postId: Number(rec.postId), link: rec.link, title: rec.title, download, keys, shas, background: !!(rec.backgroundDownloads && rec.backgroundDownloads[download]) });
+  }
+  return out;
 }
+const fileSha256 = (file) => new Promise((resolve, reject) => {
+  const h = crypto.createHash('sha256');
+  fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject);
+});
 let catalogBusy = false;
 async function reportCatalog() {
   if (catalogBusy || !online) return;
   catalogBusy = true;
   try {
+    const cache = { ...(store.get('catalogShas') || {}) }, changed = {};
     for (const [key, rec] of Object.entries(store.get('installs') || {})) {
-      const reports = catalogReports(rec);
+      const reports = await catalogReports(rec, cache, changed);
+      if (changed.hashed) { store.set('catalogShas', cache); changed.hashed = false; }
       const sig = reports.length ? crypto.createHash('sha1').update(JSON.stringify(reports)).digest('hex').slice(0, 16) : null;
       if (!sig || rec.catalogSig === sig) continue;
       let sent = true;
@@ -888,6 +916,8 @@ async function recordInstall(j, written) {
           url === (j.url || j.source) || !Array.isArray(files) || !files.some((file) => written.includes(file)))),
         ...((j.url || j.source) ? { [j.url || j.source]: written } : {}),
       },
+      // Downloads that worked straight from their link (no browser window), for the shared gear list.
+      backgroundDownloads: { ...(prev?.backgroundDownloads || {}), ...(j.url && j.background ? { [j.url]: true } : {}) },
       source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.kind === 'graphics' ? true : undefined,
       hashes: { ...(prev?.hashes || {}), ...hashes }, files: Array.from(new Set([...(prev && (j.plan?.root !== 'game' || j.plan?.kind === 'animationGame') ? prev.files : []), ...written])),
     };

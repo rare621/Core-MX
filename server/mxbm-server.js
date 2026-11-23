@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 27;
+const VERSION = 28;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -117,7 +117,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, (
 // ---------- gear catalog ----------
 // key: "<kind>/<name>" or "<kind>/<model>/<name>" (lowercase), as made by src/lib/gear-keys.js.
 const CATALOG_KINDS = new Set(['helmets', 'boots', 'protections', 'riders', 'tyres', 'bikes', 'helmetpaints', 'goggles', 'bootpaints', 'protectionpaints', 'suits', 'gloves', 'bikepaints']);
-const CATALOG_MAX_KEYS = 300000, CATALOG_PER_KEY = 6, CATALOG_VOTERS = 50, CATALOG_KEYS_PER_REPORT = 300;
+const CATALOG_MAX_KEYS = 300000, CATALOG_PER_KEY = 6, CATALOG_VOTERS = 50, CATALOG_KEYS_PER_REPORT = 300, CATALOG_SHAS = 5;
 function catalogKey(v) {
   const k = String(v == null ? '' : v);
   if (k.length > 160 || k !== k.toLowerCase() || /[\u0000-\u001f\u007f\\:*?"<>|]/.test(k)) return null;
@@ -700,6 +700,11 @@ const routes = {
     const entry = catalogEntry(body);
     if (!entry) return [400, { error: 'Invalid catalog report.' }];
     const keys = [...new Set((Array.isArray(body.keys) ? body.keys : []).map(catalogKey).filter(Boolean))].slice(0, CATALOG_KEYS_PER_REPORT);
+    // v28: each file's SHA-256 (the same fingerprint gear sync uses) and whether this download worked
+    // in the background (straight from its link, no browser window). Only those entries are used to
+    // install someone's exact file instead of sending it through the service.
+    const shas = body.shas && typeof body.shas === 'object' && !Array.isArray(body.shas) ? body.shas : {};
+    const background = body.background === true;
     let added = 0;
     for (const key of keys) {
       const list = db.catalog[key] || (Object.keys(db.catalog).length < CATALOG_MAX_KEYS ? (db.catalog[key] = []) : null);
@@ -707,6 +712,9 @@ const routes = {
       let e = list.find((x) => x.postId === entry.postId && x.download === entry.download);
       if (!e) { e = { ...entry, by: [], bad: [], at: Date.now() }; list.push(e); }
       Object.assign(e, { link: entry.link, title: entry.title });
+      const sha = String(shas[key] || '').toLowerCase();
+      if (/^[a-f0-9]{64}$/.test(sha) && !(e.shas || []).includes(sha)) { e.shas = [...(e.shas || []), sha].slice(-CATALOG_SHAS); added++; }
+      if (background && !(e.bgBy || []).includes(me.id)) { e.bgBy = [...(e.bgBy || []), me.id].slice(-CATALOG_VOTERS); added++; }
       if (!e.by.includes(me.id)) { e.by = [...e.by, me.id].slice(-CATALOG_VOTERS); added++; }
       e.bad = e.bad.filter((id) => id !== me.id);
       list.sort((a, b) => catalogScore(b) - catalogScore(a));
@@ -721,7 +729,7 @@ const routes = {
     const matches = {};
     for (const key of keys) {
       const list = (db.catalog[key] || []).filter((e) => catalogScore(e) > 0).sort((a, b) => catalogScore(b) - catalogScore(a)).slice(0, 3);
-      if (list.length) matches[key] = list.map((e) => ({ postId: e.postId, link: e.link, title: e.title, download: e.download, votes: catalogScore(e) }));
+      if (list.length) matches[key] = list.map((e) => ({ postId: e.postId, link: e.link, title: e.title, download: e.download, votes: catalogScore(e), shas: e.shas || [], background: (e.bgBy || []).length > 0 }));
     }
     return [200, { matches }];
   },
@@ -730,7 +738,7 @@ const routes = {
     const key = catalogKey(body.key), postId = Number(body.postId);
     const e = key && (db.catalog[key] || []).find((x) => x.postId === postId);
     if (!e) return [200, { ok: true }];
-    if (!e.bad.includes(me.id)) { e.bad = [...e.bad, me.id].slice(-CATALOG_VOTERS); e.by = e.by.filter((id) => id !== me.id); save(); }
+    if (!e.bad.includes(me.id)) { e.bad = [...e.bad, me.id].slice(-CATALOG_VOTERS); e.by = e.by.filter((id) => id !== me.id); e.bgBy = (e.bgBy || []).filter((id) => id !== me.id); save(); }
     return [200, { ok: true }];
   },
 

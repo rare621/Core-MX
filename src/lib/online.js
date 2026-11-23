@@ -117,12 +117,26 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // Order for a file another rider shares: the service (R2) first; if that fails, the upload stalls or
   // their CoreMX is closed, its MXB Mods page, the shared catalog, a name search, then the player (see
   // noteFailedItems). Pages before R2 only with the setting online.pagesFirst = true (off by default).
-  function viaPage(lo, it) {
-    if (cfg().pagesFirst !== true) return null;
+  // Before that: when the shared gear list (service v28) has this exact file (same SHA-256) from an MXB
+  // Mods download other riders installed in the background, it's installed from there and never goes
+  // through the service. Lookups are kept 10 minutes.
+  const exactLookups = new Map();
+  async function exactEntry(key, sha) {
+    if (!key || !/^[a-f0-9]{64}$/.test(String(sha || ''))) return null;
+    let hit = exactLookups.get(key);
+    if (!hit || Date.now() - hit.at > 10 * 60 * 1000) { hit = { at: Date.now(), list: (await catalogLookup([key]).catch(() => ({})))[key] || [] }; exactLookups.set(key, hit); }
+    return hit.list.find((e) => e.background && (e.shas || []).includes(sha)) || null;
+  }
+  async function viaPage(lo, it) {
     const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     const name = it.value || cur[it.slot];
     if (!name) return null;
-    findGear({ slot: it.slot, name, source: it.source || null, who: lo.name || '', catalogKey: catalogKeys.keyForItem(it.slot, name, cur, lo.bike), pageOnly: true });
+    const catalogKey = catalogKeys.keyForItem(it.slot, name, cur, lo.bike);
+    if (cfg().pagesFirst === true) findGear({ slot: it.slot, name, source: it.source || null, who: lo.name || '', catalogKey, pageOnly: true });
+    else {
+      const exact = await exactEntry(catalogKey, it.sha256);
+      if (exact) findGear({ slot: it.slot, name, source: exact, who: lo.name || '', catalogKey, pageOnly: true, exact: true });
+    }
     let st = gearStatus(it.slot, name);
     // Installed, yet the file still isn't there: not in that download. The next option, or the service.
     if (st && st.state === 'installed') { gearStillMissing(it.slot, name); st = gearStatus(it.slot, name); }

@@ -42,14 +42,14 @@ test('the service keeps one shared catalog: reports, lookups and installs that t
   };
   const reg = async (id, name) => (await call(null, '/v1/register', { steamId: id, name })).data;
   const a = await reg('76561198000000001', 'A'), b = await reg('76561198000000002', 'B'), c = await reg('76561198000000003', 'C');
-  assert.equal((await call(null, '/v1/health')).data.version, 27);
+  assert.equal((await call(null, '/v1/health')).data.version, 28);
   const page = { postId: 91257, link: 'https://mxb-mods.com/bell-moto-10s-different-googles/', title: 'Bell Moto 10´S different Googles', download: 'https://www.mediafire.com/file/k/Bell+moto+10.rar/file' };
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, keys: ['helmets/bellmoto10-fcr', 'helmets/bellmoto10-eks', 'Helmets/UPPER', 'weird/x', 'helmets/../x'] })).data.keys, 2, 'bad keys are dropped');
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, link: 'https://evil.test/x', keys: ['helmets/x'] })).status, 400, 'only MXB Mods pages');
   assert.equal((await call(null, '/v1/catalog/report', { ...page, keys: ['helmets/x'] })).status, 401);
   let found = (await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr', 'helmets/none'] })).data.matches;
   assert.deepEqual(Object.keys(found), ['helmets/bellmoto10-fcr']);
-  assert.deepEqual(found['helmets/bellmoto10-fcr'][0], { ...page, votes: 1 });
+  assert.deepEqual(found['helmets/bellmoto10-fcr'][0], { ...page, votes: 1, shas: [], background: false });
   await call(a.token, '/v1/catalog/report', { ...page, keys: ['helmets/bellmoto10-fcr'] });
   found = (await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr'] })).data.matches;
   assert.equal(found['helmets/bellmoto10-fcr'][0].votes, 1, 'the same rider reporting again counts once');
@@ -140,4 +140,61 @@ test('a shared item keeps its MXB Mods page through the service, and others try 
   const plain = await paintsync.fetchFriends({ call, download: async (s) => { downloaded.push(s); throw new Error('no'); }, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage: () => null });
   assert.equal(plain[0].items[0].state, 'failed');
   assert.deepEqual(downloaded, [sha], 'no page: the service');
+});
+
+test('v28: the shared list keeps each file\'s fingerprint and whether the download worked in the background', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-catalog28-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (chunk) => { const m = chunk.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = async (token, route, body) => (await (await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) })).json());
+  const reg = async (id) => (await (await fetch(`http://127.0.0.1:${port}/v1/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ steamId: id, name: id.slice(-1) }) })).json());
+  const a = await reg('76561198000000001'), b = await reg('76561198000000002');
+  const sha = 'a'.repeat(64);
+  const page = { postId: 187091, link: 'https://mxb-mods.com/opo-supply-co-podium-gear-sets-public/', title: 'OPO', download: 'https://www.mediafire.com/file/x/OPOkits.zip/file' };
+  await call(a.token, '/v1/catalog/report', { ...page, keys: ['suits/default_mx/opolitpropub'], shas: { 'suits/default_mx/opolitpropub': sha, 'other/x': 'b'.repeat(64) }, background: false });
+  let e = (await call(b.token, '/v1/catalog/lookup', { keys: ['suits/default_mx/opolitpropub'] })).matches['suits/default_mx/opolitpropub'][0];
+  assert.deepEqual([e.shas, e.background], [[sha], false], 'needed a browser window: not proven to work in the background');
+  await call(b.token, '/v1/catalog/report', { ...page, keys: ['suits/default_mx/opolitpropub'], shas: { 'suits/default_mx/opolitpropub': sha }, background: true });
+  e = (await call(b.token, '/v1/catalog/lookup', { keys: ['suits/default_mx/opolitpropub'] })).matches['suits/default_mx/opolitpropub'][0];
+  assert.deepEqual([e.shas, e.background], [[sha], true]);
+  await call(b.token, '/v1/catalog/report', { ...page, keys: ['suits/default_mx/opolitpropub'], shas: { 'suits/default_mx/opolitpropub': 'not-a-hash' }, background: true });
+  e = (await call(b.token, '/v1/catalog/lookup', { keys: ['suits/default_mx/opolitpropub'] })).matches['suits/default_mx/opolitpropub'][0];
+  assert.deepEqual(e.shas, [sha], 'bad fingerprints are dropped');
+});
+
+test('an exact file in the shared list (same fingerprint, installed in the background) comes from MXB Mods and never through R2', async (t) => {
+  const online = require('../src/lib/online');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-exact-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sha = 'e'.repeat(64), other = 'f'.repeat(64);
+  const item = (slot, value, s) => ({ slot, label: value, value, rider: 'default_mx', path: `rider/riders/default_mx/${slot === 'glovesPaint' ? 'gloves' : 'paints'}/${value}.pnt`, sha256: s, size: 10, needs: [], available: false });
+  const loadout = { id: 'r', name: 'Chase', bike: 'B', num: 917, equipped: [{ slot: 'suitPaint', value: 'OPOlitPROpub' }, { slot: 'glovesPaint', value: 'OPOlitGloves' }], unavailable: [],
+    items: [item('suitPaint', 'OPOlitPROpub', sha), item('glovesPaint', 'OPOlitGloves', other)] };
+  const wanted = [], found = [];
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : {};
+    if (/want$/.test(url)) { wanted.push(...body.shas); return new Response(JSON.stringify({ states: Object.fromEntries(body.shas.map((s) => [s, 'uploading'])) })); }
+    if (/catalog\/lookup$/.test(url)) return new Response(JSON.stringify({ matches: Object.fromEntries(body.keys.map((k) => [k, k === 'suits/default_mx/opolitpropub' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [sha], background: true }] : k === 'gloves/default_mx/opolitgloves' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [other], background: false }] : []])) }));
+    return new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 28 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : {}));
+  });
+  let status = null;
+  const client = online.create({
+    store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 't', received: {} } : key === 'friends' ? [] : undefined, set: () => {} },
+    appDir: __dirname, userDir: () => null, installDir: () => null, isGameRunning: async () => false, steamId: () => '76561198000000000', steamName: () => 'Me',
+    modsDir: () => root, haveMod: async () => true, onChange: () => {},
+    findGear: (req) => { found.push(req); status = { state: 'installing' }; }, gearStatus: (slot) => slot === 'suitPaint' ? status : null,
+  });
+  const report = await client.syncServerRiders('Server', ['r']);
+  const kit = report[0].items.find((it) => it.slot === 'suitPaint'), gloves = report[0].items.find((it) => it.slot === 'glovesPaint');
+  assert.equal(kit.state, 'page', 'installing from MXB Mods');
+  assert.equal(found[0].exact, true);
+  assert.equal(found[0].source.download, 'https://a.test/OPOkits.zip');
+  assert.ok(!wanted.includes(sha), 'the kit is not asked for through R2');
+  assert.ok(wanted.includes(other), 'the gloves entry needed a browser window: R2 as usual');
+  assert.notEqual(gloves.state, 'page');
 });
