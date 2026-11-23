@@ -4,7 +4,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 const profile = require('./profile');
 
-const SECTIONS = ['gfx', 'sound', 'aids', 'view', 'ext_view', 'misc', 'input', 'info', 'ui'];
+// category: the bike classes the game knows on this PC (class = last bike ridden in it).
+const SECTIONS = ['gfx', 'sound', 'aids', 'view', 'ext_view', 'misc', 'input', 'info', 'ui', 'category'];
 
 async function readSettings(userDir, name) {
   const prof = await profile.readProfile(userDir, name);

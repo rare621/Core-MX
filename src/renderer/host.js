@@ -141,7 +141,10 @@ async function loadFromProfile(cfg) {
     cfg.sections[sec][key] = v;
   }
   if (ui.race_track) cfg.tracks = [{ track: ui.race_track, layout: ui.race_track_layout || '' }, ...cfg.tracks.slice(1)];
-  if (ui.race_category) cfg.categories = ui.race_category.split('/').map((x) => x.trim()).filter(Boolean);
+  // Classes this game has (mod bikes add their own, like E10 250 or MX1), offered next to the OEM ones.
+  S.host.gameClasses = [...new Set([...Object.keys((st && st.values && st.values.category) || {}), ...String(ui.race_class || '').split('/')].map((x) => x.trim()).filter(Boolean))];
+  const classes = ui.race_class ?? ui.race_category;
+  if (classes) cfg.categories = classes.split('/').map((x) => x.trim()).filter(Boolean);
 }
 
 async function renderHost(c) {
@@ -215,8 +218,8 @@ function tracksHtml(cfg) {
 }
 
 function categoriesHtml(cfg) {
-  const all = [...new Set([...CATEGORIES, ...cfg.categories])];
-  return `<div class="gs-row" style="align-items:flex-start"><span>Bike classes<br><span class="muted" style="font-size:12px">None selected = open to every bike. Fewer classes = less join lag</span></span>
+  const all = [...new Set([...CATEGORIES, ...(S.host.mode === 'game' ? S.host.gameClasses || [] : []), ...cfg.categories])];
+  return `<div class="gs-row" style="align-items:flex-start"><span>Bike classes<br><span class="muted" style="font-size:12px">${S.host.mode === 'game' ? 'None selected = keeps the classes chosen in MX Bikes' : 'None selected = open to every bike'}. Fewer classes = less join lag</span></span>
     <div class="host-cats">${all.map((c) => `<button class="chip ${cfg.categories.includes(c) ? 'active' : ''}" data-hc="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>`;
 }
 
@@ -253,7 +256,10 @@ async function setupInGameHost() {
   }
   const t = cfg.tracks[0] || {};
   if (t.track) { values.push(['ui', 'race_track', t.track]); values.push(['ui', 'race_track_layout', t.layout || '']); }
-  values.push(['ui', 'race_category', cfg.categories.join('/')]);
+  // The game's race and host screens read the bike classes from race_class (older versions used
+  // race_category, which current MX Bikes no longer reads: both are written).
+  // None picked: the game's own choice is left as it is.
+  if (cfg.categories.length) { values.push(['ui', 'race_class', cfg.categories.join('/')]); values.push(['ui', 'race_category', cfg.categories.join('/')]); }
   await api.invoke('game:setValues', values);
   await api.invoke('game:launch');
 }
