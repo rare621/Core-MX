@@ -449,3 +449,25 @@ test('uploads to R2 report bytes sent, have no overall time limit, and give up o
   assert.ok(seen.length > 5 && seen.at(-1) === buf.length && seen.every((n, i) => i === 0 || n >= seen[i - 1]), 'progress counts up to the size');
   await assert.rejects(online.putFile(`${base}/dead`, crypto.randomBytes(8 * 1024 * 1024), () => {}, 300), /no progress|stalled|socket|hang up|ECONNRESET/i);
 });
+
+test('a friend whose CoreMX is closed: their files just wait, nothing is searched for or asked about', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-offline-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sha = '9'.repeat(64);
+  const loadout = { id: 'friend', name: 'Uhh_sal', bike: 'B', equipped: [{ slot: 'suitPaint', value: 'BLACK CAMO FXR' }], unavailable: [],
+    items: [{ slot: 'suitPaint', label: 'Kit', value: 'BLACK CAMO FXR', rider: 'default_mx', path: 'rider/riders/default_mx/paints/BLACK CAMO FXR.pnt', sha256: sha, size: 10, needs: [], available: false }] };
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 28 } : /loadouts/.test(url) ? { loadouts: [loadout] } : /want$/.test(url) ? { states: { [sha]: 'offline' } } : {})));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const asked = [];
+  const { client } = fixture({
+    store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 't', received: {}, paintSync: true } : key === 'friends' ? [{ code: 'friend' }] : undefined, set: () => {} },
+    modsDir: () => root, haveMod: async () => true, currentOutfit: async () => null, findGear: (req) => asked.push(req.name),
+  });
+  await client.syncPaints();
+  now += 11 * 60 * 1000;
+  const st = await client.syncPaints();
+  assert.equal(st.paintSync.friends[0].items[0].state, 'offline');
+  assert.deepEqual(asked, [], 'not searched for on MXB Mods');
+  assert.deepEqual(st.paintSync.needsYou, [], 'not in Missing gear');
+});

@@ -185,10 +185,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!offlineSince.has(it.sha256)) offlineSince.set(it.sha256, now);
     return now - offlineSince.get(it.sha256) >= OFFLINE_GRACE;
   }
-  function noteFailedItems(results) {
+  // friends: the Friends sync (not riders on your server). A friend whose CoreMX is closed isn't a
+  // problem: their files come when it's open again, so nothing is searched for or asked about.
+  function noteFailedItems(results, { friends = false } = {}) {
     for (const r of results || []) for (const it of r.items || []) if (it.state !== 'offline') offlineSince.delete(it.sha256);
     for (const r of results || []) for (const it of r.items || []) {
-      if (!it.value || !givenUp(it) || blockedBy(r, it.slot)) continue;
+      if (!it.value || (friends && it.state === 'offline') || !givenUp(it) || blockedBy(r, it.slot)) continue;
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       findGear({ slot: it.slot, name: it.value, source: it.source || null, who: r.name || '', catalogKey: catalogKeys.keyForItem(it.slot, it.value, cur, r.bike) });
     }
@@ -214,9 +216,12 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const DONE = new Set(['nomatch', 'failed', 'installed']);
   function needsYou() {
     const rows = new Map();
+    const fromFriends = new Set(paint.report || []);
     for (const r of [...(paint.report || []), ...looksReports]) {
       const cur = Object.fromEntries((r.equipped || []).map((e) => [e.slot, e.value]));
       for (const it of r.items || []) {
+        // A friend's file that waits for their CoreMX to be open: not a missing item.
+        if (fromFriends.has(r) && it.state === 'offline') continue;
         if (!it.find || !DONE.has(it.find.state) || !givenUp(it) || blockedBy(r, it.slot)) continue;
         const key = `${it.slot}|${String(it.value).toLowerCase()}`;
         const row = rows.get(key) || { slot: it.slot, name: it.value, label: it.label, error: it.error || null, source: it.source || null, find: it.find, riders: [] };
@@ -246,9 +251,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     onChange(status());
     if (current?.inEvent) { looksKey = ''; syncLooks(); }
   }
-  function noteDownloads(results) {
+  function noteDownloads(results, options = {}) {
     noteUnavailable(results);
-    noteFailedItems(results);
+    noteFailedItems(results, options);
     for (const r of results || []) for (const it of r.items || []) if (it.state === 'downloaded' && RELOAD_FOR[it.slot]) pendingReload.add(RELOAD_FOR[it.slot]);
     if (pendingReload.size && current?.inEvent) { looksKey = ''; syncLooks(); }
   }
@@ -845,7 +850,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       noteWaiting(paint.report);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
-      noteDownloads(results);
+      noteDownloads(results, { friends: true });
       paint.error = null; paint.at = Date.now();
     } catch (e) { paint.error = e.message; }
     paint.busy = false; paint.progress = null;
