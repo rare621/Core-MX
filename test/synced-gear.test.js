@@ -56,3 +56,18 @@ test('the in-game overlay gets the same list', () => {
     'suitPaint\t\tblack camo fxr',
   ]);
 });
+
+test('a mod installed so another rider\'s gear shows is kept apart like synced gear, until you install it yourself', () => {
+  const sg = require('../src/lib/synced-gear');
+  const forChase = { postId: 187091, forOthers: true, forRider: 'YaBoiChase917', files: ['rider/riders/default_mx/paints/OPOlitPROpub.pnt', 'rider/riders/default_mx/gloves/OPOlitGloves.pnt', 'bikes/MX2OEM_2023_Kawasaki_KX250/paints/BDCkxVIApub.pnt'] };
+  let synced = sg.syncedOnly({}, { 187091: forChase });
+  assert.equal(synced.get('rider/riders/default_mx/paints/opolitpropub.pnt').from, 'YaBoiChase917');
+  const hide = sg.hiddenChoices(synced, {}, 'MX2OEM_2023_Kawasaki_KX250');
+  assert.ok(hide.suitPaint.has('opolitpropub') && hide.glovesPaint.has('opolitgloves') && hide.bikePaint.has('bdckxviapub'));
+  const options = sg.filterOptions({ suitPaint: ['My Kit', 'OPOlitPROpub'], bikePaint: ['', 'BDCkxVIApub'] }, hide, { suitPaint: 'My Kit' });
+  assert.deepEqual(options, { suitPaint: ['My Kit'], bikePaint: [''] }, 'not offered as your outfit or livery');
+  // You install the same kit yourself: it's yours.
+  synced = sg.syncedOnly({}, { 187091: forChase, mine: { postId: 1, files: ['rider/riders/default_mx/paints/OPOlitPROpub.pnt'] } });
+  assert.ok(!synced.has('rider/riders/default_mx/paints/opolitpropub.pnt'));
+  assert.ok(synced.has('rider/riders/default_mx/gloves/opolitgloves.pnt'));
+});

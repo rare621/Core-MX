@@ -9,12 +9,20 @@ const path = require('path');
 const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
 const MODEL_DIRS = { helmet: 'helmets', boots: 'boots', protection: 'protections' };
 
-// received (online config: path -> { sha256, from, at }) minus files an install record owns.
+// received (online config: path -> { sha256, from, at }) minus files an install record owns, plus files
+// of installs made for another rider (record.forOthers: fetched from MXB Mods for their gear).
 function syncedOnly(received, installs) {
-  const owned = new Set();
-  for (const r of Object.values(installs || {})) for (const f of (r && r.files) || []) owned.add(norm(f));
+  const owned = new Set(), forOthers = new Map();
+  for (const r of Object.values(installs || {})) {
+    for (const f of (r && r.files) || []) {
+      if (/^(game|user):/i.test(String(f))) continue;
+      if (r.forOthers) { if (!forOthers.has(norm(f))) forOthers.set(norm(f), { from: r.forRider || '', install: true }); }
+      else owned.add(norm(f));
+    }
+  }
   const out = new Map();
   for (const [p, info] of Object.entries(received || {})) if (!owned.has(norm(p))) out.set(norm(p), info || {});
+  for (const [p, info] of forOthers) if (!owned.has(p) && !out.has(p)) out.set(p, info);
   return out;
 }
 

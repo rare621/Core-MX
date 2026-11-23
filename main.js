@@ -952,6 +952,9 @@ async function recordInstall(j, written) {
           url === (j.url || j.source) || !Array.isArray(files) || !files.some((file) => written.includes(file)))),
         ...((j.url || j.source) ? { [j.url || j.source]: written } : {}),
       },
+      // Installed so another rider's gear shows (fetched automatically, or picked from Missing gear):
+      // treated like synced gear, not offered as yours, until you install the same mod yourself.
+      forOthers: !!(j.friendGear || j.forOthers) || undefined, forRider: (j.friendGear || j.forOthers) ? j.friendName || undefined : undefined,
       // Downloads that worked straight from their link (no browser window), for the shared gear list.
       backgroundDownloads: { ...(prev?.backgroundDownloads || {}), ...(j.url && j.background ? { [j.url]: true } : {}) },
       source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.kind === 'graphics' ? true : undefined,
