@@ -1212,6 +1212,8 @@ async function pendingPaintsExist(name, bike, changes) {
 
 function registerIpc() {
   handle('app:env', () => environment());
+  // Open-source licences (Settings > Creator & Tester > Credited work).
+  handle('app:notices', () => fsp.readFile(path.join(__dirname, 'THIRD_PARTY_NOTICES.md'), 'utf8').catch(() => ''));
   handle('app:updates', () => updates?.status() || { phase: 'idle', current: app.getVersion() });
   handle('app:checkUpdates', () => updates?.check());
   handle('app:downloadUpdate', () => updates?.download());

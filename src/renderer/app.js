@@ -3141,6 +3141,7 @@ api.on('frostmod:found', () => {
 });
 document.addEventListener('click', async (e) => {
   const action = e.target.closest('[data-act]')?.dataset.act;
+  if (action === 'show-notices') { const text = await api.invoke('app:notices').catch(() => ''); modal({ title: 'Open-source licenses', size: 'md', body: `<pre class="host-log" style="white-space:pre-wrap;max-height:60vh">${esc(text || 'The license file could not be read.')}</pre>` }); }
   if (action === 'app-update-check') { skippedUpdate = ''; S.appUpdate = { ...S.appUpdate, phase: 'checking' }; drawAppUpdate(); try { S.appUpdate = await api.invoke('app:checkUpdates'); drawAppUpdate(); } catch (err) { toast(esc(cleanErr(err)), 'err'); } }
   if (action === 'app-update-download') {
     if (riderDirty()) { toast('Apply or Revert your Rider preview first so it is not lost when the app restarts.', 'info', 6000); return; }
@@ -3167,6 +3168,14 @@ function renderCreditsSettings(c) {
         <div class="srv"><div class="srv-ico">${icon('rider')}</div><div class="srv-txt"><div class="t">Rare621</div><div class="m">Creator</div></div><button class="btn btn-sm" data-open="https://steamcommunity.com/id/Rare621/" aria-label="Open Rare621's Steam profile">${icon('external')}Steam profile</button></div>
         <div class="srv"><div class="srv-ico">${icon('check')}</div><div class="srv-txt"><div class="t">Raze392</div><div class="m">Tester</div></div><button class="btn btn-sm" data-open="https://steamcommunity.com/id/Raze392/" aria-label="Open Raze392's Steam profile">${icon('external')}Steam profile</button></div>
       </div>
+    </div>
+    <div class="set-card"><h3>Credited work</h3><p>Work by others that CoreMX builds on. Thank you.</p>
+      <div class="srv-list">
+        <div class="srv" style="align-items:flex-start"><div class="srv-ico">${icon('star')}</div><div class="srv-txt"><div class="t">MXB App by Frostn1</div>
+          <div class="m" style="white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45;margin-top:3px">CoreMX's readers for MX Bikes paint files (.pnt) and 3D model files (.edf) are based on MXB App's open-source readers, and the 3D bike preview uses its bike geometry conventions. Used under the MIT license.</div></div>
+          <button class="btn btn-sm" data-open="https://github.com/Frostn1/mxb-app" aria-label="Open MXB App on GitHub">${icon('external')}GitHub</button></div>
+      </div>
+      <button class="btn btn-sm" data-act="show-notices" style="margin-top:10px">${icon('list')}View licenses</button>
     </div>
   </div></div></div></div>`;
 }
