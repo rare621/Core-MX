@@ -191,7 +191,9 @@ test('R2 cleans up untracked uploads and files nobody needs any more', async (t)
   for (let i = 0; i < 15; i++) { await c('POST', '/v1/presence', { state: { inGame: false } }); await new Promise((r) => setTimeout(r, 200)); }
   assert.ok(await until(() => !r2.objects.has(key), 12000), 'not needed for the keep time: deleted');
   // Needed again later: it is asked for and the owner uploads it again.
-  await call(me.token)('POST', '/v1/want', { shas: [sha] });
+  const pal = (await call()('POST', '/v1/register', { steamId: '76561198000000042', name: 'Pal' })).data;
+  await c('POST', '/v1/friends', { ids: [pal.id] }); await call(pal.token)('POST', '/v1/friends', { ids: [me.id] });
+  await call(pal.token)('POST', '/v1/want', { shas: [sha] });
   assert.deepEqual((await c('POST', '/v1/presence', { state: { inGame: false } })).data.upload, [sha]);
 });
 

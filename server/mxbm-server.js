@@ -225,8 +225,24 @@ function want(sha, who = '*') {
   if (!w[who] || w[who] < until - 60 * 1000) { w[who] = until; save(); }
   noteUse(sha);
 }
-// Someone still needs this file: it must be uploaded, and kept.
+// Someone still needs this file: it is kept (until they installed it, at most 2 days, so a download in
+// progress is never cut off). Whether it makes its owner upload is stricter: wantedFrom below.
+const REQUEST_ACTIVE = 10 * 60 * 1000;
+const requesterActive = (who, now = Date.now()) => who === '*' || now - ((presence.get(who) || {}).at || 0) < REQUEST_ACTIVE || now - (lastHeard.get(who) || 0) < REQUEST_ACTIVE;
 const wanted = (sha) => Object.values(db.wants[sha] || {}).some((until) => until > Date.now());
+// A request makes the owner upload only while the rider's CoreMX is open (heard from in the last 10
+// minutes; an older app's implicit request lasts its 10 minutes), and only from someone who may ask:
+// May this rider's request make this owner upload? Mutual friends (gear synced ahead of time), or
+// riders on the same server right now. A rider you rode with earlier no longer makes you upload.
+function mayAsk(who, ownerId) {
+  if (who === '*') return true;
+  const a = db.users[who], o = db.users[ownerId];
+  if (!a || !o) return false;
+  if ((a.friends || []).includes(ownerId) && (o.friends || []).includes(who)) return true;
+  const sa = (presence.get(who) || {}).state, so = (presence.get(ownerId) || {}).state;
+  return !!(sa && so && sa.inEvent && so.inEvent && sa.key && sa.key === so.key);
+}
+const wantedFrom = (sha, ownerId) => { const now = Date.now(); return Object.entries(db.wants[sha] || {}).some(([who, until]) => until > now && requesterActive(who, now) && mayAsk(who, ownerId)); };
 function received(sha, who) {
   const w = db.wants[sha];
   if (w && w[who]) { delete w[who]; if (!Object.keys(w).length) delete db.wants[sha]; save(); }
@@ -257,7 +273,7 @@ function itemsFor(u, pending) {
   return items.filter((it) => haveFile(it.sha256));
 }
 // Files this user wears that someone asked for and that aren't uploaded yet.
-const toUpload = (u) => ((u && u.loadout && u.loadout.items) || []).filter((it) => !haveFile(it.sha256) && wanted(it.sha256)).map((it) => it.sha256);
+const toUpload = (u, ownerId) => ((u && u.loadout && u.loadout.items) || []).filter((it) => !haveFile(it.sha256) && wantedFrom(it.sha256, ownerId)).map((it) => it.sha256);
 
 // Only real HTTP status numbers; a connection that is already gone or answered is left alone
 // (an upload cut off mid-way used to pass "ECONNRESET" here and crash the service).
@@ -541,7 +557,7 @@ const routes = {
       cleanServers();
     }
     save();
-    return [200, { ok: true, activeUsers: onlineCount(), upload: toUpload(me.user) }];
+    return [200, { ok: true, activeUsers: onlineCount(), upload: toUpload(me.user, me.id) }];
   },
 
   'GET /v1/servers': async (req, body, me) => {
@@ -765,7 +781,7 @@ const routes = {
     save();
     // Apps with on-demand uploads get only the files someone asked for; older apps everything missing.
     const onDemand = body.onDemand === true;
-    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256) && (!onDemand || wanted(it.sha256))).map((it) => it.sha256) }];
+    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256) && (!onDemand || wantedFrom(it.sha256, me.id))).map((it) => it.sha256) }];
   },
   // Outfits of mutual friends.
   'GET /v1/loadouts': async (req, body, me) => {

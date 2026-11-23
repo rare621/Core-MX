@@ -198,3 +198,24 @@ test('an exact file in the shared list (same fingerprint, installed in the backg
   assert.ok(wanted.includes(other), 'the gloves entry needed a browser window: R2 as usual');
   assert.notEqual(gloves.state, 'page');
 });
+
+test('only a mutual friend or a rider on your server right now can make your CoreMX upload a file', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-asks-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (chunk) => { const m = chunk.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = async (token, route, body) => (await (await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) })).json());
+  const reg = async (id) => (await (await fetch(`http://127.0.0.1:${port}/v1/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ steamId: id, name: 'R' + id.slice(-1) }) })).json());
+  const owner = await reg('76561198000000001'), rider = await reg('76561198000000002');
+  const sha = 'c'.repeat(64);
+  const loadout = { bike: 'B', items: [{ slot: 'helmet', label: 'Helmet', value: 'H', rider: 'default_mx', path: 'rider/helmets/H.pkz', modelKind: 'helmet', sha256: sha, size: 1000, needs: [] }], equipped: [], unavailable: [], onDemand: true };
+  assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, []);
+  await call(rider.token, '/v1/want', { shas: [sha] });   // a rider you rode with earlier, not a friend
+  assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, [], 'not a friend, not on your server: no upload');
+  await call(owner.token, '/v1/friends', { ids: [rider.id] }); await call(rider.token, '/v1/friends', { ids: [owner.id] });
+  assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, [sha], 'a mutual friend whose CoreMX is open: upload');
+});
