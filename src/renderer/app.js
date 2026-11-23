@@ -3127,11 +3127,11 @@ async function restartForUpdate() {
 }
 api.on('app:update', (state) => { S.appUpdate = state; drawAppUpdate(); });
 api.on('synced:pruned', ({ removed, days }) => toast(`Removed ${removed} synced file${removed === 1 ? '' : 's'} no one has needed for ${days >= 30 ? Math.round(days / 30) + ' month' + (days >= 60 ? 's' : '') : Math.round(days / 7) + ' week' + (days >= 14 ? 's' : '')} (in the Recycle Bin)`, 'info', 6000));
-// FrostMod (MXB App's game plugin) found: CoreMX never touches it, only says it can interfere.
+// FrostMod (MXB App's game plugin) found: CoreMX never touches it, only says it can interfere (once, ever).
 api.on('frostmod:found', () => {
   if ($('#frostmodNote')) return;
-  const m = modal({ title: 'FrostMod is installed', size: 'sm', body: `<div id="frostmodNote"><p>Your MX Bikes plugins folder has <b>FrostMod</b>, a game plugin from the maker of MXB App.</p><p>The CoreMX plugin works on some of the same things (the server list and the game's network), so the two can get in each other's way. If you see crashes, missing server addresses or overlay problems, try turning one of them off in <b>My Mods → Plugins</b>.</p><p class="muted">CoreMX won't change or remove FrostMod.</p></div>`,
-    foot: `<button class="btn btn-ghost" data-frostmod="off">Don't show again</button><span class="grow"></span><button class="btn" data-close>Later</button><button class="btn btn-primary" data-frostmod="plugins">${icon('box')}Open Plugins</button>` });
+  const m = modal({ title: 'FrostMod is installed', size: 'sm', body: `<div id="frostmodNote"><p>Your MX Bikes plugins folder has <b>FrostMod</b>, a game plugin from the maker of MXB App.</p><p>CoreMX and FrostMod both add in-game features. If something doesn't work as expected, you can turn either one off in <b>My Mods → Plugins</b>.</p><p class="muted">CoreMX won't change or remove FrostMod.</p></div>`,
+    foot: `<button class="btn" data-frostmod="plugins">${icon('box')}Open Plugins</button><span class="grow"></span><button class="btn btn-primary" data-close>OK</button>` });
   m.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-frostmod]'); if (!b) return;
     if (b.dataset.frostmod === 'off') { try { S.env = await api.invoke('settings:set', { frostmodWarningOff: true }); } catch {} }

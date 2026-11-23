@@ -290,14 +290,14 @@ function writeUninstallList() {
   } catch (e) { console.warn('Uninstall list:', e.message); }
 }
 // FrostMod is never removed (another tool, MXB App, installs it). When it is in the game's plugins
-// folder, the player is told once per start that it can interfere with the CoreMX plugin, unless
-// they chose "Don't show again".
+// folder, the player is told once, ever, that it can interfere with the CoreMX plugin.
 let frostmodTold = false;
 function checkFrostmod() {
   if (frostmodTold || store.get('settings').frostmodWarningOff) return;
   if (!mainWin || mainWin.isDestroyed() || mainWin.webContents.isLoading()) return;
   if (!serverList.frostmodInstalled(store.get('settings').gameInstallDir)) return;
   frostmodTold = true;
+  store.update('settings', (st) => ({ ...st, frostmodWarningOff: true }));   // shown once, never again
   send('frostmod:found', {});
 }
 const serverNameKey = (name) => String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
