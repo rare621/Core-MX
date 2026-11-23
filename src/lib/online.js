@@ -848,11 +848,11 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const received = { ...(cfg().received || {}) };
     if (paintsync.touchReceived(received, reports)) setCfg({ received });
   }
-  async function removeReceived() {
+  async function removeReceived(options = {}) {
     const received = { ...(cfg().received || {}) };
-    const n = await paintsync.removeReceived(modsDir(), received);
+    const { removed, kept } = await paintsync.removeReceived(modsDir(), received, options);
     setCfg({ received });
-    return { removed: n, status: status() };
+    return { removed, kept, status: status() };
   }
 
   // Riders on the same server who use the app (plugin report or Steam name on the rider list).

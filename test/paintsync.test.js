@@ -350,3 +350,20 @@ test('a rider kit with a number and name plate (w_number, w_name) is shared: no 
   assert.ok(outfit.items.some((it) => it.slot === 'suitPaint'), JSON.stringify(outfit.unavailable));
   assert.ok(!outfit.unavailable.some((u) => u.slot === 'suitPaint'));
 });
+
+test('Remove downloaded files keeps synced gear you use yourself and sends the rest to the Recycle Bin', async (t) => {
+  const f = await fixture(t);
+  const helmet = Buffer.from('6D helmet package'), kit = Buffer.from('friend kit paint');
+  await f.write(f.receiver, 'rider/helmets/2021_6D_ATR-2_Armega.pkz', helmet);
+  await f.write(f.receiver, 'rider/riders/default_mx/paints/FriendKit.pnt', kit);
+  const received = {
+    'rider/helmets/2021_6D_ATR-2_Armega.pkz': { sha256: crypto.createHash('sha256').update(helmet).digest('hex') },
+    'rider/riders/default_mx/paints/FriendKit.pnt': { sha256: crypto.createHash('sha256').update(kit).digest('hex') },
+  };
+  const trashed = [];
+  const r = await sync.removeReceived(f.receiver, received, { keep: (rel) => /2021_6D_ATR-2_Armega/.test(rel), trash: async (p) => { trashed.push(path.basename(p)); await fs.rm(p); } });
+  assert.deepEqual(r, { removed: 1, kept: 1 });
+  assert.deepEqual(trashed, ['FriendKit.pnt']);
+  assert.ok(await fs.stat(path.join(f.receiver, 'rider/helmets/2021_6D_ATR-2_Armega.pkz')), 'the helmet you wear stays');
+  assert.deepEqual(Object.keys(received), [], 'neither counts as synced any more');
+});

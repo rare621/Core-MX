@@ -632,6 +632,19 @@ function newJob(fields) {
 // the Recycle Bin, each file on its own timer (see paintsync.pruneReceived). Never while MX Bikes runs.
 // Files an install owns, and paints or models the player has equipped, are kept.
 let syncedPruneAt = 0;
+// Synced files that are also yours are never removed: a file one of your installs owns, or gear named
+// in any of your profiles (equipped on some bike). keep(rel) -> true to keep.
+async function syncedKeep() {
+  const owned = new Set(Object.values(store.get('installs') || {}).flatMap((r) => (r && r.files) || []).map((f) => String(f).toLowerCase()));
+  const equipped = new Set();
+  try {
+    for (const name of (await profile.listProfiles(profUserDir())).profiles || []) {
+      const ini = await fsp.readFile(path.join(profUserDir(), 'profiles', name, 'profile.ini'), 'latin1').catch(() => '');
+      for (const m of ini.matchAll(/^[^=\r\n[]+=([^\r\n]+)$/gm)) equipped.add(m[1].trim().toLowerCase());
+    }
+  } catch {}
+  return (rel) => owned.has(String(rel).toLowerCase()) || equipped.has(path.posix.basename(String(rel)).replace(/\.(pnt|pkz)$/i, '').toLowerCase());
+}
 async function pruneSyncedGear(force = false) {
   const days = Number(store.get('settings').syncedKeepDays ?? 30);
   if (!(days > 0) || (!force && Date.now() - syncedPruneAt < 20 * 3600 * 1000)) return 0;
@@ -639,13 +652,7 @@ async function pruneSyncedGear(force = false) {
   // A sync in progress writes its own copy of the received list; try again later.
   if (online?.status?.()?.paintSync?.busy) return 0;
   syncedPruneAt = Date.now();
-  const owned = new Set(Object.values(store.get('installs') || {}).flatMap((r) => (r && r.files) || []).map((f) => String(f).toLowerCase()));
-  const equipped = new Set();
-  try {
-    const name = (await profile.listProfiles(profUserDir())).last;
-    if (name) for (const m of (await fsp.readFile(path.join(profUserDir(), 'profiles', name, 'profile.ini'), 'latin1')).matchAll(/^[^=\r\n[]+=([^\r\n]+)$/gm)) equipped.add(m[1].trim().toLowerCase());
-  } catch {}
-  const keep = (rel) => owned.has(rel.toLowerCase()) || equipped.has(path.posix.basename(rel).replace(/\.(pnt|pkz)$/i, '').toLowerCase());
+  const keep = await syncedKeep();
   const received = { ...((store.get('online') || {}).received || {}) };
   // Files synced before CoreMX kept a "last needed" time start their timer now, so gear a friend
   // still wears is not removed for being downloaded long ago.
@@ -1775,7 +1782,11 @@ function registerIpc() {
     const outfit = cached && Date.now() - cached.at < 60000 ? cached.outfit : await online.friendLoadout(friendId);
     return require('./src/lib/friend-preview').build(outfit, { modsDir: modsDir(), installDir: store.get('settings').gameInstallDir, resolveAppearance: (bike, entry) => bikeSwaps.sharedPreview(bike, entry), buildModel: (type, options) => modelWorkers.build(type, options) });
   });
-  handle('online:removeReceived', async () => { const r = await online.removeReceived(); writeSyncedList(); return r; });
+  handle('online:removeReceived', async () => {
+    const r = await online.removeReceived({ keep: await syncedKeep(), trash: (p) => shell.trashItem(p) });
+    await scan(); writeSyncedList(); send('library:changed', {});
+    return r;
+  });
   handle('online:steamFriends', async () => {
     const me = steam.detect(paths.steamRoot());
     const list = me.found ? steam.friends(paths.steamRoot(), me.steamId) : [];

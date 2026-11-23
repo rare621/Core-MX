@@ -720,8 +720,8 @@ document.addEventListener('click', async (e) => {
   if (act === 'paint-remove') {
     e.preventDefault();
     const n = S.live.status.paintSync.received;
-    if (await confirmBox('Remove downloaded gear and paints?', `<b>This deletes up to ${n} unchanged files downloaded from friends from your mods folder.</b><p>This can remove their synced gear models and paints. Your own files and files you have changed are kept. Sync can download missing files again later.</p>`, 'Delete synced downloads', true)) {
-      const r = await api.invoke('online:removeReceived'); S.live.status = r.status; toast(`Removed ${r.removed} paint${r.removed === 1 ? '' : 's'}`, 'ok'); renderFriends($('#content'));
+    if (await confirmBox('Remove downloaded gear and paints?', `<b>Up to ${n} files downloaded from friends go to the Recycle Bin.</b><p>Gear you wear on any bike in your profiles, gear you installed yourself, and files you changed are kept. Sync downloads friends' files again when they're needed.</p>`, 'Remove', true)) {
+      const r = await api.invoke('online:removeReceived'); S.live.status = r.status; toast(`Moved ${r.removed} file${r.removed === 1 ? '' : 's'} to the Recycle Bin${r.kept ? ` · kept ${r.kept} you use` : ''}`, 'ok', 6000); renderFriends($('#content'));
     }
     return;
   }

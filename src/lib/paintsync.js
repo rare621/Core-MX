@@ -328,18 +328,22 @@ async function fetchFriends({ call, download, modsDir, received, have, friendId,
   return report;
 }
 
-async function removeReceived(modsDir, received) {
-  let n = 0;
+// "Remove downloaded files": every file friend sync downloaded goes to the Recycle Bin, except gear
+// that is yours too (keep(rel): equipped in one of your profiles, or owned by one of your installs),
+// which stays installed and stops counting as synced. Returns { removed, kept }.
+async function removeReceived(modsDir, received, { keep = () => false, trash = (p) => fsp.rm(p) } = {}) {
+  let removed = 0, kept = 0;
   for (const [r, info] of Object.entries(received)) {
     if (!safeRel(r)) { delete received[r]; continue; }
+    if (keep(r)) { kept++; delete received[r]; continue; }
     const f = path.join(modsDir, ...r.split('/'));
     try {
       const real = await fsp.realpath(f), root = await fsp.realpath(modsDir);
-      if (real.toLowerCase().startsWith(root.toLowerCase() + path.sep) && sha256(await fsp.readFile(f)) === info.sha256) { await fsp.rm(f); n++; }
+      if (real.toLowerCase().startsWith(root.toLowerCase() + path.sep) && sha256(await fsp.readFile(f)) === info.sha256) { await trash(f); removed++; }
     } catch {}
     delete received[r];
   }
-  return n;
+  return { removed, kept };
 }
 // Synced files keep a "last needed" time (used): the last time a friend's or a server rider's gear
 // listed them. Called with every gear report; written at most once an hour per file.
