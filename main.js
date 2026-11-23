@@ -436,6 +436,35 @@ async function repairGearFolders() {
   try { return await gearRepair; } finally { gearRepair = null; }
 }
 
+// Fix & clean: gloves paints installed with the kits (rider/riders/<body>/paints) go to gloves/. An
+// identical copy already there: the extra one goes to the Recycle Bin. A different one: both are kept.
+async function moveGlovesFromKits() {
+  if (await profile.isGameRunning()) throw new Error('Close MX Bikes before moving gloves');
+  const changes = new Map(), kept = [];
+  const sha = async (file) => crypto.createHash('sha256').update(await fsp.readFile(file)).digest('hex');
+  for (const g of await health.glovesInKits(modsDir())) {
+    const from = path.join(modsDir(), g.from), to = path.join(modsDir(), g.to);
+    if (!insideRootsStrict(from) || !insideRootsStrict(to)) continue;
+    if (fs.existsSync(to)) {
+      if (await sha(from) === await sha(to)) { await shell.trashItem(from); changes.set(g.from, g.to); }
+      else kept.push(g.name);
+      continue;
+    }
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.rename(from, to);
+    changes.set(g.from, g.to);
+  }
+  if (changes.size) {
+    const changed = (rel) => changes.get(String(rel).replace(/\\/g, '/')) || rel;
+    store.update('installs', (all) => Object.fromEntries(Object.entries(all || {}).map(([key, rec]) => [key, { ...rec, files: [...new Set((rec.files || []).map(changed))],
+      ...(rec.downloads ? { downloads: Object.fromEntries(Object.entries(rec.downloads).map(([url, files]) => [url, Array.isArray(files) ? [...new Set(files.map(changed))] : files])) } : {}) }])));
+    const cfg = store.get('online') || {};
+    store.set('online', { ...cfg, received: Object.fromEntries(Object.entries(cfg.received || {}).map(([key, value]) => [changed(key), value])) });
+    store.flush();
+  }
+  return { moved: changes.size, kept };
+}
+
 function findItem(id) { return lastScan.items.find((i) => i.id === id); }
 
 async function moveSafe(from, to) {
@@ -1829,6 +1858,10 @@ function registerIpc() {
       const result = await repairGearFolders();
       await scan(); send('library:changed', {});
       return { repaired: result.moved, conflicts: result.conflicts };
+    } else if (issue.fixId === 'move-gloves') {
+      const result = await moveGlovesFromKits();
+      await scan(); send('library:changed', {});
+      return { repaired: result.moved, conflicts: result.kept };
     } else if (issue.fixId === 'trash-items') {
       throw new Error('This old cleanup action is no longer valid. Check again to repair gear folders without deleting valid accessories.');
     } else if (issue.fixId === 'trash-item') {

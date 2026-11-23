@@ -9,6 +9,24 @@ const RESHADE = /^(opengl32|dxgi|d3d9|d3d11|reshade.*)\.dll$/i;
 
 async function listDir(d) { try { return await fsp.readdir(d, { withFileTypes: true }); } catch { return []; } }
 
+// Gloves paints sitting with the rider kits (rider/riders/<body>/paints): packs that put kits and gloves
+// side by side were installed whole into the kits folder. The game only offers gloves from gloves/.
+// Returns [{ rider, name, from, to }] (paths relative to the mods folder).
+async function glovesInKits(modsDir) {
+  const { paintKind } = require('./paint-compat');
+  const pnt = require('./pnt');
+  const out = [];
+  for (const body of await listDir(path.join(modsDir, 'rider', 'riders'))) {
+    if (!body.isDirectory()) continue;
+    for (const e of await listDir(path.join(modsDir, 'rider', 'riders', body.name, 'paints'))) {
+      if (!e.isFile() || !/.pnt$/i.test(e.name)) continue;
+      let names; try { names = pnt.names(await fsp.readFile(path.join(modsDir, 'rider', 'riders', body.name, 'paints', e.name))); } catch { continue; }
+      if (paintKind(names) === 'gloves') out.push({ rider: body.name, name: e.name, from: `rider/riders/${body.name}/paints/${e.name}`, to: `rider/riders/${body.name}/gloves/${e.name}` });
+    }
+  }
+  return out;
+}
+
 async function scan({ installDir, modsDir, items }) {
   const issues = [];
   // Game folder: ReShade / injected DLLs
@@ -31,6 +49,8 @@ async function scan({ installDir, modsDir, items }) {
   }
   const misplaced = await layout.misplaced(modsDir);
   if (misplaced.length) issues.push({ id: 'misplaced-gear', kind: 'clean', title: 'Gear in the wrong folders', detail: 'Helmets, boots and protection belong directly under rider/. Kits and gloves belong under rider/riders/<body>/. Repair moves files without replacing different existing copies. Identical extra copies go to the Recycle Bin.', fix: 'Repair folders', fixId: 'repair-gear' });
+  const gloves = await glovesInKits(modsDir);
+  if (gloves.length) issues.push({ id: 'gloves-in-kits', kind: 'clean', title: 'Gloves in the rider kit folder', detail: `${gloves.map((g) => g.name.replace(/.pnt$/i, '')).slice(0, 4).join(', ')}${gloves.length > 4 ? ` and ${gloves.length - 4} more` : ''}: gloves paints installed with the kits. MX Bikes only offers gloves from the gloves folder. Moving them puts them there; an identical copy already there makes the extra one go to the Recycle Bin.`, fix: 'Move to gloves', fixId: 'move-gloves' });
   // Mods in places the game won't read
   for (const it of items) {
     if (it.disabled) continue;
@@ -59,4 +79,4 @@ function storage(items) {
   };
 }
 
-module.exports = { scan, storage };
+module.exports = { glovesInKits, scan, storage };

@@ -3,7 +3,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
-const { isBodyPaint } = require('./paint-compat');
+const { isBodyPaint, paintKind } = require('./paint-compat');
 const layout = require('./rider-layout');
 const bikeLivery = require('./bike-livery');
 
@@ -348,6 +348,15 @@ function plan(files, ctx, opts = {}) {
   const base = K.base(o);
   const paintModelsDir = K.paintModels ? K.paintModels(o) : PAINT_OF[kind] && hasPnt ? base : null;
   const loosePntDir = K.loosePnt ? K.loosePnt(o) : null;
+  // A loose paint in a kit post that paints only gloves goes with the gloves (and a jersey paint in a
+  // gloves post with the kits): packs like OPO's put the kits and their gloves side by side.
+  const looseDirFor = (rel) => {
+    if (!loosePntDir || (kind !== 'riderKit' && kind !== 'gloves')) return loosePntDir;
+    const what = ctx.paintTextures && ctx.paintTextures[rel] ? paintKind(ctx.paintTextures[rel]) : null;
+    if (kind === 'riderKit' && what === 'gloves') return `${o.gear}/gloves`;
+    if (kind === 'gloves' && what === 'riderKit') return `${o.gear}/paints`;
+    return loosePntDir;
+  };
   const lowerSet = new Set(files.map((f) => f.rel.toLowerCase()));
   const pkzBases = new Set(files.filter((f) => /\.pkz$/i.test(f.rel)).map((f) => path.posix.basename(f.rel).slice(0, -4).toLowerCase()));
   const installedInBase = new Set(listModels(modsDir, base).map((n) => n.toLowerCase()));
@@ -484,7 +493,7 @@ function plan(files, ctx, opts = {}) {
     let dest = null, how = '';
     if (ctx.relocate && /\.pnt$/i.test(fname) && !bikeRequirements.has(f.rel)) {
       if (paintModelsDir && o.paintTarget) dest = `${paintModelsDir}/${o.paintTarget}/${kind === 'goggles' ? 'goggles' : 'paints'}/${fname}`;
-      else if (loosePntDir && !needsRiderTarget) dest = `${loosePntDir}/${fname}`;
+      else if (loosePntDir && !needsRiderTarget) dest = `${looseDirFor(f.rel)}/${fname}`;
       entries.push({ rel: f.rel, abs: f.abs, size: f.size, dest, status: !dest ? 'unresolved' : fs.existsSync(path.join(modsDir, dest)) ? 'overwrite' : 'new', how: 'relocate' });
       continue;
     }
@@ -584,7 +593,7 @@ function plan(files, ctx, opts = {}) {
           const sub = lsegs[lsegs.length - 2] === 'goggles' ? 'goggles' : 'paints';
           dest = `${paintModelsDir}/${o.paintTarget}/${sub}/${fname}`; how = 'paint';
         }
-      } else if (loosePntDir) { dest = `${loosePntDir}/${fname}`; how = 'paint'; }
+      } else if (loosePntDir) { dest = `${looseDirFor(f.rel)}/${fname}`; how = 'paint'; }
     }
     // 4) Custom destination keeps the archive layout
     if (!dest && kind === 'custom' && o.customDir !== '' && !DOC_EXT.test(fname)) {

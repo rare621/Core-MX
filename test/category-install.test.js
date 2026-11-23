@@ -212,3 +212,30 @@ test('modpacks: a loose paint is placed by what it paints (rider kit, gloves, bi
   const livery = plan(files('Paci 169 bike.pnt'), [93], { title: 'Paci’s gear and yz250f bike graphics', kindHint: 'bikePaint' });
   assert.equal(livery.kind, 'bikePaint', 'a livery: the bike is picked in the review (no year given)');
 });
+
+test('a kit pack with its gloves side by side (OPO kits): gloves go to gloves/, kits to paints/', () => {
+  const list = files('OPOlitGloves.pnt', 'OPOlitPROpub.pnt', 'OPOlitPUB.pnt');
+  const paintTextures = { 'OPOlitGloves.pnt': ['gloves', 'gloves_n'], 'OPOlitPROpub.pnt': ['face_parts', 'rider'], 'OPOlitPUB.pnt': ['rider'] };
+  const p = plan(list, [35], { title: 'OPO Supply Co. Podium Gear Sets (Public)', paintTextures, riderModels: [{ name: 'default_mx', textures: ['rider', 'gloves', 'face_parts', 'w_number', 'w_name', 'skin'] }] });
+  assert.deepEqual(map(p), {
+    'OPOlitGloves.pnt': 'rider/riders/default_mx/gloves/OPOlitGloves.pnt',
+    'OPOlitPROpub.pnt': 'rider/riders/default_mx/paints/OPOlitPROpub.pnt',
+    'OPOlitPUB.pnt': 'rider/riders/default_mx/paints/OPOlitPUB.pnt',
+  });
+});
+
+test('Fix & clean finds gloves paints sitting in a rider kit folder', async () => {
+  const health = require('../src/lib/health');
+  const { paint, multiPaint } = require('./helpers/paint');
+  const f = folders();
+  try {
+    const dir = path.join(f.mods, 'rider', 'riders', 'default_mx', 'paints');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'OPOevoGloves.pnt'), multiPaint(['gloves', 'gloves_n']));
+    fs.writeFileSync(path.join(dir, 'Kit.pnt'), paint('rider'));
+    const found = await health.glovesInKits(f.mods);
+    assert.deepEqual(found.map((g) => [g.from, g.to]), [['rider/riders/default_mx/paints/OPOevoGloves.pnt', 'rider/riders/default_mx/gloves/OPOevoGloves.pnt']]);
+    const issues = await health.scan({ modsDir: f.mods, items: [] });
+    assert.ok(issues.some((i) => i.id === 'gloves-in-kits' && i.fixId === 'move-gloves' && /OPOevoGloves/.test(i.detail)));
+  } finally { f.done(); }
+});

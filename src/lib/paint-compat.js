@@ -44,6 +44,8 @@ function isBodyPaint(relative, names, kind = 'custom') {
   const textures = clean(names);
   if (textures.includes('abhoodie')) return true;
   if (/(^|\/)(helmets|boots|boots paints|gloves|goggles|protections)\//i.test(relative)) return false;
+  // Gloves only (gloves, gloves_n, gloves_r): a gloves paint, even when posted with a kit.
+  if (textures.length && textures.every((t) => t === 'gloves')) return false;
   if (/^rider\/(?:riders\/[^/]+\/)?paints\//i.test(relative)) return true;
   if (kind === 'riderKit') return true;
   // Gear paints can also replace the rider's face/eyes. A shared texture name
