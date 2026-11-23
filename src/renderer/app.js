@@ -3172,12 +3172,11 @@ function renderCreditsSettings(c) {
     <div class="set-card"><h3>Credited work</h3><p>Work by others that CoreMX builds on. Thank you.</p>
       <div class="srv-list">
         <div class="srv" style="align-items:flex-start"><div class="srv-ico">${icon('star')}</div><div class="srv-txt"><div class="t">MXB App by Frostn1</div>
-          <div class="m" style="display:block;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45;margin-top:3px">CoreMX reads MX Bikes paint files (.pnt) and 3D models (.edf) with code based on MXB App's open-source readers, and builds bikes with its bike geometry work. CoreMX uses this for:
+          <div class="m" style="display:block;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45;margin-top:3px">What CoreMX uses from MXB App:
             <ul style="margin:6px 0 0 18px;padding:0">
-              <li>The 3D previews of your rider, gear and bike, and of friends' gear</li>
-              <li>Recognising downloaded paints when installing (rider kit, gloves or livery, and which rider model they fit)</li>
-              <li>Checking gear before it's shared with friends or installed from them</li>
-              <li>Fix &amp; clean (finding gloves in the rider kit folder)</li>
+              <li>3D model reader (.edf): ported from MXB App's model reader. Used to read MX Bikes 3D models.</li>
+              <li>Paint file reader (.pnt): built on the paint file layout MXB App documented. Used to read MX Bikes paint files.</li>
+              <li>Bike geometry: how bike parts fit together follows MXB App. Used in the 3D bike preview.</li>
             </ul>
             <span style="display:block;margin-top:6px">Used under the MIT license.</span></div></div>
           <button class="btn btn-sm" data-open="https://github.com/Frostn1/mxb-app" aria-label="Open MXB App on GitHub">${icon('external')}GitHub</button></div>
