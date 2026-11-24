@@ -43,3 +43,11 @@
     ${endif}
   ${endif}
 !macroend
+
+; Previous builds packed the old reader inside app.asar. The updater replaces
+; that archive. Remove only exact loose legacy paths if an older installation
+; left them behind; never touch MX Bikes mods or user data.
+!macro customInstall
+  Delete "$INSTDIR\resources\app\src\lib\assetread.js"
+  Delete "$INSTDIR\resources\app\scripts\read-asset.js"
+!macroend

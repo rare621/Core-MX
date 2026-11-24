@@ -5,6 +5,7 @@ module.exports = {
   productName: 'CoreMX',
   executableName: 'CoreMX',
   asar: true,
+  asarUnpack: ['src/lib/native/*.node'],
   npmRebuild: false,
   compression: 'normal',
   releaseInfo: { releaseNotes: require('fs').readFileSync(require('path').join(__dirname, 'build/release-notes.md'), 'utf8') },

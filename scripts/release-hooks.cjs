@@ -13,6 +13,7 @@ function releaseServiceUrl(value = '') {
 
 async function prepareResources(context) {
   const root = context.packager.projectDir;
+  if (!fs.existsSync(path.join(root, 'src', 'lib', 'native', 'coremx_reader.node'))) throw new Error('The compiled private preview reader is missing');
   const target = path.join(root, 'build', 'generated');
   fs.mkdirSync(target, { recursive: true });
   // Inherit the project's configured server unless the build explicitly overrides it.
@@ -27,6 +28,8 @@ async function prepareResources(context) {
 }
 
 async function verifyPackage({ appOutDir, packager }) {
+  const nativeReader = path.join(appOutDir, 'resources', 'app.asar.unpacked', 'src', 'lib', 'native', 'coremx_reader.node');
+  if (!fs.existsSync(nativeReader)) throw new Error('Release is missing the compiled preview reader');
   if (!fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'mxbm_presence.dlo'))) throw new Error('Release is missing the CoreMX game plugin');
   if (fs.existsSync(path.join(appOutDir, 'resources', 'plugin', 'frostmod'))) throw new Error('Release must not bundle FrostMod');
   for (const name of ['7z.exe', '7z.dll', 'License.txt']) if (!fs.existsSync(path.join(appOutDir, 'resources', '7zip', name))) throw new Error(`Release is missing the bundled 7-Zip (${name})`);

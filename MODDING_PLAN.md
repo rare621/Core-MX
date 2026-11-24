@@ -6,7 +6,7 @@ The manager reads installed models and paints directly. No retail assets, execut
 
 ## Asset reader
 
-`src/lib/assetread.js` reads ordinary ZIPs and unbound KCOL containers. It validates container bounds, directory checksums, decoded lengths, and ZIP entry CRCs. KCOL archives expose individual files without extracting a decrypted copy of the entire package. Account-bound containers are rejected; Steam ownership checks are not changed. The CLI in `scripts/read-asset.js` inspects containers and optionally exports one selected asset to a new file.
+`src/lib/assetread.js` reads ordinary ZIPs and delegates installed protected asset previews to a separately built native reader. Account-bound containers remain unavailable to friend sync. The public application does not include an asset extraction command.
 
 Source lookup combines loose overrides, the sibling package, and built-in fallback content. A paints-only directory no longer hides its packaged model. File handles close after reads, archive indexes and model caches are bounded, and updates invalidate cached archive indexes.
 

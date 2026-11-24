@@ -1,8 +1,7 @@
-CoreMX 1.0.54
+CoreMX 1.0.55
 
-- Gear from a friend whose CoreMX is closed waits for them to come back online. It no longer triggers an MXB Mods search or a missing gear popup.
-- Announcements expire after 24 hours, both in the app and in the online service. Older notices no longer appear in Notifications or as popups on a newly signed-in PC.
-- The FrostMod notice appears only once and offers a direct route to My Mods → Plugins. CoreMX does not change or remove FrostMod.
-- Settings → Creator & Tester now credits the open-source MXB App work used by CoreMX and includes a license viewer.
+- Protected models and paints keep their 3D previews through a compiled native reader. Verified with an installed OEM bike and the private preview and gear sync tests.
+- The public source and installer no longer include the standalone asset extraction script or readable protected-container decoding implementation. The updater replaces the old packaged app archive and removes exact legacy loose reader files if present.
+- Account-bound models remain restricted to local previews and are not shared through gear sync.
 
-Includes **CoreMX-server-v28.zip**, packaged from the current server source. The administrator has already updated the running v28 service with the announcement expiry change, so no additional server update is needed for this release.
+Includes **CoreMX-server-v28.zip** for convenience. The online service did not change in this update; a server already running v28 needs no update.

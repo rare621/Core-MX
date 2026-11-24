@@ -24,6 +24,8 @@ test('installer inherits the HTTPS service and migration aliases unless the buil
   });
   await fs.mkdir(path.join(root, 'plugin'));
   await fs.writeFile(path.join(root, 'plugin', 'mxbm_presence.dlo'), 'test plugin');
+  await fs.mkdir(path.join(root, 'src', 'lib', 'native'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'lib', 'native', 'coremx_reader.node'), 'test addon');
   await fs.writeFile(path.join(root, 'online.config.json'), JSON.stringify({ serviceUrl: 'https://coremx.app', previousServiceUrls: ['http://67.84.130.214:60000', 'http://192.168.0.38:60000'] }));
   process.env.MXB_SERVICE_URL = '';
   const context = { packager: { projectDir: root } };
