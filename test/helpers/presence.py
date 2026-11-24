@@ -27,8 +27,11 @@ for callback in (plugin.EventInit, plugin.RaceEvent):
 plugin.RunTelemetry.argtypes = [c.c_void_p, c.c_int, c.c_float, c.c_float]
 with tempfile.TemporaryDirectory(prefix="mxb-presence-") as folder:
     state_file = pathlib.Path(folder, "mxbm_presence.json")
+    old_disable = pathlib.Path(folder, "mxbm_hook_disabled.json")
+    old_disable.write_text('{"v":1,"build":0,"at":1}')
     read = lambda: json.loads(state_file.read_text())
     assert plugin.Startup(folder.encode()) == 3, "Startup must enable callbacks, not return -1"
+    assert not old_disable.exists(), "A newer plugin must retire an older build's crash marker"
     assert read()["v"] == 2 and read()["inEvent"] == 0
     try:
         race = RaceEvent(type=2, name=b"Fixture event", track=b"Fixture track")

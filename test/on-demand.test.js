@@ -111,6 +111,24 @@ test('uploads that never come stop being waited for', async () => {
   assert.equal(stalled[0].items[0].state, 'stalled');
 });
 
+test('an offline owner gets a fresh upload window when they return', async () => {
+  const { requestMissing, pendingState } = require('../src/lib/paintsync');
+  const sha = 'e'.repeat(64), t0 = Date.parse('2026-11-20T10:00:00Z');
+  let online = false;
+  const call = async () => ({ states: { [sha]: online ? 'uploading' : 'offline' } });
+  const report = () => [{ items: [{ sha256: sha, state: 'waiting' }] }];
+  await requestMissing(call, report(), t0);
+  online = true;
+  const returned = report();
+  await requestMissing(call, returned, t0 + 20 * 60 * 1000);
+  assert.equal(returned[0].items[0].state, 'uploading');
+  assert.equal(pendingState(sha, false, t0 + 21 * 60 * 1000), 'offline');
+  assert.equal(pendingState(sha, true, t0 + 21 * 60 * 1000), 'uploading');
+  const stalled = report();
+  await requestMissing(call, stalled, t0 + 25 * 60 * 1000);
+  assert.equal(stalled[0].items[0].state, 'stalled');
+});
+
 // Riders matched only by name on a server's rider list (no plugin) are left out when their CoreMX shows
 // them on another server, or is closed with files not uploaded (nobody could send them).
 test('name-matched riders who left or cannot share are not offered', async (t) => {

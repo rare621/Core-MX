@@ -68,6 +68,12 @@ On app upgrades, an existing outdated plugin is replaced when MX Bikes is closed
 running, Online shows **Update plugin** and asks you to close and restart the game. Installing a
 plugin while the game is already open cannot activate it for that session.
 
+If an MX Bikes update changes the bytes the plugin expects, its game-specific hook pauses for that
+game session. A CoreMX update with matching support replaces an installed plugin after the game is
+closed; the hook starts again when MX Bikes next opens. A crash marker disables only the exact plugin
+build that crashed. A newer plugin build retires an older crash marker, while reinstalling the same
+build keeps the crash safeguard in place.
+
 The Windows test suite uses Python 3's standard `ctypes` module to load the bundled DLO and exercise
 its exported callbacks in a temporary folder. No game install or running game is needed for that
 check.

@@ -1,7 +1,7 @@
-CoreMX 1.0.55
+CoreMX 1.0.56
 
-- Protected models and paints keep their 3D previews through a compiled native reader. Verified with an installed OEM bike and the private preview and gear sync tests.
-- The public source and installer no longer include the standalone asset extraction script or readable protected-container decoding implementation. The updater replaces the old packaged app archive and removes exact legacy loose reader files if present.
-- Account-bound models remain restricted to local previews and are not shared through gear sync.
+- Restores server addresses and missing-track detection for MX Bikes beta21f. CoreMX updates its bundled plugin when the game is closed, and the plugin activates on the next game launch if the game build is recognized. An older plugin's crash marker no longer keeps the updated build off.
+- Improves Best match and popularity browsing for rider kits, rider models, helmets, boots, gloves, and protection. Category pages show their chart results and continue into more mods; period charts are identified as sitewide when MXB-Mods does not provide a category-specific period chart.
+- Gives an offline friend's gear upload a fresh wait window when they return, and groups missing-gear notices into one message.
 
-Includes **CoreMX-server-v28.zip** for convenience. The online service did not change in this update; a server already running v28 needs no update.
+Includes CoreMX-server-v28.zip for convenience. The online service did not change; servers already running v28 need no update.

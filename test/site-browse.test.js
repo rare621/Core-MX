@@ -63,6 +63,52 @@ test('popular browsing keeps the website rank instead of silently showing newest
   assert.equal(newest.posts[0].views, 1234);
 });
 
+test('gear popularity uses its category chart and continues into the category listing', async () => {
+  const rows = [
+    { id: 1, slug: 'helmet-paint', title: { rendered: 'Helmet paint' }, categories: [127], link: 'https://mxb-mods.com/helmet-paint/' },
+    { id: 2, slug: 'helmet-model', title: { rendered: 'Helmet model' }, categories: [313], link: 'https://mxb-mods.com/helmet-model/' },
+    { id: 3, slug: 'new-model', title: { rendered: 'New model' }, categories: [313], link: 'https://mxb-mods.com/new-model/' },
+    { id: 4, slug: 'track', title: { rendered: 'Track' }, categories: [22], link: 'https://mxb-mods.com/track/' },
+  ];
+  const chart = '<div class="dmkrtz-pv-slider"><h4 class="dpvs-title">Popular last 24 hours in Helmets</h4>' +
+    ['helmet-paint', 'helmet-model'].map((slug, i) => `<div class="dpvs-card"><a class="dpvs-link" href="https://mxb-mods.com/${slug}/"></a><div class="dpvs-range">${50 - i} views</div></div>`).join('') + '</div>';
+  const fetch = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/categories')) {
+      const page = Number(u.searchParams.get('page') || 1);
+      return new Response(JSON.stringify(page === 1 ? [{ id: 33, name: 'Helmets', parent: 0, link: 'https://mxb-mods.com/rider/helmets/' }] :
+        [{ id: 127, name: 'Helmet Paints', parent: 33 }, { id: 313, name: 'Helmet Models', parent: 33 }]), { headers: { 'x-wp-totalpages': '2' } });
+    }
+    if (u.pathname.endsWith('/categories/313')) return new Response(JSON.stringify({ link: 'https://mxb-mods.com/rider/helmet-models/' }));
+    if (u.pathname === '/rider/helmets/' || u.pathname === '/rider/helmet-models/') return new Response(chart);
+    if (u.pathname.startsWith('/popular-')) return new Response('<li class="dmpop-card"><a class="dmpop-title" href="https://mxb-mods.com/track/">Track</a><span class="dmpop-views">100 views</span></li>');
+    if (u.pathname.endsWith('/posts')) {
+      const slugs = u.searchParams.get('slug');
+      if (slugs) return new Response(JSON.stringify(rows.filter((p) => slugs.split(',').includes(p.slug))));
+      const excluded = (u.searchParams.get('exclude') || '').split(',').map(Number);
+      const available = [rows[2], rows[1], rows[0]].filter((p) => !excluded.includes(p.id));
+      return new Response(JSON.stringify(available.slice(Number(u.searchParams.get('offset') || 0))), { headers: { 'x-wp-total': String(available.length) } });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  };
+  const module = { exports: {} }, context = vm.createContext({ module, exports: module.exports, URL, URLSearchParams, AbortSignal, Response, setTimeout, clearTimeout, require: (name) => name === 'electron' ? { net: { fetch } } : require(name) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/lib/site.js'), 'utf8'), context);
+  const site = module.exports;
+  const week = await site.search({ tab: 'helmets', scope: 'free', perPage: 2, orderby: 'popular-week' });
+  assert.deepEqual(Array.from(week.posts, (p) => p.id), [1, 2]);
+  assert.equal(week.posts[0].rankScope, 'category-today');
+  assert.match(week.sortNotice, /sitewide chart/);
+  const today = await site.search({ tab: 'helmets', scope: 'free', perPage: 2, orderby: 'popular-today' });
+  assert.deepEqual(Array.from(today.posts, (p) => p.id), [1, 2]);
+  const allTime = await site.search({ tab: 'helmets', scope: 'free', perPage: 2, orderby: 'popular-all' });
+  assert.deepEqual(Array.from(allTime.posts, (p) => p.id), [1, 2]);
+  assert.match(allTime.sortNotice, /sitewide chart/);
+  const next = await site.search({ tab: 'helmets', scope: 'free', perPage: 2, page: 2, cursor: week.nextCursor, orderby: 'popular-week' });
+  assert.deepEqual(Array.from(next.posts, (p) => p.id), [3]);
+  const models = await site.search({ tab: 'helmets', kind: 'models', scope: 'free', perPage: 2, orderby: 'relevance' });
+  assert.deepEqual(Array.from(models.posts, (p) => p.id), [2, 3]);
+});
+
 test('Best match finds add-ons even when the global popular list has none in that category', async () => {
   const boot = { id: 7, slug: 'boot-paint', title: { rendered: 'Boot paint' }, categories: [126], link: 'https://mxb-mods.com/boot-paint/' };
   const fetch = async (url) => {

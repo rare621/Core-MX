@@ -1022,7 +1022,7 @@ S.getSrc = 'free';
 // Keep one complete merged source page for each filter, with an overall size cap.
 // MXB Mods and CoreMX can each contribute 30 cards to that page. Later pages
 // load live so returning to a filter never silently skips uncached results.
-const BROWSE_CACHE_KEY = 'coremx:browse:v2';
+const BROWSE_CACHE_KEY = 'coremx:browse:v3';
 function browseKey() { const b = S.browse; return JSON.stringify([S.getSrc, b.tab, b.kind || 'all', b.brand || '', b.sort, b.query]); }
 function browseCacheRead(key) {
   try {
@@ -1050,10 +1050,10 @@ function browseCacheWrite(key, b) {
 }
 function browseCachedStart() {
   const b = S.browse, key = browseKey(), hit = browseCacheRead(key);
-  try { localStorage.removeItem('coremx:browse:v1'); } catch {}
+  try { localStorage.removeItem('coremx:browse:v1'); localStorage.removeItem('coremx:browse:v2'); } catch {}
   b.cacheKey = key; b.error = null; b.loading = false; b.autoScanning = false; b.emptyPages = 0;
   b.page = hit?.page || 0; b.totalPages = hit?.totalPages || 1;
-  b.total = hit?.total || 0; b.cursor = hit?.cursor || null; b.posts = hit?.posts || []; b.firstPage = hit || null;
+  b.total = hit?.total || 0; b.cursor = hit?.cursor || null; b.posts = hit?.posts || []; b.firstPage = hit || null; b.sortNotice = hit?.sortNotice || '';
   if (hit) browseRefresh(key, b.reqId);
   else browseLoad();
   if (hit) renderBrowseGrid();
@@ -1069,10 +1069,10 @@ async function browseRefresh(key, reqId) {
     if (reqId !== b.reqId || key !== browseKey() || b.page !== 1 || b.loading || b.autoScanning) return;
     // A source failure must not replace a complete cached section with a partial one.
     if (!r.posts.length && b.posts.length) return;
-    const samePosts = JSON.stringify(b.posts) === JSON.stringify(r.posts);
-    b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, posts: r.posts.slice(0, 60) };
+    const samePosts = JSON.stringify(b.posts) === JSON.stringify(r.posts) && b.sortNotice === (r.sortNotice || '');
+    b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, sortNotice: r.sortNotice || '', posts: r.posts.slice(0, 60) };
     b.posts = r.posts; b.page = 1; b.totalPages = r.totalPages;
-    b.total = r.total; b.cursor = r.nextCursor || null;
+    b.total = r.total; b.cursor = r.nextCursor || null; b.sortNotice = r.sortNotice || '';
     browseCacheWrite(key, b);
     if (samePosts) {
       const count = $('#brCount');
@@ -1289,11 +1289,11 @@ async function browseLoad() {
     if (reqId !== b.reqId) return;
     if (!Array.isArray(r.posts) || r.page !== nextPage) throw new Error('The mod listing returned an invalid page. Try again.');
     if (r.communityError && !r.posts.length) throw new Error(r.communityError);
-    b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null;
+    b.page = r.page; b.totalPages = r.totalPages; b.total = r.total; b.cursor = r.nextCursor || null; b.sortNotice = r.sortNotice || '';
     const seen = new Set(b.posts.map((p) => String(p.id)));
     const added = r.posts.filter((p) => !seen.has(String(p.id)));
     b.posts.push(...added);
-    if (nextPage === 1) b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, posts: r.posts.slice(0, 60) };
+    if (nextPage === 1) b.firstPage = { at: Date.now(), page: 1, totalPages: r.totalPages, total: r.total, cursor: r.nextCursor || null, sortNotice: r.sortNotice || '', posts: r.posts.slice(0, 60) };
     b.emptyPages = added.length ? 0 : (b.emptyPages || 0) + 1;
     autoAdvance = !added.length && b.page < b.totalPages && b.emptyPages < 5;
     browseCacheWrite(b.cacheKey || browseKey(), b);
@@ -1316,6 +1316,7 @@ async function browseLoad() {
 function siteCard(p) {
   const installed = haveMod({ postId: p.id, title: p.title });
   const cat = p.categoryNames.filter((n) => !/^(Bikes|Rider|Other|Paid Mods)$/.test(n)).slice(-1)[0] || p.categoryNames[0] || '';
+  const viewsPeriod = p.rankScope === 'category-today' ? ' today' : p.rank ? ({ 'popular-week': ' this week', 'popular-month': ' this month', 'popular-today': ' today', 'relevance': ' this month' }[S.browse.sort] || '') : '';
   // A website paint category does not necessarily mean a dependency: many
   // standalone kit packs are tagged under every gear type.  Only label a card
   // as requiring a model after its creator instructions confirm that fact.
@@ -1323,9 +1324,9 @@ function siteCard(p) {
   return `<div class="card" data-post="${esc(p.id)}">
     <div class="thumb"><div class="ph" style="--ph1:#2b303c;--ph2:#15171c"><div class="ph-icon">${icon('globe')}</div><div class="ph-brand" style="font-size:16px">${esc(p.title.slice(0, 28))}</div></div>
       ${p.image ? `<img loading="lazy" src="${esc(p.image)}" alt="">` : ''}
-      <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
+      <div class="badges">${p.coremxId ? '<span class="badge accent">CoreMX</span>' : ''}${p.rank ? `<span class="badge accent" title="${p.rankScope === 'category-today' ? 'Popular in this category today' : 'Sitewide popularity rank'}">#${p.rank}</span>` : ''}${installed ? `<span class="badge ok">${icon('check')}Installed</span>` : ''}${p.paid ? '<span class="badge warn">Paid</span>' : ''}</div></div>
     <div class="card-body"><div class="card-title" title="${esc(p.title)}">${esc(p.title)}</div>${dependencyLabel ? `<div class="mod-content-kind">${dependencyLabel}</div>` : ''}
-      <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views` : timeAgo(p.date)}</div></div></div>`;
+      <div class="card-meta">${esc(cat)}<span class="dot"></span>${Number.isFinite(p.views) ? `${p.views.toLocaleString()} views${viewsPeriod}` : timeAgo(p.date)}</div></div></div>`;
 }
 
 function paintRequirement(p) {
@@ -1351,6 +1352,7 @@ function renderBrowseGrid() {
   const b = S.browse;
   $('#brCount').textContent = b.total ? `${b.total.toLocaleString()} mods` : '';
   let html = '';
+  if (b.sortNotice) html += `<div class="notice info" style="margin-bottom:14px">${icon('info')}<div>${esc(b.sortNotice)}</div></div>`;
   // Front page of free mods: the top mod gets a large banner above the grid.
   const hero = S.view === 'get' && S.getSrc === 'free' && !b.query && b.tab === 'all' && b.posts.length >= 4 && b.posts[0].image ? b.posts[0] : null;
   if (hero) html += heroCard(hero);
@@ -3920,12 +3922,15 @@ api.on('missing:track', ({ track, results, address, server }) => {
 // The plugin's missing-track detection paused (game updated) or switched off (it crashed the game).
 api.on('plugin:hook', (info) => {
   const crashed = info.state === 'disabled';
+  const unsupportedBuild = /build is not recognized|version is newer than the plugin/i.test(info.detail || '');
   modal({
-    title: crashed ? 'Missing-track detection switched off' : 'Missing-track detection paused', size: 'sm',
+    title: crashed ? 'Game plugin switched off' : unsupportedBuild ? 'Game update: plugin features paused' : 'Game plugin paused', size: 'sm',
     body: `<div class="notice ${crashed ? 'warn' : 'info'}">${icon(crashed ? 'alert' : 'info')}<div>${crashed
-      ? 'MX Bikes crashed inside the CoreMX plugin, so missing-track detection has been switched off to keep the game stable.'
-      : 'MX Bikes has been updated, and the plugin doesn\'t recognise the new version yet, so missing-track detection is paused. Nothing in the game was changed.'}</div></div>
-      <p>It turns back on automatically when you install the next CoreMX update. Everything else (friends, live servers, gear sync) keeps working.</p>`,
+      ? 'MX Bikes crashed inside the CoreMX plugin, so game-specific hooks were switched off to keep it stable.'
+      : unsupportedBuild
+        ? 'This plugin does not recognize the current MX Bikes build. Missing-track detection, automatic server addresses, and game-hosted address checks are paused. Nothing in the game was changed.'
+        : 'The CoreMX game plugin could not start its game-specific hook. Nothing in the game was changed.'}</div></div>
+      <p>${unsupportedBuild ? 'Install a CoreMX update that supports this game build to restore those features.' : 'A compatible CoreMX plugin update may be needed.'} Friends and gear sync can still work, but joining from CoreMX may need an address until the plugin is updated.</p>`,
     foot: '<button class="btn btn-primary" data-close>OK</button>',
   });
 });

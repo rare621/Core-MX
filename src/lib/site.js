@@ -164,9 +164,15 @@ async function getJson(url, signal) {
 
 async function categories() {
   if (categoryMap) return categoryMap;
-  const { json } = await getJson(`${BASE}/wp-json/wp/v2/categories?per_page=100&_fields=id,name,parent,count,slug`);
-  categoryMap = {};
-  for (const c of json) categoryMap[c.id] = { name: decode(c.name), parent: c.parent, slug: c.slug, count: c.count };
+  const { json, headers } = await getJson(`${BASE}/wp-json/wp/v2/categories?per_page=100&_fields=id,name,parent,count,slug,link`);
+  const map = {};
+  for (const c of json) map[c.id] = { name: decode(c.name), parent: c.parent, slug: c.slug, count: c.count, link: c.link };
+  const pages = Math.min(20, Number(headers.get('x-wp-totalpages')) || 1);
+  for (let page = 2; page <= pages; page++) {
+    const { json: more } = await getJson(`${BASE}/wp-json/wp/v2/categories?per_page=100&page=${page}&_fields=id,name,parent,count,slug,link`);
+    for (const c of more) map[c.id] = { name: decode(c.name), parent: c.parent, slug: c.slug, count: c.count, link: c.link };
+  }
+  categoryMap = map;
   return categoryMap;
 }
 
@@ -261,6 +267,41 @@ function popular(range) {
   return popularPending.get(range);
 }
 
+// The sitewide charts contain few gear posts. Category archives publish their
+// own 24-hour chart, so use that when browsing gear rather than filtering a
+// mostly-track chart down to an empty page.
+const GEAR_TABS = new Set(['riderkit', 'riders', 'helmets', 'boots', 'gloves', 'protection']);
+const categoryTodayCache = new Map();
+async function categoryToday(categoryId, cats) {
+  const hit = categoryTodayCache.get(categoryId);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.posts;
+  let link = cats[categoryId]?.link;
+  if (!link) {
+    const { json } = await getJson(`${BASE}/wp-json/wp/v2/categories/${categoryId}?_fields=link`);
+    link = json.link;
+  }
+  const archive = new URL(link);
+  if (archive.protocol !== 'https:' || archive.hostname !== 'mxb-mods.com') throw new Error('Invalid MXB Mods category link');
+  const response = await net.fetch(archive.href, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`MXB Mods category returned HTTP ${response.status}`);
+  const $ = cheerio.load(await response.text());
+  const slider = $('.dmkrtz-pv-slider').filter((_, el) => /popular last 24 hours/i.test($(el).find('.dpvs-title').first().text())).first();
+  const rows = [], seen = new Set();
+  slider.find('.dpvs-card').each((_, card) => {
+    const href = $(card).find('a.dpvs-link').attr('href') || '';
+    const slug = (href.match(/^https?:\/\/mxb-mods\.com\/([^/?#]+)\/?/i) || [])[1];
+    const views = Number(($(card).find('.dpvs-range').first().text().match(/[\d,]+/) || ['0'])[0].replace(/,/g, ''));
+    if (slug && !seen.has(slug)) { seen.add(slug); rows.push({ slug, views }); }
+  });
+  if (!rows.length) throw new Error('MXB Mods did not provide its category chart');
+  const params = new URLSearchParams({ slug: rows.map((r) => r.slug).join(','), per_page: String(rows.length), _embed: 'wp:featuredmedia', _fields: 'id,slug,title,link,date,modified,categories,manufacturer,featured_media,excerpt,content,_links,_embedded' });
+  const { json } = await getJson(`${BASE}/wp-json/wp/v2/posts?${params}`);
+  const bySlug = new Map((await summarizeAll(json, cats)).map((post) => [post.slug, post]));
+  const posts = rows.map((row, i) => bySlug.get(row.slug) && { ...bySlug.get(row.slug), views: row.views, rank: i + 1, rankScope: 'category-today' }).filter(Boolean);
+  categoryTodayCache.set(categoryId, { at: Date.now(), posts });
+  return posts;
+}
+
 async function archiveLiveries({ brand, query, page, perPage, cursor }, cats) {
   if (!LIVERY_BRANDS.includes(brand)) throw new Error('Unknown bike livery category');
   const slug = liveryBrandSlug(brand);
@@ -307,17 +348,33 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     && (!query || titleMatches(p, query));
   const sort = orderby === 'relevance' && !query ? 'best-match' : orderby;
   let featured = [];
+  let sortNotice = '';
   if (sort === 'best-match' || sort.startsWith('popular')) {
+    let ranked = [];
     try {
-      featured = scopePosts(await enrichListings((await popular(sort === 'best-match' ? 'month' : sort.split('-')[1] || 'month')).filter(matches), deadline), scope);
+      ranked = (await popular(sort === 'best-match' ? 'month' : sort.split('-')[1] || 'month')).filter(matches);
     } catch (error) {
       // Best match can still browse the category when the separate ranking is down.
-      if (sort !== 'best-match') throw error;
+      if (sort !== 'best-match' && !GEAR_TABS.has(tab)) throw error;
     }
+    let local = [];
+    if (GEAR_TABS.has(tab) && scoped.cats?.length) {
+      try { local = (await categoryToday(scoped.cats[0], cats)).filter(matches); }
+      catch { /* Keep the matching sitewide chart and the category listing. */ }
+      if (sort.startsWith('popular')) {
+        sortNotice = !local.length
+          ? 'No category popularity chart is available right now. Matching sitewide picks appear first, followed by more mods in newest order.'
+          : sort === 'popular-today'
+            ? 'MXB Mods shows its category chart first, followed by more mods in newest order.'
+            : 'MXB Mods only publishes a sitewide chart for this period. Matching chart entries appear first, followed by today’s category picks and more mods in newest order.';
+      }
+    }
+    const ordered = sort === 'best-match' || sort === 'popular-today' ? [...local, ...ranked] : [...ranked, ...local];
+    featured = scopePosts(await enrichListings(ordered.filter((post, index) => ordered.findIndex((other) => other.id === post.id) === index), deadline), scope);
   }
   let offset = Math.max(0, Number(cursor?.offset) || 0), featuredOffset = Math.max(0, Number(cursor?.featuredOffset) || 0), total = Infinity;
   const posts = featured.slice(featuredOffset, featuredOffset + perPage); featuredOffset += posts.length;
-  if (sort.startsWith('popular')) {
+  if (sort.startsWith('popular') && !GEAR_TABS.has(tab)) {
     const more = featuredOffset < featured.length;
     return { posts, total: featured.length, page, totalPages: more ? page + 1 : page, nextCursor: { featuredOffset } };
   }
@@ -341,7 +398,7 @@ async function scopedSearch({ query, tab, kind, scope, page, perPage, orderby, c
     }
   }
   const more = featuredOffset < featured.length || offset < total;
-  return { posts, total: 0, page, totalPages: more ? page + 1 : page, nextCursor: { offset, featuredOffset } };
+  return { posts, total: 0, page, totalPages: more ? page + 1 : page, nextCursor: { offset, featuredOffset }, sortNotice };
 }
 
 async function search({ query = '', tab = 'all', kind = 'all', brand = '', scope = 'all', page = 1, perPage = 24, orderby = 'date', cursor = null } = {}) {

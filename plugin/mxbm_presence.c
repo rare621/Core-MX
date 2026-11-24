@@ -344,14 +344,20 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
  *    the state file says "paused" (game updated) and nothing is touched.
  *  - The original pointer is put back on Shutdown.
  *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
- *    MX Bikes Manager ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
+ *    CoreMX ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
  * Research notes: plugin/MISMATCH_NOTES.md. */
-#define HOOK_BUILD 4
+#define HOOK_BUILD 6
 #define RVA_UI_SLOT  0x566C48u
 #define RVA_SIG      0xAFDF3u
 #define RVA_RETURN   0xAFE1Eu
 #define RVA_SIG2     0xAB281u
 #define RVA_RETURN2  0xAB2ACu
+/* MX Bikes beta21f (Steam build 26852311) moved both handlers by 0x40 bytes.
+ * The UI pointer, server-list records and recvfrom import remain at their old locations. */
+#define RVA_SIG_F      0xAFDB3u
+#define RVA_RETURN_F   0xAFDDEu
+#define RVA_SIG2_F     0xAB241u
+#define RVA_RETURN2_F  0xAB26Cu
 
 static const unsigned char SIG[43] = {
   0x4c, 0x8d, 0x05, 0xe6, 0xc0, 0x28, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
@@ -361,6 +367,14 @@ static const unsigned char SIG2[43] = {
   0x4c, 0x8d, 0x05, 0x58, 0x0c, 0x29, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
   0xb3, 0xb9, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
   0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0x9c, 0xb9, 0x4b, 0x00 };
+static const unsigned char SIG_F[43] = {
+  0x4c, 0x8d, 0x05, 0x66, 0xc1, 0x28, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
+  0x81, 0x6e, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
+  0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0x6a, 0x6e, 0x4b, 0x00 };
+static const unsigned char SIG2_F[43] = {
+  0x4c, 0x8d, 0x05, 0xd8, 0x0c, 0x29, 0x00, 0x8b, 0xd3, 0xb9, 0x0a, 0x01, 0x00, 0x00, 0xff, 0x15,
+  0xf3, 0xb9, 0x4b, 0x00, 0x8b, 0x54, 0x24, 0x30, 0x4c, 0x8d, 0x84, 0x24, 0xa0, 0x02, 0x00, 0x00,
+  0xb9, 0x12, 0x01, 0x00, 0x00, 0xff, 0x15, 0xdc, 0xb9, 0x4b, 0x00 };
 
 /* Used by the assembly stub below, so not static. A return address left at 0 never matches. */
 void *mxbm_orig_ui = 0;
@@ -467,7 +481,7 @@ static LONG CALLBACK onCrash(EXCEPTION_POINTERS *e) {
   if (g_slot && mxbm_orig_ui) InterlockedCompareExchangePointer((PVOID *)g_slot, mxbm_orig_ui, (PVOID)mxbm_ui_stub);
   stunUnhook();
   { char o[200]; sprintf(o, "{\"v\":1,\"build\":%d,\"at\":%llu}", HOOK_BUILD, nowMs()); writeSmall("mxbm_hook_disabled.json", o); }
-  hookState("disabled", "MX Bikes crashed inside the MX Bikes Manager plugin");
+  hookState("disabled", "MX Bikes crashed inside the CoreMX plugin");
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -517,6 +531,9 @@ static int disabledForThisBuild(void) {
   f = fopen(path, "rb"); if (!f) return 0;
   fread(buf, 1, sizeof buf - 1, f); fclose(f);
   p = strstr(buf, "\"build\":"); if (p) build = atoi(p + 8);
+  /* A newer compatible plugin build may retry after the previous build's
+   * crash. Keep the safeguard for this exact build; only retire older marks. */
+  if (build >= 0 && build < HOOK_BUILD) { DeleteFileA(path); return 0; }
   return build == HOOK_BUILD;
 }
 
@@ -529,11 +546,13 @@ static DWORD WINAPI hookThread(LPVOID unused) {
   if (nt->OptionalHeader.SizeOfImage < RVA_UI_SLOT + 8) { hookState("paused", "not running inside MX Bikes"); return 0; }
   /* Each handler is watched only if its bytes match this game build exactly. */
   if (memcmp(base + RVA_SIG, SIG, sizeof SIG) == 0) mxbm_expect_ret = base + RVA_RETURN;
+  else if (memcmp(base + RVA_SIG_F, SIG_F, sizeof SIG_F) == 0) mxbm_expect_ret = base + RVA_RETURN_F;
   if (memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) == 0) mxbm_expect_ret2 = base + RVA_RETURN2;
+  else if (memcmp(base + RVA_SIG2_F, SIG2_F, sizeof SIG2_F) == 0) mxbm_expect_ret2 = base + RVA_RETURN2_F;
   g_buildOk = mxbm_expect_ret || mxbm_expect_ret2;
   if (g_buildOk) stunStart(base);
   if (!mxbm_expect_ret && !mxbm_expect_ret2) {
-    hookState("paused", "This MX Bikes version is newer than the plugin; missing-track detection waits for an MX Bikes Manager update");
+    hookState("paused", "This MX Bikes build is not recognized; game-version-specific features wait for a CoreMX update");
     return 0;
   }
   g_slot = (void **)(base + RVA_UI_SLOT);
@@ -2094,7 +2113,8 @@ static void serverListStart(void) {
   nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
   if (nt->OptionalHeader.SizeOfImage < RVA_SRV_COUNT + 8) return;
   /* .text is decrypted once the game runs its own code, which happens before plugins load. */
-  if (memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0 && memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) != 0) return;
+  if (memcmp(base + RVA_SIG, SIG, sizeof SIG) != 0 && memcmp(base + RVA_SIG2, SIG2, sizeof SIG2) != 0 &&
+      memcmp(base + RVA_SIG_F, SIG_F, sizeof SIG_F) != 0 && memcmp(base + RVA_SIG2_F, SIG2_F, sizeof SIG2_F) != 0) return;
   g_srvStop = 0;
   g_srvThread = CreateThread(NULL, 0, serverListThread, NULL, 0, NULL);
 }

@@ -50,3 +50,16 @@ The [I <3 MY GF/BF HOODIES listing](https://mxb-mods.com/i-3-my-gf-bf-hoodies-2/
 - Opening Multiplayer without Refresh produced real public IPv4/port entries. Closing the game removed the masterlist without app cleanup.
 - The browser callback restarts its row index for small batches; treating each reset as the whole list lost earlier entries. `0.52.0-mxbm.2` accumulates observations in a bounded map, updates duplicate addresses, expires each observation individually after six hours, and evicts the oldest at capacity. The native cache test verifies these cases.
 - After installing this fix with the game closed, opening Multiplayer automatically accumulated 547 addresses. The presence packet's current CBRSERVERS Motopark server matched one captured public IP/port exactly, and session 5 reported Warmup. No manual browser Refresh was used. Friend presence transport is covered by the local two-client integration test; a second real player's direct connection was not exercised here.
+
+## 2026-11-23: MX Bikes beta21f server-address compatibility
+
+- Steam build 26852311 changed the two missing-track handler locations by `-0x40` from the previous build. Read the loaded game at its main menu: the 43-byte signatures match at RVAs `0xAFDB3` and `0xAB241`; their return addresses are `0xAFDDE` and `0xAB26C`. The UI function pointer remains at `0x566C48`.
+- In the updated game's Multiplayer server list, the existing list pointer and record layout yielded 309 valid rows, including an RRL Racing listing with its address and port. The `recvfrom` import still resolves to the same Winsock function, which the game-hosted STUN path uses. These checks were read-only; no process memory was changed.
+- Added beta21f signatures alongside the previous build and incremented the plugin hook build to 5. Rebuilt the DLO and installed it locally after MX Bikes closed, keeping backups. The restarted plugin reported its hook active, refreshed the server list with the RRL entry, and reported the exact endpoint while joined to another server. The user saw Join in CoreMX again.
+- The user's temporary Host World reported a fresh STUN outside address, and the online service listed it as game hosted with a join address. A request from the host's own network received the expected LAN address. The local plugin and service tests passed. A remote player's join and the earlier intermittent game-hosted timeout remain unverified. No release or online-service change has been made.
+
+## 2026-11-24: compatible plugin update
+
+- Bundled the beta21f address compatibility in hook build 6. The app replaces an older bundled plugin after MX Bikes closes; the next game launch checks the new game signatures and activates the hook when they match.
+- A crash marker from an older hook build is removed when the newer plugin starts. A crash marker for the current build still disables that hook until a later compatible update, so a repeat crash does not loop.
+- No server protocol changed; online service v28 remains current.

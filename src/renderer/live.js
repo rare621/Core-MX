@@ -58,14 +58,25 @@ document.addEventListener('click', (e) => { if (e.target.closest('[data-missing-
 // The player installs the right mod; CoreMX checks the files that install put in the game, and only
 // then shares which page it came from, so other riders get it automatically.
 let missingSeen = new Set();
+let missingNoticeTimer = null;
+let lastMissingNotice = 0;
 function noteMissingGear(st) {
   const rows = st?.paintSync?.needsYou || [];
   const fresh = rows.filter((r) => !missingSeen.has(`${r.slot}|${r.name}`.toLowerCase()));
   for (const r of rows) missingSeen.add(`${r.slot}|${r.name}`.toLowerCase());
   if ($('#missingGear')) { drawMissingGear(); return; }
-  if (!fresh.length) return;
-  toast(`<b>CoreMX couldn't find ${esc(fresh[0].name)}</b>${fresh[0].riders[0] ? ` (worn by ${esc(fresh[0].riders[0])})` : ''}${fresh.length > 1 ? ` and ${fresh.length - 1} more` : ''}. <button class="btn btn-sm" data-missing-open>Choose it</button>`, 'info', 12000);
-  $('#toasts').lastElementChild?.querySelector('[data-missing-open]')?.addEventListener('click', () => openMissingGear());
+  if (!fresh.length || missingNoticeTimer || Date.now() - lastMissingNotice < 60 * 1000) return;
+  // Searches finish at different times. Collect their results so a friend coming online creates
+  // one useful notice rather than a stack of one-item popups.
+  missingNoticeTimer = setTimeout(() => {
+    missingNoticeTimer = null;
+    const current = S.live.status?.paintSync?.needsYou || [];
+    if (!current.length || $('#missingGear')) return;
+    lastMissingNotice = Date.now();
+    const label = current.length === 1 ? `<b>CoreMX couldn't find ${esc(current[0].name)}</b>` : `<b>CoreMX couldn't find ${current.length} gear items</b>`;
+    toast(`${label}. <button class="btn btn-sm" data-missing-open>Choose them</button>`, 'info', 12000);
+    $('#toasts').lastElementChild?.querySelector('[data-missing-open]')?.addEventListener('click', () => openMissingGear());
+  }, 1800);
 }
 const GEAR_ICON = { helmet: 'helmet', helmetPaint: 'helmet', gogglesPaint: 'helmet', bikePaint: 'bike', boots: 'boot', bootsPaint: 'boot', glovesPaint: 'glove' };
 function missingRowHtml(r, i) {
