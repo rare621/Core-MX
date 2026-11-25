@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 28;
+const VERSION = 29;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -548,7 +548,13 @@ const routes = {
           }
           // Its host left (the game is closed): stays marked as theirs, so the list leaves it out.
           if (prev.hosted && prev.hostedBy && prev.hostedBy !== me.id) return { address: null, hosted: true, hostedBy: prev.hostedBy, hostSince: prev.hostSince || 0, guessedAddress: prev.guessedAddress || null, observedAddress: null, observedAt: null };
-          return { address: state.serverAddress || null, hosted: false };
+          // A reporter may briefly lose the game/browser endpoint while still
+          // riding. Keep the address already seen for this active row until it
+          // disappears; a later valid report replaces it.
+          const sameLiveRow = prev.address && now - (prev.lastSeen || 0) < SERVER_TTL &&
+            (!prev.trackId || !state.trackId || prev.trackId === state.trackId) &&
+            (stayed || Object.keys(reports).length > 1);
+          return { address: state.serverAddress || (sameLiveRow ? prev.address : null) || null, hosted: false };
         })(),
         name: state.server, key: k,
         trackId: state.trackId || prev.trackId || '', trackName: state.trackName || prev.trackName || '',

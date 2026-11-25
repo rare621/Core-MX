@@ -11,6 +11,7 @@ const paths = require('./src/lib/paths');
 const scanner = require('./src/lib/scanner');
 const { Thumbs } = require('./src/lib/thumbs');
 const { BikePreviewCache, fingerprint: bikePreviewFingerprint } = require('./src/lib/bike-preview-cache');
+const { GearThumbCache } = require('./src/lib/gear-thumb-cache');
 const site = require('./src/lib/site');
 const coremx = require('./src/lib/coremx');
 const { mergeBrowsePosts } = require('./src/lib/browse-sort');
@@ -229,6 +230,7 @@ const graphicsManager = graphicsPackages.create({
   trash: (file) => shell.trashItem(file), isGameRunning: () => profile.isGameRunning(),
 });
 let lastScan = { items: [] };
+let gearThumbCache = null;
 const jobs = new Map();
 const browserJobs = new Map(); // webContents id -> job id
 const shopDownloads = new Map(); // product page behind a shop popup's downloads
@@ -1223,6 +1225,7 @@ function registerIpc() {
   });
   handle('settings:set', (patch) => {
     if (Object.hasOwn(patch || {}, 'overlayKey') && !OVERLAY_KEYS.includes(patch.overlayKey)) throw new Error('Pick a key from F1 to F11');
+    if (Object.hasOwn(patch || {}, 'appBackground') && !['ember', 'slate', 'black'].includes(patch.appBackground)) throw new Error('Pick an app background');
     store.update('settings', (s) => ({ ...s, ...patch }));
     if (Object.hasOwn(patch || {}, 'overlayKey')) writeOverlayKey();
     return environment();
@@ -1930,6 +1933,9 @@ function registerIpc() {
 
   // ---- rider loadout (profile.ini) ----
   handle('rider:profiles', () => { watchRiderProfiles(); return profile.listProfiles(profUserDir()); });
+  handle('rider:thumbCacheGet', (key) => gearThumbCache.get(key));
+  handle('rider:thumbCacheSave', (key, image, sourceId) => gearThumbCache.save(key, image, sourceId));
+  handle('rider:thumbCachePrune', () => gearThumbCache.prune((lastScan?.items || []).filter((item) => !item.disabled).map((item) => item.id)));
   handle('rider:createProfile', (name, source, copyGear) => profile.createProfile(profUserDir(), name, source, copyGear !== false));
   handle('rider:activateProfile', (name) => profile.activateProfile(profUserDir(), name));
   handle('rider:deleteProfile', (name) => profile.deleteProfile(profUserDir(), name, (folder) => shell.trashItem(folder)));
@@ -2011,7 +2017,7 @@ function registerIpc() {
     values.push(['info', 'protection', next.current.protection || '']);
     const category = await installedBikeCategory(bike) || prof.sections.info?.values.class;
     values.push(['tyres', bike, next.current.tyres || '']);
-    values.push(['info', 'bikeid', bike]); if (category) values.push(['info', 'class', category], ['category', category, bike]);
+    values.push(...game.bikeSelectionValues(bike, category));
     const previousAppearance = bikeSwaps.list(bike).active;
     if (Object.hasOwn(changes, 'bikeAppearance')) await bikeSwaps.select(bike, changes.bikeAppearance);
     try {
@@ -2344,6 +2350,7 @@ app.whenReady().then(async () => {
   store = new Store(path.join(app.getPath('userData'), 'data.json'), { settings: {}, installs: {}, images: {}, favorites: [], servers: [], recentServers: [], friends: [], apps: [] });
   thumbs = new Thumbs(path.join(app.getPath('userData'), 'thumbs'), () => Object.values(store.get('images')));
   bikePreviews = new BikePreviewCache(path.join(app.getPath('userData'), 'bike-previews'));
+  gearThumbCache = new GearThumbCache(path.join(app.getPath('userData'), 'gear-thumbnails'));
   await thumbs.prune().catch(() => {});
   initSettings();
   updates = appUpdates.create({ updater: require('electron-updater').autoUpdater, packaged: app.isPackaged && !process.env.MXB_DEBUG_SHOT, version: app.getVersion(), notify: (state) => send('app:update', state) });

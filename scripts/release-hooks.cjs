@@ -35,7 +35,7 @@ async function verifyPackage({ appOutDir, packager }) {
   for (const name of ['7z.exe', '7z.dll', 'License.txt']) if (!fs.existsSync(path.join(appOutDir, 'resources', '7zip', name))) throw new Error(`Release is missing the bundled 7-Zip (${name})`);
   const archive = path.join(appOutDir, 'resources', 'app.asar');
   const files = asar.listPackage(archive).map((name) => name.replace(/\\/g, '/').replace(/^\//, ''));
-  const forbidden = files.filter((name) => /^(?:\.git|\.tmp|test|scripts|server|dist|docs|build|CODEX_NOTES\.md|MODDING_PLAN\.md|online\.config\.json)(?:\/|$)/i.test(name)
+  const forbidden = files.filter((name) => /^(?:\.git|\.tmp|backup|test|scripts|server|dist|docs|build|CODEX_NOTES\.md|MODDING_PLAN\.md|online\.config\.json)(?:\/|$)/i.test(name)
     || /(?:^|\/)(?:data\.json|mxbm-data\.json|Cookies(?:-journal)?|Login Data|\.env)$/.test(name)
     || /\.(?:pkz|pnt|edf|lnk)$/i.test(name));
   if (forbidden.length) throw new Error(`Unexpected release content: ${forbidden.slice(0, 10).join(', ')}`);

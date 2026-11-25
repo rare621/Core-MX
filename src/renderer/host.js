@@ -1,4 +1,4 @@
-/* global S, $, $$, esc, icon, toast, modal, confirmBox, cleanErr, api, onlineTabs, debounce */
+/* global S, $, $$, esc, icon, toast, modal, confirmBox, confirmRiderBeforeGame, cleanErr, api, onlineTabs, debounce */
 'use strict';
 // ---------- Host your own dedicated server (every option from PiBoSo's server config) ----------
 const CATEGORIES = ['MX1 OEM', 'MX2 OEM', 'MX1-2T OEM', 'MX2-2T OEM', 'MX3 OEM', 'MX-E OEM', 'SM OEM', 'Enduro OEM'];
@@ -246,6 +246,7 @@ function drawHost() {
 
 // Write the in-game Host screen's settings into the profile, then open the game.
 async function setupInGameHost() {
+  if (await confirmRiderBeforeGame('launch') === 'cancel') return false;
   const cfg = readCfg();
   const values = [];
   for (const [k, pk] of Object.entries(GAME_KEYS)) {
@@ -262,6 +263,7 @@ async function setupInGameHost() {
   if (cfg.categories.length) { values.push(['ui', 'race_class', cfg.categories.join('/')]); values.push(['ui', 'race_category', cfg.categories.join('/')]); }
   await api.invoke('game:setValues', values);
   await api.invoke('game:launch');
+  return true;
 }
 
 const saveHost = debounce(() => api.invoke('host:save', S.host.cfg), 400);
@@ -317,7 +319,7 @@ document.addEventListener('click', async (e) => {
   if (!a) return;
   if (a.dataset.act === 'host-game') {
     a.disabled = true;
-    try { await setupInGameHost(); S.host.prepared = true; drawHost(); toast('Settings saved — in MX Bikes open Multiplayer → Host and press Start', 'ok', 7000); }
+    try { if (await setupInGameHost()) { S.host.prepared = true; drawHost(); toast('Settings saved — in MX Bikes open Multiplayer → Host and press Start', 'ok', 7000); } }
     catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
     a.disabled = false;
     return;
@@ -341,7 +343,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (a.dataset.act === 'host-join-own') {
-    try { await api.invoke('game:join', `127.0.0.1:${S.host.status.port}`); toast('Joining your server…', 'ok'); }
+    try { if (await confirmRiderBeforeGame('join') === 'cancel') return; await api.invoke('game:join', `127.0.0.1:${S.host.status.port}`); toast('Joining your server…', 'ok'); }
     catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
   }
 });

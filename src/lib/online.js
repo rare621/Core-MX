@@ -108,6 +108,7 @@ const ADMIN_STEAM_ID = '76561198098586128';
 
 function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, steamId, steamName, currentOutfit, haveMod, resolveServerAddress = async () => null, defaultUrl, previousServiceUrls = [], onChange, onInstalled = () => {}, findGear = () => {}, gearStatus = () => null, gearStillMissing = () => {}, portMapper = null, firewall = null }) {
   let current = null;        // parsed plugin state, or null
+  const liveAddresses = new Map(); // retain a known endpoint while the same live row exists
   let gameRunning = false, pluginUpdating = false, pluginLoaded = null;
   const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
   let lastSent = '';
@@ -452,8 +453,9 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       if (resolved && known[next.server] && known[next.server] !== resolved) { delete known[next.server]; setCfg({ addresses: known }); }
       // Resolve locally observed browser addresses on every poll, and report
       // them to friends too. Do not persist discovered entries beyond their TTL.
-      next.serverAddress = resolved || known[next.server] || null;
-      next.serverAddressSource = fromGame ? 'game' : resolved ? 'browser' : next.serverAddress ? 'saved' : null;
+      const sameWorld = current?.inEvent && current.server === next.server && current.pid === next.pid && current.trackId === next.trackId;
+      next.serverAddress = resolved || known[next.server] || (sameWorld ? current.serverAddress : null) || null;
+      next.serverAddressSource = fromGame ? 'game' : resolved ? 'browser' : known[next.server] ? 'saved' : sameWorld ? current.serverAddressSource : null;
       const recent = store.get('recentServers') || [];
       const previous = recent.find((s) => s.name.toLowerCase() === next.server.toLowerCase());
       if (!previous || current?.server !== next.server || previous.address !== next.serverAddress || Date.now() - previous.at > 10 * 60 * 1000) {
@@ -780,7 +782,16 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const freshAfter = Date.now() - 2 * 60 * 1000;
     const servers = (r.servers || []).filter((s) => !s.lastSeen || Number(s.lastSeen) >= freshAfter)
       // A remembered address (by name) only when one server has that name: rows can share a name.
-      .map((s, i, all) => ({ ...s, address: s.address || (all.filter((o) => o.name === s.name).length === 1 ? known[s.name] : null) || null }));
+      .map((s, i, all) => {
+        const previous = liveAddresses.get(s.id);
+        const sameRow = previous && previous.name === s.name && previous.trackId === s.trackId;
+        const address = s.address || (sameRow ? previous.address : null)
+          || (all.filter((o) => o.name === s.name).length === 1 ? known[s.name] : null) || null;
+        if (address) liveAddresses.set(s.id, { name: s.name, trackId: s.trackId, address });
+        return { ...s, address, addressRemembered: !s.address && !!address };
+      });
+    const active = new Set(servers.map((s) => s.id));
+    for (const id of liveAddresses.keys()) if (!active.has(id)) liveAddresses.delete(id);
     return { at: r.at, servers };
   }
   async function syncFriends() {

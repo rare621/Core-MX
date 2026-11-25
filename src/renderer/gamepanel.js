@@ -1,4 +1,4 @@
-/* global S, $, $$, esc, icon, toast, modal, confirmBox, cleanErr, debounce, api, go, fmtSize, thumbHtml, listPicker, bikePicker, bikeItem, bikeTitle, openItem */
+/* global S, $, $$, esc, icon, toast, modal, confirmBox, confirmRiderBeforeGame, cleanErr, debounce, api, go, fmtSize, thumbHtml, listPicker, bikePicker, bikeItem, bikeTitle, openItem */
 'use strict';
 // ---------- Game: Ride and game settings; maintenance lives in app Settings ----------
 S.gameTab = 'ride';
@@ -122,12 +122,11 @@ document.addEventListener('click', async (e) => {
     go2.disabled = true;
     try {
       if (!S.ride.bike || !S.ride.track) { toast('Choose a bike and a track first', 'err'); return; }
-      if (riderDirty()) {
-        if (!await confirmBox('Apply rider setup & ride?', 'Apply the bike, livery, tyres and outfit currently previewed on the Rider page, then launch MX Bikes?', 'Apply & ride')) return;
-        await api.invoke('rider:apply', S.rider.profile, S.rider.bike, S.rider.drafts[riderDraftKey()] || {});
-        delete S.rider.drafts[riderDraftKey()]; S.rider.selectionDirty = false; S.rider.bikes = null;
-      }
-      await api.invoke('game:quickStart', { bike: S.ride.bike, track: S.ride.track });
+      const setup = await confirmRiderBeforeGame('launch');
+      if (setup === 'cancel') return;
+      const saved = setup === 'saved' && riderDirty() ? await api.invoke('game:settings') : null;
+      if (saved && !saved.values?.currentBike) throw new Error('Could not find your saved bike. Apply your Rider setup or choose a bike in MX Bikes first.');
+      await api.invoke('game:quickStart', { bike: saved?.values?.currentBike || S.ride.bike, track: S.ride.track });
       await api.invoke('game:launch');
       toast('Starting MX Bikes — choose <b>Single Player</b> — your bike and track are already set', 'ok', 4500);
     } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }

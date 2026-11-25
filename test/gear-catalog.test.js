@@ -42,7 +42,7 @@ test('the service keeps one shared catalog: reports, lookups and installs that t
   };
   const reg = async (id, name) => (await call(null, '/v1/register', { steamId: id, name })).data;
   const a = await reg('76561198000000001', 'A'), b = await reg('76561198000000002', 'B'), c = await reg('76561198000000003', 'C');
-  assert.equal((await call(null, '/v1/health')).data.version, 28);
+  assert.equal((await call(null, '/v1/health')).data.version, 29);
   const page = { postId: 91257, link: 'https://mxb-mods.com/bell-moto-10s-different-googles/', title: 'Bell Moto 10´S different Googles', download: 'https://www.mediafire.com/file/k/Bell+moto+10.rar/file' };
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, keys: ['helmets/bellmoto10-fcr', 'helmets/bellmoto10-eks', 'Helmets/UPPER', 'weird/x', 'helmets/../x'] })).data.keys, 2, 'bad keys are dropped');
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, link: 'https://evil.test/x', keys: ['helmets/x'] })).status, 400, 'only MXB Mods pages');

@@ -118,7 +118,7 @@ test('plugin server events replace game-only presence immediately and closing th
   assert.equal(reports.at(-1).inGame, false); assert.equal(reports.at(-1).server, null);
 });
 
-test('discovered addresses are reported to friends and cleared when discovery expires or the game closes', async (t) => {
+test('discovered addresses stay while riding and clear when the game closes', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-address-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   let address = '203.0.113.21:54210', running = true;
@@ -136,13 +136,30 @@ test('discovered addresses are reported to friends and cleared when discovery ex
   assert.equal(reports.at(-1).session, 5, 'Warmup reaches the online service');
   assert.equal(f.config().addresses, undefined, 'discovery must not become a permanent stale mapping');
   address = null; await f.client.refresh();
-  assert.equal(reports.at(-1).serverAddress, null);
-  assert.equal(f.recentServers()[0].address, null, 'a stale address must not stay joinable');
+  assert.equal(reports.at(-1).serverAddress, '203.0.113.21:54210');
+  assert.equal(f.recentServers()[0].address, '203.0.113.21:54210', 'a temporary miss must not remove Join while riding');
   address = '203.0.113.22:54210'; await f.client.refresh();
   assert.equal(reports.at(-1).serverAddress, address);
   running = false; await f.client.refresh();
   assert.equal(reports.at(-1).serverAddress, null);
   assert.equal(reports.at(-1).session, null);
+});
+
+test('a live server keeps its last join address across one empty refresh', async (t) => {
+  let address = '203.0.113.31:54210', live = true;
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify({ servers: live ? [{
+    id: 'fixture-row', name: 'Fixture server', trackId: 'fixture-track', address, riders: [], lastSeen: Date.now(),
+  }] : [] })));
+  const { client } = fixture();
+  assert.equal((await client.servers()).servers[0].address, address);
+  address = null;
+  const kept = (await client.servers()).servers[0];
+  assert.equal(kept.address, '203.0.113.31:54210');
+  assert.equal(kept.addressRemembered, true);
+  live = false;
+  assert.equal((await client.servers()).servers.length, 0);
+  live = true;
+  assert.equal((await client.servers()).servers[0].address, null, 'a departed row must lose its cached address');
 });
 
 test('startup migrates only configured aliases and respects opting out', async (t) => {

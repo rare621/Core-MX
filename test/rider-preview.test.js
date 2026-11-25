@@ -28,7 +28,7 @@ test('editing either outfit or bike replaces the active profile badge with Previ
 test('rider preview sends unsaved outfit paints and ignores an older model response', async () => {
   const requests = [], shown = [], nodes = { '#stageStatus': {}, '#stageNote': {} };
   const rider = { profile: 'Practice', bike: 'KX250', lo: { current: { helmet: 'Helmet', helmetPaint: 'White', gogglesPaint: 'Blue', suitPaint: 'Kit', glovesPaint: 'Gloves' } }, viewer: { load: (m) => shown.push(m.id) } };
-  const context = vm.createContext({ S: { rider }, $: (id) => nodes[id], icon: () => '', esc: (s) => s, api: { invoke: (channel, ...args) => new Promise((resolve) => requests.push({ channel, args: structuredClone(args), resolve })) } });
+  const context = vm.createContext({ S: { rider }, $: (id) => nodes[id], icon: () => '', esc: (s) => s, riderShowBike: () => false, api: { invoke: (channel, ...args) => new Promise((resolve) => requests.push({ channel, args: structuredClone(args), resolve })) } });
   vm.runInContext(load, context);
   const first = context.loadRiderModel();
   assert.equal(requests[0].channel, 'rider:model');

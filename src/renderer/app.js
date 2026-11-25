@@ -33,7 +33,7 @@ function toast(msg, type = 'info', ms = 3800) {
 // ---------- state ----------
 const S = {
   env: null,
-  view: 'library',
+  view: 'home',
   items: [],
   scanned: false,
   lib: { section: 'all', query: '', sort: 'name', mode: 'grid', limit: 150 },
@@ -100,6 +100,7 @@ document.addEventListener('error', (e) => { if (e.target.tagName === 'IMG' && !e
 
 // ---------- rail ----------
 const VIEWS = [
+  { id: 'home', label: 'Home', icon: 'home', hint: 'Your riding overview' },
   { id: 'library', label: 'My Mods', icon: 'library', hint: 'Everything installed in your game' },
   { id: 'get', label: 'Get Mods', icon: 'globe', hint: 'Browse and install free and paid mods' },
   { id: 'packs', label: 'OEM Packs', icon: 'layers', hint: 'Official bike packs and their updates' },
@@ -118,6 +119,9 @@ function setAmbient(url) {
   img.onload = () => { el.style.backgroundImage = `url("${String(url).replace(/["\\]/g, '')}")`; el.classList.add('show'); };
   img.src = url;
 }
+function applyAppBackground(value) {
+  document.body.dataset.background = ['ember', 'slate', 'black'].includes(value) ? value : 'ember';
+}
 function pushAmbient(url) { ambientStack.push(url || null); setAmbient(url); }
 function popAmbient() { ambientStack.pop(); setAmbient(ambientStack[ambientStack.length - 1]); }
 function renderRail() {
@@ -135,9 +139,7 @@ function renderRail() {
   moveRailIndicator(revealActive);
   const dl = review || active || upd || '';
   const steam = S.accounts?.steam;
-  const activeUsers = S.live?.status?.service?.activeUsers;
   $('#railAccount').innerHTML = `<button class="top-web-link" data-open="https://coremx.app/#/" title="Open coremx.app">${icon('globe')}<span>coremx.app</span></button>`
-    + `<span class="top-active-users" id="activeUsersCount" title="People active in CoreMX in the last two minutes"><i></i><span>${Number.isInteger(activeUsers) ? `${activeUsers} online` : 'Online —'}</span></span>`
     + `<button class="top-icon ${S.view === 'downloads' ? 'active' : ''}" data-view="downloads" title="Downloads & updates">${icon('download')}${dl ? `<span class="rail-badge">${dl}</span>` : ''}</button>`
     + `<button class="top-icon ${S.view === 'settings' ? 'active' : ''}" data-view="settings" title="Settings">${icon('settings')}</button>`
     + `<button class="top-icon" data-help title="Help for this page">${icon('info')}</button>`
@@ -196,13 +198,15 @@ function go(view) {
   closeDrawer();
   renderRail();
   render();
+  if (view === 'home' && previousView !== 'home') refreshHome();
   if (typeof maybeShowTip === 'function' && previousView !== view) maybeShowTip(view);
 }
 
 function render() {
   const c = $('#content');
   if (!S.env.modsFound && S.view !== 'settings') return renderSetup(c);
-  if (S.view === 'library') renderLibrary(c);
+  if (S.view === 'home') renderHome(c);
+  else if (S.view === 'library') renderLibrary(c);
   else if (S.view === 'rider') renderRider(c);
   else if (S.view === 'get') renderGet(c);
   else if (S.view === 'packs') renderPacks(c);
@@ -294,12 +298,12 @@ S.lib.f = {};
 S.lib.quick = 'all';
 
 function riderTabsHtml(active) {
-  return `<div class="seg-tabs"><button class="${active === 'outfit' ? 'active' : ''}" data-rider-tab="outfit">${icon('rider')}Outfit</button><button class="${active === 'bike' ? 'active' : ''}" data-rider-tab="bike">${icon('bike')}Bike</button><button class="${active === 'gear' ? 'active' : ''}" data-rider-tab="gear">${icon('helmet')}My gear</button></div>`;
+  return `<div class="seg-tabs"><button class="${active === 'outfit' ? 'active' : ''}" data-rider-tab="outfit">${icon('rider')}Outfit & bike</button><button class="${active === 'gear' ? 'active' : ''}" data-rider-tab="gear">${icon('helmet')}My gear</button></div>`;
 }
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-rider-tab]');
   if (!t) return;
-  S.riderTab = t.dataset.riderTab;
+  S.riderTab = t.dataset.riderTab === 'bike' ? 'outfit' : t.dataset.riderTab;
   closeDrawer(); S.selected.clear();
   renderRider($('#content'));
 });
@@ -406,13 +410,23 @@ function showBikePreview(item) {
 function startBikePreviews() {
   if (!S.scanned || S.lib.bikePreviewTask) { drawBikePreviewProgress(); return; }
   if (S.env?.settings?.setupDone === false) return;
+  // Rendering 3D bike thumbnails can saturate the IPC/graphics pipeline. Keep
+  // that work on the bike gallery, after the first window has become usable.
+  if (S.view !== 'library' || S.lib.scope !== 'mods' || S.lib.tab !== 'bikes') return;
+  if (Date.now() < (S.lib.previewReadyAt || 0)) {
+    clearTimeout(S.lib.previewTimer);
+    S.lib.previewTimer = setTimeout(startBikePreviews, S.lib.previewReadyAt - Date.now());
+    return;
+  }
   const pending = bikePreviewPending();
   if (!pending.length) return;
   const progress = S.lib.bikePreviewProgress = { first: !S.lib.bikePreviewsInitialized, done: 0, total: pending.length, failed: 0 };
   drawBikePreviewProgress();
   S.lib.bikePreviewTask = (async () => {
     if (!window.RiderViewer) await new Promise((resolve) => window.addEventListener('riderviewer-ready', resolve, { once: true }));
+    let complete = true;
     for (const item of pending) {
+      if (S.view !== 'library' || S.lib.scope !== 'mods' || S.lib.tab !== 'bikes') { complete = false; break; }
       try {
         const model = await api.invoke('library:bikeThumbnailModel', item.key);
         if (!model?.parts?.length) throw new Error('No readable geometry');
@@ -431,10 +445,10 @@ function startBikePreviews() {
       }
       progress.done++;
       drawBikePreviewProgress();
-      // Keep navigation and card interactions responsive during a large first run.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Give navigation, paint and input events room between large model transfers.
+      await new Promise((resolve) => setTimeout(resolve, 180));
     }
-    if (progress.first) {
+    if (progress.first && complete) {
       await api.invoke('library:finishBikeThumbnails').catch(() => {});
       S.lib.bikePreviewsInitialized = true;
     }
@@ -443,7 +457,7 @@ function startBikePreviews() {
     S.lib.bikePreviewProgress = null;
     drawBikePreviewProgress();
     if (S.view === 'library' && S.lib.scope === 'mods' && S.lib.tab === 'bikes') renderLibItems();
-    else if (bikePreviewPending().length) startBikePreviews();
+    else if (S.view === 'library' && S.lib.scope === 'mods' && S.lib.tab === 'bikes' && bikePreviewPending().length) startBikePreviews();
   });
 }
 
@@ -766,6 +780,9 @@ async function rescan(quiet) {
   buildNameIndex();
   for (const id of [...S.selected]) if (!S.items.some((i) => i.id === id)) S.selected.delete(id);
   if (S.view === 'library' || (S.view === 'rider' && S.riderTab === 'gear')) renderLibrary($('#content'));
+  if (S.view === 'home') drawHome();
+  clearTimeout(S.gearThumbPruneTimer);
+  S.gearThumbPruneTimer = setTimeout(() => pruneGearThumbCache().catch(() => {}), 12000);
   if (S.drawerId) {
     const cur = S.items.find((i) => i.id === S.drawerId) || S.items.find((i) => i.key === (S.drawerKey || ''));
     if (cur) openItem(cur.id, true); else closeDrawer();
@@ -900,6 +917,35 @@ function confirmBox(title, html, okLabel = 'Confirm', danger = false) {
     });
     $('[data-ok]', m).addEventListener('click', () => { done = true; m.close(); resolve(true); });
   });
+}
+
+// A draft belongs to CoreMX until Apply succeeds. Launching with the saved
+// setup must leave the draft intact so the rider can return to it later.
+async function confirmRiderBeforeGame(action = 'launch') {
+  if (!riderDirty() || await api.invoke('game:running')) return 'saved';
+  const verb = action === 'join' ? 'join' : 'launch';
+  const choice = await new Promise((resolve) => {
+    let answer = 'cancel';
+    const m = modal({
+      title: 'Unsaved rider changes', size: 'sm',
+      body: '<p style="margin:0">Your bike or rider setup has changes you have not applied yet. Which setup do you want to use?</p>',
+      foot: `<button class="btn" data-close>Cancel</button><button class="btn" data-use-saved>Continue with saved setup</button><button class="btn btn-primary" data-apply-first>Apply & ${verb}</button>`,
+      onClose: () => resolve(answer),
+    });
+    $('[data-use-saved]', m).addEventListener('click', () => { answer = 'saved'; m.close(); });
+    $('[data-apply-first]', m).addEventListener('click', () => { answer = 'apply'; m.close(); });
+  });
+  if (choice !== 'apply') return choice;
+  const key = riderDraftKey();
+  const result = await api.invoke('rider:apply', S.rider.profile, S.rider.bike, riderChanges());
+  if (result?.queued) throw new Error('MX Bikes is running. Close it before applying this setup and launching again.');
+  delete S.rider.drafts[key];
+  S.rider.identityDraft = {};
+  S.rider.selectionDirty = false;
+  S.rider.saveState = 'Saved';
+  S.rider.bikes = null;
+  if (S.view === 'rider') await renderRider($('#content'));
+  return 'applied';
 }
 
 // Removing a row from Downloads is deliberately separate from removing the
@@ -2135,6 +2181,7 @@ const overlayKeyName = () => (/^F([1-9]|1[01])$/.test(S.env?.settings?.overlayKe
 const f8HintHtml = () => `<span class="f8-hint" title="Needs the CoreMX game plugin (Settings → Plugins, where you can change the key). Paints change at once; a new helmet, boots or protector shows when you go back to the pits. Locked during races."><kbd>${overlayKeyName()}</kbd>in game to change your outfit and bike on track</span>`;
 async function renderRider(c) {
   const R = S.rider;
+  if (S.riderTab === 'bike') S.riderTab = 'outfit';
   const request = R.renderRequest = (R.renderRequest || 0) + 1;
   if (S.riderTab === 'gear') {
     for (const key of ['viewer', 'bikeViewer']) if (R[key]) { R[key].dispose(); R[key] = null; }
@@ -2161,13 +2208,8 @@ async function renderRider(c) {
     return;
   }
   if (S.view !== 'rider') return;
-  if (S.riderTab === 'bike') {
-    if (R.viewer) { R.viewer.dispose(); R.viewer = null; R.modelOk = false; }
-    drawBike(c);
-  } else {
-    if (R.bikeViewer) { R.bikeViewer.dispose(); R.bikeViewer = null; }
-    drawRider(c);
-  }
+  if (R.bikeViewer) { R.bikeViewer.dispose(); R.bikeViewer = null; }
+  drawRider(c);
 }
 
 function drawBike(c) {
@@ -2213,6 +2255,13 @@ function drawRider(c) {
       <span class="slot-txt"><span class="slot-l">${esc(s.label)}</span><span class="slot-v">${blocked ? `<span class="muted">${why}</span>` : esc(prettyValue(s.id, v))}</span></span>
       ${blocked ? '' : `<span class="slot-n">${n} ${icon('chevron')}</span>`}</button>`;
   };
+  const bikeTile = (id, label, glyph) => {
+    const options = lo.options[id] || [];
+    const value = id === 'bikeAppearance'
+      ? lo.appearances?.find((o) => o.id === lo.current[id])?.title || 'Default bike'
+      : prettyValue(id, lo.current[id]);
+    return `<button class="slot" data-slot="${id}"><span class="slot-ico">${icon(glyph)}</span><span class="slot-txt"><span class="slot-l">${label}</span><span class="slot-v">${esc(value)}</span></span><span class="slot-n">${options.length} ${icon('chevron')}</span></button>`;
+  };
   c.innerHTML = `<div class="view"><div class="main">
     <div class="toolbar rider-toolbar"><div class="rider-heading"><h2>Rider</h2>${riderTabsHtml('outfit')}${f8HintHtml()}</div>${profileControlsHtml()}
       <span class="sub">Preview your setup, then Apply to save it to the game</span>
@@ -2220,11 +2269,13 @@ function drawRider(c) {
     <div class="scroller"><div class="rider-layout">
       <div class="rider-stage-col"><div class="stage-bar"><label class="stage-toggle"><span class="toggle"><input type="checkbox" id="showBikeToggle" ${riderShowBike() ? 'checked' : ''}><span class="sw"></span></span><span>Show bike</span></label></div><div class="rider-stage" id="riderStage">
         <div class="stage-status" id="stageStatus"><div class="spinner"></div></div>
+        <div class="stage-view-controls"><span class="stage-focus-label" id="riderFocusLabel">${R.focusSlot ? esc(lo.slots.find((s) => s.id === R.focusSlot)?.label || 'Close-up') : 'Full outfit'}</span><button class="btn btn-sm" data-act="rider-full-view">Full view</button></div>
         <div class="stage-hint">Drag to turn · scroll to zoom · double-click to reset</div>
       </div><div class="stage-note muted" id="stageNote"></div></div>
       <div class="rider-wrap">
-      <div class="outfit-bike-context"><span class="muted">Outfit for ${esc(bikeTitle(R.bike))}</span><button class="btn btn-sm" data-rider-tab="bike">${icon('bike')}Bike & livery</button></div>
+      <div class="outfit-bike-context"><span class="muted">Outfit for <b>${esc(bikeTitle(R.bike))}</b></span><button class="btn btn-sm" data-act="rider-pick-bike">${icon('bike')}Change bike</button></div>
       <div class="section-title">Game identity</div><div class="rider-identity-card"><label class="rider-identity-row"><span><b>Nickname</b><small>The name shown to other riders in MX Bikes.</small></span><input class="input" id="riderNameInput" maxlength="40" value="${esc(lo.identity.nickname)}" autocomplete="off" spellcheck="false"></label><label class="rider-identity-row"><span><b>Race number</b><small>Shown on your plates and kit in MX Bikes (0–999).</small></span><input class="input rider-number-input" id="riderNumberInput" inputmode="numeric" maxlength="3" value="${esc(lo.identity.riderNumber || '')}" placeholder="—" autocomplete="off"></label></div><p class="muted rider-identity-note">Nickname and number changes are previewed here until you click Apply. CoreMX online syncing still uses your Steam account.</p>
+      <div class="section-title">Bike</div><div class="slot-grid bike-outfit-grid">${bikeTile('bikeAppearance', 'Model', 'bike')}${bikeTile('bikePaint', 'Livery', 'paint')}${bikeTile('bikeFont', 'Number font', 'shirt')}${bikeTile('tyres', 'Tyres', 'tyre')}</div>
       ${groups.map((g) => `<div class="section-title">${esc(g)}</div><div class="slot-grid">${lo.slots.filter((s) => s.group === g && s.id !== 'bikeAppearance').map(tile).join('')}</div>`).join('')}
       <p class="muted" style="margin-top:22px;font-size:12px">${icon('info')} Close MX Bikes before changing gear here. A backup of your profile is kept next to it.</p>
     </div></div></div></div></div>`;
@@ -2304,7 +2355,7 @@ function mountRiderViewer() {
 }
 
 // Outfit page: optionally show your current bike next to the rider (remembered between sessions).
-function riderShowBike() { try { return localStorage.getItem('coremx.showBike') === '1'; } catch { return false; } }
+function riderShowBike() { try { return localStorage.getItem('coremx.showBike') !== '0'; } catch { return true; } }
 document.addEventListener('change', (e) => {
   if (e.target.id !== 'showBikeToggle') return;
   try { localStorage.setItem('coremx.showBike', e.target.checked ? '1' : '0'); } catch {}
@@ -2312,10 +2363,10 @@ document.addEventListener('change', (e) => {
 });
 async function loadRiderModel() {
   const R = S.rider;
-  let withBike = false; try { withBike = localStorage.getItem('coremx.showBike') === '1'; } catch {}
+  const withBike = riderShowBike();
   const key = JSON.stringify([R.profile, R.bike, R.lo && R.lo.current, withBike, withBike && R.lo?.identity?.riderNumber]);
   const status = $('#stageStatus'), note = $('#stageNote');
-  if (R.modelKey === key && R.modelOk) { if (status) status.hidden = true; if (note) note.innerHTML = R.modelNote || ''; return; }
+  if (R.modelKey === key && R.modelOk) { if (status) status.hidden = true; if (note) note.innerHTML = R.modelNote || ''; if (R.focusSlot) R.viewer.focus(R.focusSlot); return; }
   R.modelKey = key;
   if (status) { status.hidden = false; status.innerHTML = '<div class="spinner"></div>'; }
   try {
@@ -2325,6 +2376,7 @@ async function loadRiderModel() {
     ]);
     if (R.modelKey !== key) return; // a newer request is on its way
     if (bike && R.viewer.loadScene) R.viewer.loadScene({ rider: m, bike }); else R.viewer.load(m);
+    if (R.focusSlot) R.viewer.focus(R.focusSlot);
     R.modelOk = true;
     R.modelNote = m.warnings.length ? `${icon('info')} ${esc(m.warnings.join(' '))}` : '';
     const st = $('#stageStatus'), nt = $('#stageNote');
@@ -2338,10 +2390,21 @@ async function loadRiderModel() {
   }
 }
 
+function riderOverview() {
+  if (S.view !== 'rider') return;
+  clearTimeout(S.rider.overviewTimer);
+  S.rider.overviewTimer = setTimeout(() => {
+    S.rider.focusSlot = null;
+    S.rider.viewer?.resetView();
+    const label = $('#riderFocusLabel'); if (label) label.textContent = 'Full outfit';
+  }, 5000);
+}
+
 function listPicker({ title, options, current, render, onPick }) {
   const m = modal({
-    title: esc(title), size: 'sm',
+    title: esc(title), size: S.view === 'rider' && $('#riderStage') ? 'sm rider-picker-panel' : 'sm',
     body: `<div class="search" style="margin-bottom:10px">${icon('search')}<input id="optQ" placeholder="Search…" style="width:100%"></div><div class="opt-list" id="optList"></div>`,
+    onClose: riderOverview,
   });
   const draw = () => {
     const q = $('#optQ', m).value.toLowerCase();
@@ -2378,29 +2441,59 @@ async function saveSlot(slotId, value) {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-slot]');
   if (!t || S.view !== 'rider') return;
+  clearTimeout(S.rider.overviewTimer);
   const lo = S.rider.lo;
   const slot = lo.slots.find((s) => s.id === t.dataset.slot);
+  if ($('#riderStage')) {
+    S.rider.focusSlot = slot.id;
+    S.rider.viewer?.focus(slot.id);
+    const label = $('#riderFocusLabel'); if (label) label.textContent = slot.label;
+  }
   const opts = lo.options[slot.id].map((v) => ({ value: v, label: slot.id === 'bikeAppearance' ? lo.appearances.find((o) => o.id === v)?.title || 'Default bike' : prettyValue(slot.id, v) }));
   if (PAINT_SLOTS.has(slot.id) && !opts.some((o) => o.value === '')) opts.unshift({ value: '', label: 'Default', sub: 'The standard paint' });
   const withPics = ['helmet', 'boots', 'protection'].includes(slot.id);
   const render = withPics ? (o) => { const gi = gearItem(slot.id, o.value); return `<span class="opt-img thumb">${gi && gi.hasImage ? thumbHtml(gi) : `<span class="slot-ico" style="width:100%;height:100%">${icon(SLOT_ICONS[slot.id])}</span>`}</span>`; } : null;
-  if (slot.id === 'bikePaint' || (GEAR_3D.has(slot.id) && window.RiderViewer)) return gearPicker(slot, opts, lo);
-  listPicker({ title: slot.label, options: opts, current: lo.current[slot.id] || '', render, onPick: (v) => saveSlot(slot.id, v) });
+  const openPicker = () => {
+    if (S.view !== 'rider') return;
+    S.rider.viewer?.finishFocus?.();
+    if (slot.id === 'bikePaint' || (GEAR_3D.has(slot.id) && window.RiderViewer)) gearPicker(slot, opts, lo);
+    else listPicker({ title: slot.label, options: opts, current: lo.current[slot.id] || '', render, onPick: (v) => saveSlot(slot.id, v) });
+  };
+  clearTimeout(S.rider.pickerTimer);
+  // Let the live camera complete its move before the chooser freezes the
+  // preview. Chromium otherwise composites a changing WebGL canvas above it.
+  if ($('#riderStage') && S.rider.modelOk && !matchMedia('(prefers-reduced-motion: reduce)').matches)
+    S.rider.pickerTimer = setTimeout(openPicker, 720);
+  else openPicker();
+});
+document.addEventListener('dblclick', (e) => {
+  if (!e.target.closest('#riderStage canvas')) return;
+  S.rider.focusSlot = null;
+  const label = $('#riderFocusLabel'); if (label) label.textContent = 'Full outfit';
 });
 
 // ---------- Gear picker with 3D renders ----------
-// Every option is drawn in 3D (with your other gear) and shown as a tile. Renders are made one at
-// a time, visible tiles first, and kept for the session.
+// Render each gear tile once, then reuse its image from local storage. The eye
+// button still opens the live, rotatable 3D model only when requested.
 const GEAR_3D = new Set(['rider', 'bikePaint', 'helmet', 'helmetPaint', 'gogglesPaint', 'suitPaint', 'glovesPaint', 'boots', 'bootsPaint', 'protection', 'protectionPaint']);
 const GEAR_FRAMING = { glovesPaint: 'hands', boots: 'feet', bootsPaint: 'feet' };
 S.gearThumbs = new Map();
+const cachedGearThumb = (key) => api.invoke('rider:thumbCacheGet', key).catch(() => null);
+const saveGearThumb = (key, image, sourceId) => api.invoke('rider:thumbCacheSave', key, image, sourceId);
+const pruneGearThumbCache = () => S.scanned ? api.invoke('rider:thumbCachePrune') : Promise.resolve();
+function gearThumbSource(slotId, value, lo) {
+  return gearItem(slotId, value) || S.items.find((i) => i.group === 'rider' && !i.disabled && i.name === value)
+    || S.items.find((i) => i.group === 'rider' && !i.disabled && i.name === ({ helmetPaint: lo.current.helmet, gogglesPaint: lo.current.helmet, bootsPaint: lo.current.boots, protectionPaint: lo.current.protection, suitPaint: lo.current.rider, glovesPaint: lo.current.rider }[slotId]));
+}
 function gearThumbKey(slotId, value, lo) {
   const c = lo.current;
   const model = { bikePaint: lo.bike, helmetPaint: c.helmet, gogglesPaint: c.helmet, bootsPaint: c.boots, protectionPaint: c.protection, suitPaint: c.rider, glovesPaint: c.rider }[slotId] || c.rider || '';
   const context = { model, rider: c.rider, helmetPaint: ['gogglesPaint', 'helmetPaint'].includes(slotId) ? c.helmetPaint : undefined, gogglesPaint: ['gogglesPaint', 'helmetPaint'].includes(slotId) ? c.gogglesPaint : undefined };
   delete context[slotId];
   const ctx = encodeURIComponent(JSON.stringify(context));
-  return `${slotId}|${ctx || ''}|${value}`;
+  const source = gearThumbSource(slotId, value, lo);
+  const stamp = source ? `${source.id}:${source.size}:${source.mtime}` : '';
+  return `${slotId}|${ctx || ''}|${value}|${stamp}`;
 }
 // A picker should present a colour collection as one useful choice, rather
 // than turning every paint in a download into a separate first-level card.
@@ -2454,12 +2547,13 @@ function gearPicker(slot, opts, lo, config = {}) {
   const brands = [...new Set(opts.map(optionBrand))].sort();
   let closed = false, running = false, io = null;
   const queue = [];
+  const thumbValues = new Map();
   let pendingSelection = opts.some((o) => o.value === current) ? current : (opts[0]?.value || '');
   const m = modal({
-    title: esc(config.title || slot.label), size: 'lg',
+    title: esc(config.title || slot.label), size: S.view === 'rider' && $('#riderStage') ? 'lg rider-picker-panel' : 'lg',
     body: `<div class="search wide" style="margin-bottom:14px">${icon('search')}<input id="gpQ" placeholder="Search ${opts.length} options…" spellcheck="false"></div><div class="picker-filters"><label><span>Brand</span><select id="gpBrand"><option value="">All brands</option>${brands.map((b) => `<option>${esc(b)}</option>`).join('')}</select></label></div><div class="picker-count" id="gearCount"></div><div id="gpGrid" class="gear-grid"></div>`,
     foot: config.confirmSelection ? '<button class="btn" data-close>Skip</button><button class="btn btn-primary" data-confirm-gear>Use in preview</button>' : slot.id === 'rider' ? `<button class="btn" data-model-add>${icon('upload')}Add model</button><button class="btn btn-danger" data-model-delete ${/^(default|default_mx|default_sm)$/i.test(current) || !current ? 'disabled' : ''}>${icon('trash')}Delete selected model</button>` : PAINT_SLOTS.has(slot.id) ? `<span class="muted">Use the trash button beside a paint to delete it.</span>` : '',
-    onClose: () => { closed = true; if (io) io.disconnect(); if (!config.picked) config.onClose?.(); },
+    onClose: () => { closed = true; if (io) io.disconnect(); riderOverview(); if (!config.picked) config.onClose?.(); },
   });
   $('[data-confirm-gear]', m)?.addEventListener('click', () => { config.picked = true; m.close(); config.onPick(pendingSelection); });
   const tileImg = (key) => {
@@ -2484,7 +2578,16 @@ function gearPicker(slot, opts, lo, config = {}) {
     while (!closed && queue.length) {
       const key = queue.shift();
       if (S.gearThumbs.has(key)) continue;
-      const value = key.split('|').slice(2).join('|');
+      const value = thumbValues.get(key);
+      if (value === undefined) continue;
+      const cached = await cachedGearThumb(key);
+      if (closed || !m.isConnected) break;
+      if (cached) {
+        S.gearThumbs.set(key, cached);
+        const tile = m.querySelector(`[data-key="${CSS.escape(key)}"] .gear-img`);
+        if (tile) tile.innerHTML = tileImg(key);
+        continue;
+      }
       let url = null;
       const gi = gearItem(slot.id, value, R);
       const pic = gi && gi.hasImage ? thumbHtml(gi) : null;
@@ -2504,6 +2607,7 @@ function gearPicker(slot, opts, lo, config = {}) {
       }
       if (!url && pic) url = { locked: false, pic };
       S.gearThumbs.set(key, url);
+      if (typeof url === 'string') saveGearThumb(key, url, gearThumbSource(slot.id, value, lo)?.id).catch(() => {});
       while (S.gearThumbs.size > 180) S.gearThumbs.delete(S.gearThumbs.keys().next().value);
       const el = m.querySelector(`[data-key="${CSS.escape(key)}"] .gear-img`);
       if (el) el.innerHTML = tileImg(key);
@@ -2514,6 +2618,7 @@ function gearPicker(slot, opts, lo, config = {}) {
   const draw = () => {
     io.disconnect();
     queue.length = 0;
+    thumbValues.clear();
     const q = $('#gpQ', m).value.toLowerCase().split(/\s+/).filter(Boolean);
     const brand = $('#gpBrand', m).value;
     const xs = sorted.filter((o) => (!brand || optionBrand(o) === brand) && q.every((t) => `${o.label} ${o.value} ${optionBrand(o)}`.toLowerCase().includes(t)));
@@ -2523,6 +2628,7 @@ function gearPicker(slot, opts, lo, config = {}) {
     $('#gpGrid', m).innerHTML = xs.length ? grouped.slice(0, 400).map((entry) => {
       const o = entry.option, collection = entry.options;
       const key = gearThumbKey(slot.id, o.value, lo);
+      thumbValues.set(key, o.value);
       return `<div class="gear-choice"><button class="gear-tile ${o.value === current ? 'selected' : ''}" ${collection ? `data-open-group="${esc(entry.key)}"` : `data-v="${esc(o.value)}"`} data-key="${esc(key)}">
         <span class="gear-img">${tileImg(key)}</span>${o.value === current ? `<span class="badge ok gear-sel">${icon('check')}Wearing</span>` : ''}
         ${collection ? `<span class="gear-collection-count">${collection.length} variants</span>` : ''}<span class="gear-name" title="${esc(collection ? entry.label : o.label)}">${esc(collection ? entry.label : o.label)}</span></button><button class="gear-view btn btn-icon" data-view-gear="${esc(o.value)}" title="View ${esc(o.label)} in 3D" aria-label="View ${esc(o.label)} in 3D">${icon('eye')}</button>${!collection && !config.onPick && PAINT_SLOTS.has(slot.id) && o.value ? `<button class="gear-delete btn btn-icon" data-delete-paint="${esc(o.value)}" title="Delete ${esc(o.label)}" aria-label="Delete ${esc(o.label)}">${icon('trash')}</button>` : ''}</div>`;
@@ -3200,6 +3306,11 @@ async function renderSettings(c) {
     <button class="btn" data-act="pick-${which}">Change…</button>${val ? `<button class="btn btn-icon" data-folder="${which}" title="Open">${icon('folder')}</button>` : ''}</div>`;
   const t = env.tools;
   c.innerHTML = `<div class="view"><div class="main"><div class="toolbar"><h2>Settings</h2>${settingsTabs()}</div><div class="scroller"><div class="settings">
+    <div class="set-card"><h3>App background</h3><p>Choose the backdrop behind CoreMX. Warm glow is the default.</p><div class="background-options">${[
+      ['ember', 'Warm glow', 'Charcoal with a soft orange glow'],
+      ['slate', 'Blue hour', 'Deep blue and graphite'],
+      ['black', 'Classic black', 'The original dark background'],
+    ].map(([id, label, detail]) => `<button class="background-option ${(s.appBackground || 'ember') === id ? 'selected' : ''}" data-app-background="${id}" aria-pressed="${(s.appBackground || 'ember') === id}"><span class="background-swatch" data-bg="${id}"></span><b>${label}</b><small>${detail}</small></button>`).join('')}</div></div>
     <div class="set-card"><h3>MX Bikes user folder</h3><p>Where your mods, profiles and replays live. Detected automatically from your Documents folder.</p>
       ${pathRow(s.gameUserDir, env.modsFound, 'user')}
       <div class="muted mono" style="margin-top:8px">mods: ${esc(env.modsDir)}</div>${env.profilesDir && !env.profilesDir.toLowerCase().startsWith((env.settings.gameUserDir || "").toLowerCase()) ? `<div class="muted mono" style="margin-top:4px">profiles: ${esc(env.profilesDir)} <span style="font-family:var(--ui)">(MX Bikes keeps these in Documents)</span></div>` : ""}</div>
@@ -3226,6 +3337,14 @@ async function renderSettings(c) {
   </div></div></div></div>`;
   $('#autoInstall').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoInstall: e.target.checked }); });
   $('#autoImages').addEventListener('change', async (e) => { S.env = await api.invoke('settings:set', { autoImages: e.target.checked }); if (e.target.checked) backgroundImages(); });
+  c.querySelectorAll('[data-app-background]').forEach((button) => button.addEventListener('click', async () => {
+    const previous = S.env.settings.appBackground || 'ember';
+    const chosen = button.dataset.appBackground;
+    applyAppBackground(chosen);
+    c.querySelectorAll('[data-app-background]').forEach((option) => { const selected = option.dataset.appBackground === chosen; option.classList.toggle('selected', selected); option.setAttribute('aria-pressed', selected); });
+    try { S.env = await api.invoke('settings:set', { appBackground: chosen }); }
+    catch (error) { applyAppBackground(previous); toast(esc(cleanErr(error)), 'err'); }
+  }));
 }
 // ---------- Admin: who uses CoreMX ----------
 // One row per account (Steam ID), daily active riders, and totals, from the online service.
@@ -3241,7 +3360,8 @@ function adminUserRows(a) {
 function adminUsersHtml(a) {
   const rows = adminUserRows(a), days = a?.daily?.length || 30;
   if (!rows.length) return `<div class="admin-empty muted">${S.admin.q ? 'No accounts match your search.' : (S.admin.filter || 'recent') === 'online' ? 'Nobody is online right now.' : 'No one has used CoreMX in this period.'}</div>`;
-  return rows.map((u) => {
+  const visible = S.admin.showAllUsers ? rows : rows.slice(0, 5);
+  return visible.map((u) => {
     const status = u.online ? (u.inGame ? (u.server ? `Riding on ${esc(u.server)}${u.track ? ` · ${esc(u.track)}` : ''}` : 'In MX Bikes') : 'Online in CoreMX') : u.lastSeen ? `Last seen ${esc(timeAgo(u.lastSeen))}` : 'Not seen yet';
     const share = Math.round(Math.min(1, u.activeDays / days) * 100);
     return `<div class="admin-user" data-open="https://steamcommunity.com/profiles/${esc(u.id)}" title="Open Steam profile">
@@ -3249,7 +3369,7 @@ function adminUsersHtml(a) {
       <span class="admin-user-main"><b>${esc(u.name || 'Unnamed')}</b><small class="${u.online ? 'admin-online' : 'muted'}">${status}</small></span>
       <span class="admin-user-days" title="${u.activeDays} of the last ${days} days"><span class="admin-meter"><i style="width:${share}%"></i></span><small class="muted">${u.activeDays} / ${days} days</small></span>
       <span class="admin-user-joined muted"><small>Joined</small>${esc(adminDate(u.createdAt))}</span></div>`;
-  }).join('');
+  }).join('') + (rows.length > 5 ? `<button class="btn btn-sm admin-show-users" data-admin-show-users="${S.admin.showAllUsers ? 'less' : 'all'}">${S.admin.showAllUsers ? 'Show fewer' : `Show all ${rows.length} riders`}</button>` : '');
 }
 function adminChartHtml(a) {
   // Days before the service kept daily history are left out (shown as a note instead of empty bars).
@@ -3286,15 +3406,20 @@ async function loadAdminActivity(c) {
 }
 function wireAdminActivity(c) {
   const box = $('.admin-activity', c); if (!box) return;
-  $('#adminSearch', box)?.addEventListener('input', (e) => { S.admin.q = e.target.value; $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity); });
+  $('#adminSearch', box)?.addEventListener('input', (e) => { S.admin.q = e.target.value; S.admin.showAllUsers = false; $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity); });
   if (box._wired) return;
   box._wired = true;
   box.addEventListener('click', (e) => {
     const range = e.target.closest('[data-admin-range]'), filter = e.target.closest('[data-admin-filter]');
-    if (range) { S.admin.range = Number(range.dataset.adminRange); loadAdminActivity(c); }
+    if (range) { S.admin.range = Number(range.dataset.adminRange); S.admin.showAllUsers = false; loadAdminActivity(c); }
     else if (filter) {
       S.admin.filter = filter.dataset.adminFilter;
+      S.admin.showAllUsers = false;
       box.querySelectorAll('[data-admin-filter]').forEach((b) => b.classList.toggle('active', b === filter));
+      $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity);
+    }
+    else if (e.target.closest('[data-admin-show-users]')) {
+      S.admin.showAllUsers = e.target.closest('[data-admin-show-users]').dataset.adminShowUsers === 'all';
       $('#adminUsers', box).innerHTML = adminUsersHtml(S.admin.activity);
     }
     else if (e.target.closest('[data-admin-refresh]')) loadAdminActivity(c);
@@ -3394,6 +3519,7 @@ document.addEventListener('click', async (e) => {
   const it = S.drawerId && S.items.find((i) => i.id === S.drawerId);
   switch (act) {
     case 'profile-create': createProfileDialog(); break;
+    case 'rider-full-view': S.rider.focusSlot = null; S.rider.viewer?.resetView(); if ($('#riderFocusLabel')) $('#riderFocusLabel').textContent = 'Full outfit'; break;
     case 'rider-apply': {
       a.disabled = true;
       try {
@@ -3521,7 +3647,7 @@ document.addEventListener('click', async (e) => {
 });
 
 $('#launchBtn').innerHTML = `${icon('play')}Launch MX Bikes`;
-$('#launchBtn').addEventListener('click', async () => { try { if (riderDirty()) { toast('Apply or Revert your Rider preview before launching MX Bikes.', 'info', 5000); return; } await api.invoke('game:launch'); toast('Launching MX Bikes…', 'info', 2500); } catch (e) { toast(esc(cleanErr(e)), 'err', 4000); } });
+$('#launchBtn').addEventListener('click', async () => { try { if (await confirmRiderBeforeGame('launch') === 'cancel') return; await api.invoke('game:launch'); toast('Launching MX Bikes…', 'info', 2500); } catch (e) { toast(esc(cleanErr(e)), 'err', 4000); } });
 
 // ---------- drag & drop install ----------
 let dragDepth = 0;
@@ -3742,10 +3868,17 @@ function updateFor(postId, modified) {
 
 // ---------- boot ----------
 (async function boot() {
-  S.env = await api.invoke('app:env');
+  // All page scripts (including Home and live data) must be registered first.
+  await new Promise((resolve) => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', resolve, { once: true }) : resolve());
+  try { S.env = await api.invoke('app:env'); }
+  catch (e) { $('#content').innerHTML = `<div class="view"><div class="empty" style="margin:auto"><h3>CoreMX couldn't start</h3><p>${esc(cleanErr(e))}</p></div></div>`; finishStartup(); return; }
+  applyAppBackground(S.env.settings.appBackground);
+  S.lib.previewReadyAt = Date.now() + 6000;
   renderRail();
   render();
-  refreshAccounts().catch(() => {});
+  warmHomeRiderPreview();
+  const accountsReady = refreshAccounts().then(() => { if (S.view === 'home') drawHome(); }).catch(() => {});
+  const homeReady = refreshHome();
   setTimeout(refreshNotifications, 3000);
   setInterval(refreshNotifications, 30000);
   api.invoke('app:updates').then((state) => { if (state) { S.appUpdate = state; drawAppUpdate(); } }).catch(() => {});
@@ -3753,6 +3886,8 @@ function updateFor(postId, modified) {
   refreshInstalledIds();
   for (const j of await api.invoke('jobs:list')) S.jobs.set(j.id, j);
   if (S.env.modsFound) await rescan(true);
+  await Promise.race([Promise.allSettled([accountsReady, homeReady]), new Promise((resolve) => setTimeout(resolve, 7000))]);
+  finishStartup();
   setTimeout(() => api.invoke('packs:list').then((p) => {
     if (S.packs) return;
     S.packs = p; S.packsNeed = p.filter((x) => x.summary && x.summary.needCount && x.summary.have).length; renderRail();
@@ -3888,6 +4023,8 @@ api.on('jobs:update', (j) => {
   });
   const go = async () => {
     clearInterval(timer); m.close();
+    try { if (await confirmRiderBeforeGame('join') === 'cancel') return; }
+    catch (e) { toast(esc(cleanErr(e)), 'err', 7000); return; }
     toast(`Restarting MX Bikes to join <b>${esc(p.server || p.address)}</b>…`, 'info', 6000);
     try { await api.invoke('game:restartAndJoin', p.address, p.server || ''); } catch (e) { toast(esc(cleanErr(e)), 'err', 7000); }
   };

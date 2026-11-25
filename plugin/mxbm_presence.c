@@ -262,14 +262,13 @@ EXPORT void RaceAddEntry(void *_pData, int _iDataSize) {
   for (i = 0; i < MAX_RIDERS; i++) if (S.riders[i].used && S.riders[i].num == e->m_iRaceNum) { slot = i; break; }
   if (slot < 0) for (i = 0; i < MAX_RIDERS; i++) if (!S.riders[i].used) { slot = i; break; }
   if (slot >= 0) {
-    if (_iDataSize >= (int)sizeof(RaceEntry) && e->m_iUnactive) S.riders[slot].used = 0;
-    else {
-      S.riders[slot].used = 1;
-      S.riders[slot].num = e->m_iRaceNum;
-      copy(S.riders[slot].name, e->m_szName, sizeof S.riders[slot].name);
-      copy(S.riders[slot].bike, e->m_szBikeName, sizeof S.riders[slot].bike);
-      copy(S.riders[slot].category, e->m_szCategory, sizeof S.riders[slot].category);
-    }
+    /* MX Bikes sends "unactive" for riders who are still in the World. Some later
+     * record laps without another add callback. Only RaceRemoveEntry means they left. */
+    S.riders[slot].used = 1;
+    S.riders[slot].num = e->m_iRaceNum;
+    copy(S.riders[slot].name, e->m_szName, sizeof S.riders[slot].name);
+    copy(S.riders[slot].bike, e->m_szBikeName, sizeof S.riders[slot].bike);
+    copy(S.riders[slot].category, e->m_szCategory, sizeof S.riders[slot].category);
   }
   writeState();
   unlock();

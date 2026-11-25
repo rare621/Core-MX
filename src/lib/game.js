@@ -23,14 +23,24 @@ function classFor(bikeId) {
   return `${c.replace(/^MXE$/, 'MX-E')} OEM`;
 }
 
-// Point the profile at a bike (and optionally a track) so the game opens with them selected.
-async function quickStart(userDir, name, { bike, bikeClass, track }) {
+function bikeSelectionValues(bike, bikeClass) {
   const values = [];
   if (bike) {
     values.push(['info', 'bikeid', bike]);
     const cls = classFor(bike) || bikeClass;
-    if (cls) { values.push(['info', 'class', cls]); values.push(['category', cls, bike]); }
+    if (cls) {
+      values.push(['info', 'class', cls]);
+      // MX Bikes has used both sections to remember the selected bike. Keep
+      // them in agreement so the garage does not reopen on a previous model.
+      values.push(['category', cls, bike], ['bike', cls, bike]);
+    }
   }
+  return values;
+}
+
+// Point the profile at a bike (and optionally a track) so the game opens with them selected.
+async function quickStart(userDir, name, { bike, bikeClass, track }) {
+  const values = bikeSelectionValues(bike, bikeClass);
   if (track) { values.push(['ui', 'race_track', track]); values.push(['ui', 'testing_track', track]); }
   return profile.writeValues(userDir, name, values);
 }
@@ -57,4 +67,4 @@ function validAddress(a) {
   return m ? `${m[1]}:${m[2]}` : null;
 }
 
-module.exports = { readSettings, quickStart, launch, validAddress, classFor };
+module.exports = { readSettings, quickStart, launch, validAddress, classFor, bikeSelectionValues };

@@ -19,10 +19,20 @@ class RaceEvent(c.Structure):
                 ("track", c.c_char * 100), ("length", c.c_float)]
 
 
+class RaceEntry(c.Structure):
+    _fields_ = [("number", c.c_int), ("name", c.c_char * 100),
+                ("bike", c.c_char * 100), ("short_bike", c.c_char * 100),
+                ("category", c.c_char * 100), ("unactive", c.c_int)]
+
+
+class RaceRemove(c.Structure):
+    _fields_ = [("number", c.c_int)]
+
+
 plugin = c.CDLL(str(pathlib.Path(sys.argv[1]).resolve()))
 plugin.Startup.argtypes = [c.c_char_p]
 plugin.Startup.restype = c.c_int
-for callback in (plugin.EventInit, plugin.RaceEvent):
+for callback in (plugin.EventInit, plugin.RaceEvent, plugin.RaceAddEntry, plugin.RaceRemoveEntry):
     callback.argtypes = [c.c_void_p, c.c_int]
 plugin.RunTelemetry.argtypes = [c.c_void_p, c.c_int, c.c_float, c.c_float]
 with tempfile.TemporaryDirectory(prefix="mxb-presence-") as folder:
@@ -41,6 +51,13 @@ with tempfile.TemporaryDirectory(prefix="mxb-presence-") as folder:
                          track_id=b"fixture", track=b"Fixture track", server=b"Fixture server", guid=b"fixture-guid")
         plugin.EventInit(c.byref(bike), c.sizeof(bike))
         assert read()["server"] == "Fixture server" and read()["guid"] == "fixture-guid"
+        local = RaceEntry(number=621, name=b"Fixture rider", bike=b"KX250", category=b"MX2")
+        waiting = RaceEntry(number=819, name=b"Waiting rider", bike=b"KX450", category=b"MX1", unactive=1)
+        plugin.RaceAddEntry(c.byref(local), c.sizeof(local))
+        plugin.RaceAddEntry(c.byref(waiting), c.sizeof(waiting))
+        assert {r["num"]: r["name"] for r in read()["riders"]} == {621: "Fixture rider", 819: "Waiting rider"}, "Inactive entrants remain on the server roster"
+        plugin.RaceRemoveEntry(c.byref(RaceRemove(819)), c.sizeof(RaceRemove))
+        assert [r["num"] for r in read()["riders"]] == [621], "Only the remove callback drops a rider"
         plugin.RunTelemetry(None, 0, 0, 0)  # no telemetry file or per-frame writes
         plugin.RaceDeinit()
         assert read()["inEvent"] == 0 and "server" not in read()
@@ -60,5 +77,5 @@ with tempfile.TemporaryDirectory(prefix="mxb-presence-") as folder:
     hook = json.loads(pathlib.Path(folder, "mxbm_hook.json").read_text())
     # Outside MX Bikes the code signature cannot match, so the missing-track hook must stay off.
     assert hook["state"] == "paused", hook
-    assert sorted(p.name for p in pathlib.Path(folder).iterdir()) == ["mxbm_hook.json", "mxbm_presence.json"]
-print("Plugin enabled; race/bike callbacks, optional fields, replay and exit states verified")
+    assert sorted(p.name for p in pathlib.Path(folder).iterdir()) == ["mxbm_hook.json", "mxbm_presence.json", "mxbm_riders.log"]
+print("Plugin enabled; race/bike and rider roster callbacks, optional fields, replay and exit states verified")

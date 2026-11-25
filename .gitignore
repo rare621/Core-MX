@@ -5,6 +5,7 @@ dist-release/
 out/
 build/generated/
 .tmp/
+backup/
 
 # local-only files
 *.lnk

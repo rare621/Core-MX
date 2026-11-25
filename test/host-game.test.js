@@ -9,7 +9,7 @@ function hostPage(profileUi, category = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/host.js'), 'utf8');
   const calls = [];
   const context = vm.createContext({
-    S: { host: { mode: 'game' } }, document: { addEventListener() {} }, debounce: (fn) => fn, console, esc: (v) => String(v),
+    S: { host: { mode: 'game' } }, document: { addEventListener() {} }, debounce: (fn) => fn, confirmRiderBeforeGame: async () => 'saved', console, esc: (v) => String(v),
     api: { on() {}, invoke: async (ch, ...args) => { calls.push([ch, ...args]); return ch === 'game:settings' ? { values: { ui: profileUi, category } } : null; } },
   });
   vm.runInContext(source + '\n;this.defaultHost = defaultHost; this.loadFromProfile = loadFromProfile; this.setupInGameHost = setupInGameHost; this.categoriesHtml = categoriesHtml;', context);

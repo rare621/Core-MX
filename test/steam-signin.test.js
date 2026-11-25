@@ -138,6 +138,6 @@ test('apps the service hears from count as online, verified or not (v26)', async
   const old = (await call(null, '/v1/register', { steamId: '76561198000000040', name: 'Old app' })).data;
   assert.equal((await call(old.token, '/v1/presence', { state: { inGame: true } })).status, 403, 'its report is refused (not verified)');
   const health = (await call(null, '/v1/health')).data;
-  assert.equal(health.version, 28);
+  assert.equal(health.version, 29);
   assert.equal(health.activeUsers, 1, 'but it is online');
 });

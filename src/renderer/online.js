@@ -1,4 +1,4 @@
-/* global S, $, $$, esc, icon, toast, modal, confirmBox, cleanErr, render, debounce, api, go, haveMod, normName */
+/* global S, $, $$, esc, icon, toast, modal, confirmBox, confirmRiderBeforeGame, cleanErr, render, debounce, api, go, haveMod, normName */
 'use strict';
 // ---------- Online: Servers (join / saved / links), Friends (front end), Ranked (mxb-ranked.com) ----------
 S.onlineTab = 'servers';
@@ -181,6 +181,8 @@ function serverDialog(existing) {
 async function saveServers() { S.servers = await api.invoke('servers:save', S.servers); renderOnline($('#content')); }
 
 async function joinServer(address, server) {
+  try { if (await confirmRiderBeforeGame('join') === 'cancel') return; }
+  catch (e) { toast(esc(cleanErr(e)), 'err', 6000); return; }
   // Check the track first, so you don't land on a server without it.
   // A track counts by its name or its file id (the game's track id, e.g. DUNED.pkz for "KBOLTZ DUNED";
   // a locked track's name can't be read from its file).

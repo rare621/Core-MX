@@ -248,7 +248,16 @@ async function build({ modsDir, gd, stockPkz, current, only, texMax = MAX_TEX })
   // exports face -Z instead of +Z; compensate the camera, not the gear mesh.
   const spine = bones.riderRIG_Spine4;
   const previewYaw = spine && Math.hypot(spine[1], spine[9]) > 0.5 ? Math.atan2(-spine[1], spine[9]) : 0;
-  return { parts: parts.filter(Boolean), textures, focus, previewYaw, warnings, unreadable, ms: Date.now() - t0 };
+  // Keep the bind-pose joint locations with the local preview. The body mesh
+  // itself stays in the game's format; the renderer uses these locations to
+  // pose its preview and keep attached gear moving with the corresponding limb.
+  const jointNames = ['Pelvis', 'Spine4', 'Neck1', 'Head', 'LeftShoulder', 'LeftElbow', 'LeftWrist', 'RightShoulder', 'RightElbow', 'RightWrist', 'LeftHip', 'LeftKnee', 'RightHip', 'RightKnee'];
+  const joints = Object.fromEntries(jointNames.flatMap((name) => {
+    const m = bones[`riderRIG_${name}`];
+    return m && [m[3], m[7], m[11]].every(Number.isFinite) ? [[name, [m[3], m[7], m[11]]]] : [];
+  }));
+  const rig = jointNames.every((name) => joints[name]) ? { joints } : null;
+  return { parts: parts.filter(Boolean), textures, focus, previewYaw, rig, warnings, unreadable, ms: Date.now() - t0 };
 }
 
 module.exports = { build, parseCfg, sources: { chainOf, readChain }, buildPart, attachmentMatrix };

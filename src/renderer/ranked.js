@@ -1,4 +1,4 @@
-/* global S, $, $$, esc, icon, toast, modal, cleanErr, api, go, onlineTabs, openMenu, normName, findTrack */
+/* global S, $, $$, esc, icon, toast, modal, confirmRiderBeforeGame, cleanErr, api, go, onlineTabs, openMenu, normName, findTrack */
 'use strict';
 // ---------- Ranked (mxb-ranked.com, read in the background) ----------
 // Profile first, then: Servers (filterable, with details + join), Results, Lap records, Tracks, News.
@@ -242,8 +242,11 @@ async function openRankedServer(name) {
         return;
       }
       if (missing.length && !(await window.confirmBox('Missing tracks', `You don't have <b>${missing.map((t) => esc(t.name)).join(', ')}</b>. Join anyway?`, 'Join anyway'))) return;
-      navigator.clipboard.writeText(lobbyName(l));
-      try { await api.invoke('game:launch'); } catch {}
+      try {
+        if (await confirmRiderBeforeGame('launch') === 'cancel') return;
+        navigator.clipboard.writeText(lobbyName(l));
+        await api.invoke('game:launch');
+      } catch (error) { toast(esc(cleanErr(error)), 'err', 6000); return; }
       toast(`Opening MX Bikes — the server name <b>${esc(lobbyName(l))}</b> is copied. In Multiplayer, search for it and join.`, 'info', 9000);
     }
   });

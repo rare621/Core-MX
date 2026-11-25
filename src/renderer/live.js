@@ -131,6 +131,7 @@ api.on('online:status', (st) => {
   const key = (s) => JSON.stringify([s?.service, s?.plugin, s?.paintSync?.enabled, s?.paintSync?.error, s?.paintSync?.at, s?.paintSync?.friends]);
   if (S.friendsPanel?.body && key(previous) !== key(st)) renderFriends(S.friendsPanel.body);
   const overlay = $('#friendsSyncOverlay'); if (overlay) overlay.innerHTML = friendProgressHtml();
+  if (S.view === 'home') drawHome();
   if (S.view !== 'online' && S.view !== 'friends') return;
   if (S.view === 'friends') { if (key(previous) !== key(st)) renderFriends($('#content')); return; }
   if (S.onlineTab === 'servers') { drawYouAreOn(); drawLiveServers(); }
@@ -196,10 +197,10 @@ function drawYouAreOn() {
   const st = S.live.status, pr = st && st.presence;
   if (!pr || !pr.inEvent) { if (box._lastHtml !== '') { box.innerHTML = ''; box._lastHtml = ''; } return; }
   const online = !!pr.server;
-  const html = `<div class="set-card live-now"><div class="live-dot"></div><div style="flex:1">
+  const html = `<div class="set-card live-now"><div class="live-dot"></div><div class="live-now-info">
       <b>${online ? `You're on ${esc(pr.server)}` : 'In a session (the server name appears once you ride out)'}</b>
       <div class="muted">${esc(pr.trackName || pr.trackId)} · ${esc(pr.bikeName || '')}${pr.riders && pr.riders.length > 1 ? ` · ${pr.riders.length} riders` : ''}${pr.session != null && SESSION_NAMES[pr.session] && pr.type === 2 ? ` · ${SESSION_NAMES[pr.session]}` : ''}</div></div>
-    ${online && pr.serverAddress ? `<button class="btn btn-sm" data-act="live-copy-link" data-addr="${esc(pr.serverAddress)}">${icon('copy')}Copy join link</button>` : ''}</div>`;
+    ${online && pr.serverAddress ? `<button class="btn btn-sm live-now-copy" data-act="live-copy-link" data-addr="${esc(pr.serverAddress)}">${icon('copy')}Copy join link</button>` : ''}</div>`;
   if (box._lastHtml !== html) { box.innerHTML = html; box._lastHtml = html; }
 }
 
