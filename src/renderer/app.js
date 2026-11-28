@@ -185,6 +185,9 @@ function go(view) {
     for (const key of ['viewer', 'bikeViewer']) if (S.rider[key]) { S.rider[key].dispose(); S.rider[key] = null; }
     S.rider.modelKey = null; S.rider.bikeModelKey = null; S.rider.modelOk = false;
   }
+  if (view !== 'home' && S.home?.viewer) {
+    S.home.viewer.dispose(); S.home.viewer = null; S.home.modelOk = false;
+  }
   S.view = view;
   if (view === 'friends' && previousView !== 'friends') {
     S.live.friendsNext = 0;
@@ -2028,8 +2031,12 @@ async function openReview(id) {
     const bike = targetBike(name);
     return (!targetFilters.brand || (bike && bike.brand === targetFilters.brand)) && (!targetFilters.cc || (bike && String(bike.cc) === targetFilters.cc));
   };
+  // Gear another rider wears (a friend's, or someone's on a server you join): say whose it is, and that
+  // only where it goes is needed for it to show on them.
+  const forRider = j.friendGear || j.forOthers ? (j.friendName || '') : null;
+  const forNote = forRider === null ? '' : `<div class="notice info">${icon('users')}<div>${forRider ? `<b>${esc(forRider)}</b> is wearing this.` : 'Another rider is wearing this.'} Choose where it goes and you'll see it on ${forRider ? 'them' : 'that rider'} in your game. Your own outfit stays the same.</div></div>`;
   const m = modal({
-    title: `${j.relocateKey ? 'Change install location' : 'Install'} — ${esc(j.title)}`, size: 'md', body: '<div id="rv"></div>',
+    title: `${j.relocateKey ? 'Change install location' : forRider ? `Install for ${esc(forRider)}` : 'Install'} — ${esc(j.title)}`, size: 'md', body: '<div id="rv"></div>',
     foot: `${j.link ? `<button class="btn btn-ghost btn-sm" data-open="${esc(j.link)}">${icon('external')}Source page</button>` : ''}<span class="grow" id="rvSummary"></span><button class="btn" data-close>${j.relocateKey ? 'Cancel' : 'Later'}</button><button class="btn btn-primary" id="rvInstall">${icon('download')}Install</button>`,
     onClose: () => { reviewOpen = null; },
   });
@@ -2079,7 +2086,7 @@ async function openReview(id) {
     const warn = swapHelp + bikeHelp + p.warnings.map((w) => `<div class="notice warn">${icon('alert')}<div>${esc(w)}</div></div>`).join('') + (dependencyHelp ? `<div class="dependency-links"><b>Model pages linked by the creator / required models</b><div>${dependencyHelp}</div></div>` : '');
     const waiting = p.needsPaintTarget || p.needsRiderTarget || p.needsSoundBike || p.needsVariant;
     const rows = p.entries.map((e) => `<div class="plan-row"><div class="src" title="${esc(e.rel)}">${esc(e.rel)}</div>${icon('chevron')}<div class="dst" title="${esc(e.dest || e.bikeMatch?.message || '')}">${e.dest ? (p.root === 'game' ? 'game/' : p.root === 'user' ? 'documents/' : 'mods/') + esc(e.dest) : `<span class="muted">${e.how === 'server-copy' ? 'Server copy — not needed to ride' : e.how === 'multiple-variants' ? 'Multiple variants — install separately' : e.how === 'choose-variant' ? 'Choose a version above' : e.how === 'other-variant' ? 'Other version — not installed' : e.how === 'script' ? 'Script — CoreMX never runs these' : e.how === 'paint-elsewhere' ? 'Trackside paint — not part of this install' : e.bikeMatch?.status === 'missing' ? 'Bike mod not installed' : e.bikeMatch?.status === 'incompatible' ? 'Incompatible bike' : waiting ? 'Choose a target above' : 'Not included'}</span>`}</div><span class="pill ${e.status === 'unresolved' && waiting ? 'pending' : e.status}">${({ new: 'Ready', overwrite: 'Replace', skip: 'Skipped', unresolved: e.how === 'multiple-variants' || e.how === 'choose-variant' ? 'Choose variant' : waiting ? 'Choose target' : 'Unmatched' })[e.status] || esc(e.status)}</span></div>`).join('');
-    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${p.needsVariant ? 'Choose a version' : waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `${p.kind === 'setup' ? 'Setup for' : 'Install for'} <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : (p.kind === 'setup' ? 'Pick the bike this setup is for.' : 'Pick the base bike this download was made for.') : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
+    $('#rv', m).innerHTML = `<div class="review-heading"><span class="slot-ico">${icon(bikeTarget ? 'bike' : 'download')}</span><div><h3>${p.needsVariant ? 'Choose a version' : waiting ? bikeTarget ? 'Choose a bike' : 'Choose a model' : 'Ready to install'}</h3><p>${bikeTarget ? p.options.paintTarget ? `${p.kind === 'setup' ? 'Setup for' : 'Install for'} <b>${esc(bikeTitle(p.options.paintTarget))}</b>.${p.paintGuess === 'title' ? ' Suggested from the mod name—check it is the right bike.' : ''}` : (p.kind === 'setup' ? 'Pick the bike this setup is for.' : 'Pick the base bike this download was made for.') : `${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'} · ${esc(p.kindLabel)}`}</p></div></div>${forNote}${warn}${targets.length ? `<div class="review-targets">${targets.join('')}</div>` : ''}${ctl.length ? `<div class="plan-controls">${ctl.join('')}</div>` : ''}
       <details class="review-details"><summary>Files & destination <span class="muted">· ${p.totalEntries} file${p.totalEntries === 1 ? '' : 's'}</span></summary><div class="plan-table">${rows}</div>${p.totalEntries > p.entries.length ? `<p class="muted">…and ${p.totalEntries - p.entries.length} more</p>` : ''}</details><details class="review-details"><summary>Change content type</summary><div class="plan-controls">${typeControl}</div></details>`;
     $('#rvSummary', m).textContent = waiting ? `Choose ${p.needsVariant ? 'a version' : p.needsSoundBike ? 'an installed bike' : bikeTarget ? 'a bike' : 'the matching model'} to continue` : `${p.installable} file${p.installable === 1 ? '' : 's'} ready`;
     $('#rvInstall', m).innerHTML = `${icon('download')}${j.relocateKey ? 'Move files' : p.kind === 'bikeSwap' ? 'Install model swap' : p.kind === 'setup' ? 'Install setup' : bikeTarget ? 'Install livery' : 'Install'}`;
@@ -3876,7 +3883,6 @@ function updateFor(postId, modified) {
   S.lib.previewReadyAt = Date.now() + 6000;
   renderRail();
   render();
-  warmHomeRiderPreview();
   const accountsReady = refreshAccounts().then(() => { if (S.view === 'home') drawHome(); }).catch(() => {});
   const homeReady = refreshHome();
   setTimeout(refreshNotifications, 3000);

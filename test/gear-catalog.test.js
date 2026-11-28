@@ -42,14 +42,14 @@ test('the service keeps one shared catalog: reports, lookups and installs that t
   };
   const reg = async (id, name) => (await call(null, '/v1/register', { steamId: id, name })).data;
   const a = await reg('76561198000000001', 'A'), b = await reg('76561198000000002', 'B'), c = await reg('76561198000000003', 'C');
-  assert.equal((await call(null, '/v1/health')).data.version, 29);
+  assert.equal((await call(null, '/v1/health')).data.version, 30);
   const page = { postId: 91257, link: 'https://mxb-mods.com/bell-moto-10s-different-googles/', title: 'Bell Moto 10´S different Googles', download: 'https://www.mediafire.com/file/k/Bell+moto+10.rar/file' };
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, keys: ['helmets/bellmoto10-fcr', 'helmets/bellmoto10-eks', 'Helmets/UPPER', 'weird/x', 'helmets/../x'] })).data.keys, 2, 'bad keys are dropped');
   assert.equal((await call(a.token, '/v1/catalog/report', { ...page, link: 'https://evil.test/x', keys: ['helmets/x'] })).status, 400, 'only MXB Mods pages');
   assert.equal((await call(null, '/v1/catalog/report', { ...page, keys: ['helmets/x'] })).status, 401);
   let found = (await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr', 'helmets/none'] })).data.matches;
   assert.deepEqual(Object.keys(found), ['helmets/bellmoto10-fcr']);
-  assert.deepEqual(found['helmets/bellmoto10-fcr'][0], { ...page, votes: 1, shas: [], background: false });
+  assert.deepEqual(found['helmets/bellmoto10-fcr'][0], { ...page, votes: 1, shas: [], latest: null, background: false });
   await call(a.token, '/v1/catalog/report', { ...page, keys: ['helmets/bellmoto10-fcr'] });
   found = (await call(c.token, '/v1/catalog/lookup', { keys: ['helmets/bellmoto10-fcr'] })).data.matches;
   assert.equal(found['helmets/bellmoto10-fcr'][0].votes, 1, 'the same rider reporting again counts once');
@@ -124,22 +124,70 @@ test('a file that can also come through the service tries pages only, then the s
   assert.equal(fg.status('helmet', 'Bellmoto10-FCR').state, 'nomatch');
 });
 
-test('a shared item keeps its MXB Mods page through the service, and others try it before downloading the file', async (t) => {
+test('v30: a friend item comes only from its exact MXB Mods download; without one it says why', async (t) => {
   const paintsync = require('../src/lib/paintsync');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-viapage-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const sha = 'a'.repeat(64), asked = [], downloaded = [];
+  const sha = 'a'.repeat(64), routes = [];
   const lo = { id: 'r', name: 'R', bike: 'B', equipped: [{ slot: 'suitPaint', value: 'Kit' }],
-    items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: 10, needs: [], available: true, source: { postId: 9, link: 'https://mxb-mods.com/kit/' } }], unavailable: [] };
-  const call = async (method, route, body) => { if (route === '/v1/want') asked.push(...body.shas); return {}; };
-  const viaPage = (l, it) => (it.source ? { state: 'installing', title: 'Kit page' } : null);
-  const report = await paintsync.fetchFriends({ call, download: async (s) => { downloaded.push(s); throw new Error('no'); }, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage });
-  assert.equal(report[0].items[0].state, 'page');
-  assert.deepEqual(downloaded, [], 'not downloaded through the service while its page installs');
-  assert.deepEqual(asked, [], 'and not asked for');
-  const plain = await paintsync.fetchFriends({ call, download: async (s) => { downloaded.push(s); throw new Error('no'); }, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage: () => null });
-  assert.equal(plain[0].items[0].state, 'failed');
-  assert.deepEqual(downloaded, [sha], 'no page: the service');
+    items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: 10, needs: [], available: false, source: { postId: 9, link: 'https://mxb-mods.com/kit/' } }], unavailable: [] };
+  const call = async (method, route) => { routes.push(route); return {}; };
+  const run = async (viaPage) => (await paintsync.fetchFriends({ call, modsDir: root, received: {}, have: async () => true, preloaded: [lo], viaPage }))[0].items[0];
+  assert.equal((await run(() => ({ state: 'installing', title: 'Kit page' }))).state, 'page');
+  assert.equal((await run(() => null)).state, 'nolink');
+  assert.equal((await run(() => ({ state: 'outdated' }))).state, 'outdated');
+  const failed = await run(() => ({ state: 'linkfailed', error: 'The page no longer lists that download' }));
+  assert.deepEqual([failed.state, failed.error], ['linkfailed', 'The page no longer lists that download']);
+  assert.deepEqual(routes, [], 'nothing is asked of the service');
+});
+
+test('v30: the shared list says which file a download gives now (by install time)', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-catalog30-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await new Promise((r) => child.once('exit', r)); } });
+  const port = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('service did not start')), 10000);
+    child.stdout.on('data', (chunk) => { const m = chunk.toString().match(/on port (\d+)/); if (m) { clearTimeout(timeout); resolve(m[1]); } });
+  });
+  const call = async (token, route, body) => (await (await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) })).json());
+  const reg = async (id) => (await (await fetch(`http://127.0.0.1:${port}/v1/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ steamId: id, name: id.slice(-1) }) })).json());
+  const a = await reg('76561198000000001'), b = await reg('76561198000000002'), c = await reg('76561198000000003');
+  const key = 'helmets/fox_v3', v1 = '1'.repeat(64), v2 = '2'.repeat(64), v0 = '0'.repeat(64);
+  const page = { postId: 5, link: 'https://mxb-mods.com/fox-v3/', title: 'Fox V3', download: 'https://a.test/fox.zip', keys: [key], background: true };
+  const latest = async () => (await call(b.token, '/v1/catalog/lookup', { keys: [key] })).matches[key][0];
+  await call(a.token, '/v1/catalog/report', { ...page, shas: { [key]: v1 }, installedAt: Date.now() - 10 * 86400000 });
+  assert.equal((await latest()).latest, v1);
+  // The creator updated the file: someone installs it now.
+  await call(b.token, '/v1/catalog/report', { ...page, shas: { [key]: v2 }, installedAt: Date.now() });
+  let e = await latest();
+  assert.deepEqual([e.latest, e.shas], [v2, [v1, v2]]);
+  // An install from long ago, reported for the first time, is not the newest.
+  await call(c.token, '/v1/catalog/report', { ...page, shas: { [key]: v0 }, installedAt: Date.now() - 100 * 86400000 });
+  e = await latest();
+  assert.equal(e.latest, v2);
+  assert.ok(e.shas.includes(v0));
+});
+
+test('v30: your own installs link what you wear only when it is the exact file the download gave', () => {
+  const { ownLinks } = require('../src/lib/paintsync');
+  const sha = 'a'.repeat(64), changed = 'b'.repeat(64);
+  const rec = (extra) => ({ postId: 7, title: 'Fox V3', link: 'https://mxb-mods.com/fox/', downloads: { 'https://a.test/fox.zip': ['rider/helmets/Fox.pkz'] }, backgroundDownloads: { 'https://a.test/fox.zip': true }, gearShas: { 'helmets/fox': sha }, ...extra });
+  const link = ownLinks({ 7: rec() });
+  assert.deepEqual(link('helmets/fox', sha), { postId: 7, title: 'Fox V3', link: 'https://mxb-mods.com/fox/', download: 'https://a.test/fox.zip', exact: true });
+  assert.equal(link('helmets/fox', changed), null, 'changed since the install: not that download\'s file');
+  assert.equal(link('helmets/other', sha), null);
+  // A download that needed a browser window is still the right link (a friend opens it in the browser),
+  // but one that worked in the background is preferred.
+  assert.equal(ownLinks({ 7: rec({ backgroundDownloads: {} }) })('helmets/fox', sha).download, 'https://a.test/fox.zip');
+  const both = ownLinks({ 6: rec({ postId: 6, downloads: { 'https://b.test/fox.zip': ['rider/helmets/Fox.pkz'] }, backgroundDownloads: {} }), 7: rec() });
+  assert.equal(both('helmets/fox', sha).download, 'https://a.test/fox.zip');
+  assert.equal(ownLinks({ 7: rec({ shopKey: 'shop:1' }) })('helmets/fox', sha), null, 'shop installs are personal');
+  assert.equal(ownLinks({ 7: rec({ link: 'https://elsewhere.test/fox' }) })('helmets/fox', sha), null, 'MXB Mods pages only');
+  // Installs from before v30: the fingerprint last read from the installed file.
+  const old = rec({ gearShas: undefined });
+  assert.equal(ownLinks({ 7: old }, { 'rider/helmets/Fox.pkz': { sha } })('helmets/fox', sha).exact, true);
+  assert.equal(ownLinks({ 7: old }, {})('helmets/fox', sha), null);
 });
 
 test('v28: the shared list keeps each file\'s fingerprint and whether the download worked in the background', async (t) => {
@@ -167,19 +215,21 @@ test('v28: the shared list keeps each file\'s fingerprint and whether the downlo
   assert.deepEqual(e.shas, [sha], 'bad fingerprints are dropped');
 });
 
-test('an exact file in the shared list (same fingerprint, installed in the background) comes from MXB Mods and never through R2', async (t) => {
+test('an exact file in the shared list (same fingerprint, installed in the background) comes from MXB Mods; anything else is not fetched', async (t) => {
   const online = require('../src/lib/online');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-exact-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const sha = 'e'.repeat(64), other = 'f'.repeat(64);
+  const sha = 'e'.repeat(64), other = 'f'.repeat(64), old = 'd'.repeat(64), newer = '1'.repeat(64);
   const item = (slot, value, s) => ({ slot, label: value, value, rider: 'default_mx', path: `rider/riders/default_mx/${slot === 'glovesPaint' ? 'gloves' : 'paints'}/${value}.pnt`, sha256: s, size: 10, needs: [], available: false });
   const loadout = { id: 'r', name: 'Chase', bike: 'B', num: 917, equipped: [{ slot: 'suitPaint', value: 'OPOlitPROpub' }, { slot: 'glovesPaint', value: 'OPOlitGloves' }], unavailable: [],
-    items: [item('suitPaint', 'OPOlitPROpub', sha), item('glovesPaint', 'OPOlitGloves', other)] };
+    items: [item('suitPaint', 'OPOlitPROpub', sha), item('glovesPaint', 'OPOlitGloves', other), item('helmetPaint', 'Old', old)] };
+  loadout.equipped.push({ slot: 'helmet', value: 'H' }, { slot: 'helmetPaint', value: 'Old' });
+  loadout.items[2].path = 'rider/helmets/H/paints/Old.pnt';
   const wanted = [], found = [];
   t.mock.method(globalThis, 'fetch', async (url, opts) => {
     const body = opts && opts.body ? JSON.parse(opts.body) : {};
     if (/want$/.test(url)) { wanted.push(...body.shas); return new Response(JSON.stringify({ states: Object.fromEntries(body.shas.map((s) => [s, 'uploading'])) })); }
-    if (/catalog\/lookup$/.test(url)) return new Response(JSON.stringify({ matches: Object.fromEntries(body.keys.map((k) => [k, k === 'suits/default_mx/opolitpropub' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [sha], background: true }] : k === 'gloves/default_mx/opolitgloves' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [other], background: false }] : []])) }));
+    if (/catalog\/lookup$/.test(url)) return new Response(JSON.stringify({ matches: Object.fromEntries(body.keys.map((k) => [k, k === 'suits/default_mx/opolitpropub' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [sha], background: true }] : k === 'gloves/default_mx/opolitgloves' ? [{ postId: 187091, link: 'https://mxb-mods.com/opo/', download: 'https://a.test/OPOkits.zip', shas: [other], background: false }] : k === 'helmetpaints/h/old' ? [{ postId: 3, link: 'https://mxb-mods.com/h/', download: 'https://a.test/h.zip', shas: [old, newer], latest: newer, background: true }] : []])) }));
     return new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 28 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : {}));
   });
   let status = null;
@@ -194,12 +244,16 @@ test('an exact file in the shared list (same fingerprint, installed in the backg
   assert.equal(kit.state, 'page', 'installing from MXB Mods');
   assert.equal(found[0].exact, true);
   assert.equal(found[0].source.download, 'https://a.test/OPOkits.zip');
-  assert.ok(!wanted.includes(sha), 'the kit is not asked for through R2');
-  assert.ok(wanted.includes(other), 'the gloves entry needed a browser window: R2 as usual');
-  assert.notEqual(gloves.state, 'page');
+  assert.deepEqual(wanted, [], 'nothing is asked for through the service');
+  // The gloves' download needed a browser window: still the exact file, so it's tried (and the
+  // friend's CoreMX says to open it in the browser if it can't fetch it by itself).
+  assert.equal(gloves.state, 'linkfailed', 'nothing installing it in this fixture');
+  assert.equal(found[1].source.download, 'https://a.test/OPOkits.zip');
+  assert.equal(report[0].items.find((it) => it.slot === 'helmetPaint').state, 'outdated', 'that download gives a newer file now');
+  assert.equal(found.length, 2, 'the out-of-date one is not installed');
 });
 
-test('only a mutual friend or a rider on your server right now can make your CoreMX upload a file', async (t) => {
+test('v30: nobody, not even a mutual friend, can make your CoreMX upload a file', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'coremx-asks-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const child = spawn(process.execPath, [path.join(__dirname, '../server/mxbm-server.js'), '--port', '0', '--openregister', 'yes', '--requireverified', 'no', '--oldapps', 'show', '--data', path.join(root, 'service.json')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -217,5 +271,6 @@ test('only a mutual friend or a rider on your server right now can make your Cor
   await call(rider.token, '/v1/want', { shas: [sha] });   // a rider you rode with earlier, not a friend
   assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, [], 'not a friend, not on your server: no upload');
   await call(owner.token, '/v1/friends', { ids: [rider.id] }); await call(rider.token, '/v1/friends', { ids: [owner.id] });
-  assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, [sha], 'a mutual friend whose CoreMX is open: upload');
+  await call(rider.token, '/v1/want', { shas: [sha] });
+  assert.deepEqual((await call(owner.token, '/v1/loadout', loadout)).missing, [], 'a mutual friend: still no upload');
 });

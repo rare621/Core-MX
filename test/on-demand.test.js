@@ -27,37 +27,41 @@ async function service(t) {
 const paint = (fill) => { const b = Buffer.alloc(512, fill); b.write('PNT\0', 0, 'latin1'); b.writeUInt32LE(1, 104); return b; };
 const item = (buf, slot) => ({ slot, label: slot, value: slot, path: `rider/riders/default_mx/paints/${slot}.pnt`, sha256: crypto.createHash('sha256').update(buf).digest('hex'), size: buf.length });
 
-test('files are uploaded once someone needs them; older apps keep working', async (t) => {
+// v30: nothing is ever uploaded. New apps see every item as not available here (they get it from MXB
+// Mods), apps from before v30 see none and are never asked to upload, whatever they send.
+test('v30: no app is ever asked to upload, new or old', async (t) => {
   const { reg } = await service(t);
   const owner = await reg(1, 'Owner'), rider = await reg(2, 'Rider'), oldRider = await reg(3, 'OldRider');
   for (const u of [owner, rider, oldRider]) await u.c('POST', '/v1/friends', { ids: [owner.id, rider.id, oldRider.id] });
   const a = paint(1), b = paint(2);
   const loadout = { bike: 'B', items: [item(a, 'suitPaint'), item(b, 'glovesPaint')], equipped: [], unavailable: [{ slot: 'tyres', label: 'Tyres: oem_mx', error: 'Comes with the bike', included: 'bike' }], onDemand: true };
-  assert.deepEqual((await owner.c('POST', '/v1/loadout', loadout)).missing, [], 'nobody needs them yet: nothing to upload');
-  assert.ok((await owner.c('GET', '/v1/health')).features.includes('on-demand'));
-
-  // A new app sees every item with whether it is uploaded, and whether the owner is online.
+  assert.deepEqual((await owner.c('POST', '/v1/loadout', loadout)).missing, []);
+  const health = await owner.c('GET', '/v1/health');
+  assert.ok(health.features.includes('links-only') && !health.features.includes('on-demand'));
   const seen = (await rider.c('GET', '/v1/loadouts?pending=1')).loadouts.find((l) => l.id === owner.id);
   assert.deepEqual(seen.items.map((it) => it.available), [false, false]);
-  assert.equal(seen.online, false);
   assert.deepEqual(seen.unavailable[0].included, 'bike', 'files that come with the bike stay marked');
-  // It asks for the one it needs: the owner is offline.
-  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256, 'f'.repeat(64)] })).states, { [item(a).sha256]: 'offline', ['f'.repeat(64)]: 'gone' });
-  // The owner comes online: told to upload exactly that file, and the rider now sees "uploading".
-  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [item(a).sha256]);
-  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256] })).states, { [item(a).sha256]: 'uploading' });
-  assert.deepEqual((await owner.c('POST', '/v1/loadout', loadout)).missing, [item(a).sha256]);
-  assert.ok((await owner.put(item(a).sha256, a)).ok);
-  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [], 'nothing left to upload');
-  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256] })).states, { [item(a).sha256]: 'ready' });
-
-  // An app from before on-demand lists only uploaded files, and the rest counts as asked for.
-  const old = (await oldRider.c('GET', '/v1/loadouts')).loadouts.find((l) => l.id === owner.id);
-  assert.deepEqual(old.items.map((it) => it.slot), ['suitPaint']);
-  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [item(b).sha256]);
-  // And an older owner app (no onDemand) is still asked for everything missing.
+  assert.deepEqual((await rider.c('POST', '/v1/want', { shas: [item(a).sha256] })).states, { [item(a).sha256]: 'gone' });
+  await owner.c('POST', '/v1/presence', { state: { inGame: false } });
+  assert.deepEqual((await owner.c('POST', '/v1/presence', { state: { inGame: false } })).upload, [], 'never told to upload');
+  assert.equal((await owner.put(item(a).sha256, a)).status, 410, 'and an upload is refused');
+  // Apps from before v30: no items to wait for, and an old owner app is asked for nothing.
+  assert.deepEqual((await oldRider.c('GET', '/v1/loadouts')).loadouts.find((l) => l.id === owner.id).items, []);
   const legacy = await reg(4, 'LegacyOwner');
-  assert.equal((await legacy.c('POST', '/v1/loadout', { ...loadout, items: [item(paint(3), 'suitPaint')], onDemand: undefined })).missing.length, 1);
+  assert.deepEqual((await legacy.c('POST', '/v1/loadout', { ...loadout, items: [item(paint(3), 'suitPaint')], onDemand: undefined })).missing, []);
+});
+
+test('v30: the overlay is told when a rider\'s gear needs them to reinstall it, or is installing', () => {
+  const text = looksText([{ id: 'r1', num: 2, bikeId: 'B', name: 'Rare621', equipped: [] }], [], 1, {
+    r1: { items: [{ state: 'nolink', value: 'Gloves' }, { state: 'outdated', value: 'Helmet' }, { state: 'page', value: 'Kit' }, { state: 'ready', value: 'Boots' }, { state: 'linkfailed', value: 'Paint' }, { state: 'have', value: 'Mine' }], unavailable: [] },
+  });
+  assert.deepEqual(text.trim().split('\n').filter((l) => l.startsWith('wait')), [
+    'wait\t2\tB\tnolink\tGloves',
+    'wait\t2\tB\toutdated\tHelmet',
+    'wait\t2\tB\tinstalling\tKit',
+    'wait\t2\tB\tinstalling\tBoots',
+    'wait\t2\tB\tfailed\tPaint',
+  ]);
 });
 
 test('the overlay is told why a rider\'s item is not there yet', () => {
@@ -94,44 +98,18 @@ test('a server rider list does not jump between reports', async (t) => {
   assert.deepEqual((await other.c('GET', '/v1/servers')).servers.find((s) => s.name === 'Public').riders.map((r) => r.name), ['First', 'X', 'Y']);
 });
 
-// Nothing waits forever: a file asked for that its owner's CoreMX never sends becomes 'stalled' after
-// 3 minutes (no more fast re-checks; the normal sync keeps asking), and an owner with CoreMX closed
-// shows as 'offline' (not waited for).
-test('uploads that never come stop being waited for', async () => {
+test('v30: nothing is asked of the service for a missing file', async () => {
   const { requestMissing } = require('../src/lib/paintsync');
-  const sha = 'c'.repeat(64), other = 'd'.repeat(64);
-  const report = () => [{ items: [{ sha256: sha, state: 'waiting' }, { sha256: other, state: 'waiting' }] }];
-  const call = async () => ({ states: { [sha]: 'uploading', [other]: 'offline' } });
-  const t0 = Date.parse('2026-11-20T10:00:00Z');
-  const first = report(); await requestMissing(call, first, t0);
-  assert.deepEqual(first[0].items.map((it) => it.state), ['uploading', 'offline']);
-  const later = report(); await requestMissing(call, later, t0 + 2 * 60 * 1000);
-  assert.equal(later[0].items[0].state, 'uploading', 'still within 3 minutes');
-  const stalled = report(); await requestMissing(call, stalled, t0 + 4 * 60 * 1000);
-  assert.equal(stalled[0].items[0].state, 'stalled');
-});
-
-test('an offline owner gets a fresh upload window when they return', async () => {
-  const { requestMissing, pendingState } = require('../src/lib/paintsync');
-  const sha = 'e'.repeat(64), t0 = Date.parse('2026-11-20T10:00:00Z');
-  let online = false;
-  const call = async () => ({ states: { [sha]: online ? 'uploading' : 'offline' } });
-  const report = () => [{ items: [{ sha256: sha, state: 'waiting' }] }];
-  await requestMissing(call, report(), t0);
-  online = true;
-  const returned = report();
-  await requestMissing(call, returned, t0 + 20 * 60 * 1000);
-  assert.equal(returned[0].items[0].state, 'uploading');
-  assert.equal(pendingState(sha, false, t0 + 21 * 60 * 1000), 'offline');
-  assert.equal(pendingState(sha, true, t0 + 21 * 60 * 1000), 'uploading');
-  const stalled = report();
-  await requestMissing(call, stalled, t0 + 25 * 60 * 1000);
-  assert.equal(stalled[0].items[0].state, 'stalled');
+  let calls = 0;
+  const report = [{ items: [{ sha256: 'c'.repeat(64), state: 'waiting' }] }];
+  await requestMissing(async () => { calls++; return { states: {} }; }, report);
+  assert.equal(calls, 0);
+  assert.equal(report[0].items[0].state, 'waiting');
 });
 
 // Riders matched only by name on a server's rider list (no plugin) are left out when their CoreMX shows
-// them on another server, or is closed with files not uploaded (nobody could send them).
-test('name-matched riders who left or cannot share are not offered', async (t) => {
+// them on another server. v30: a closed CoreMX doesn't matter (gear comes from MXB Mods, not from them).
+test('name-matched riders who left are not offered; a closed CoreMX is fine', async (t) => {
   const { reg } = await service(t);
   const reporter = await reg(1, 'Reporter'), gone = await reg(2, 'GoneRider'), away = await reg(3, 'AwayRider'), viewer = await reg(4, 'Viewer');
   const kit = item(paint(9), 'suitPaint');
@@ -140,7 +118,7 @@ test('name-matched riders who left or cannot share are not offered', async (t) =
   await reporter.c('POST', '/v1/presence', { state: { inGame: true, inEvent: true, server: 'Busy', trackId: 'T', riders: [{ name: 'GoneRider' }, { name: 'AwayRider' }, { name: 'Reporter' }] } });
   const names = (await viewer.c('POST', '/v1/server-riders', { server: 'Busy', pending: true })).loadouts.map((l) => l.name);
   assert.ok(!names.includes('AwayRider'), 'their CoreMX shows them on another server');
-  assert.ok(!names.includes('GoneRider'), 'CoreMX closed and nothing uploaded: could never be sent');
+  assert.ok(names.includes('GoneRider'), 'CoreMX closed: their gear still comes from MXB Mods');
 });
 
 // A home-hosted game ends when its host leaves it, even while another player's game (stuck on a

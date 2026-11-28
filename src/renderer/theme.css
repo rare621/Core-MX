@@ -613,49 +613,50 @@ select option { background: var(--solid-2); color: var(--text); }
   .rail-btn .ico { width: 18px; height: 18px; }
 }
 
-/* Compact Home: rider preview on the left, servers and friends on the right. */
-.scroller.home-scroll { padding: 16px clamp(18px, 3vw, 40px) 22px; }
-.home-page { gap: 12px; }
-.home-hero { min-height: 88px; padding: 14px 22px; border-radius: 18px; }
-.home-hero h1 { font-size: clamp(22px, 2vw, 30px); margin: 4px 0 0; }
-.home-actions { flex: none; }
-.home-actions .btn { height: 34px; }
-.home-grid { grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr); grid-template-areas: 'rider servers' 'rider friends' 'rider recents'; gap: 12px; align-items: stretch; }
-.home-recents { grid-area: recents; }
-.home-panel { padding: 14px; }
-.home-panel-head { padding-bottom: 8px; }
+/* Home uses the same toolbar and panels as the rest of the app. */
+.home-toolbar { padding-bottom: 12px; }
+.home-heading { min-width: 0; }
+.home-heading h2 { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroller.home-scroll { padding: 2px clamp(18px, 2.5vw, 36px) 20px; overflow: hidden; }
+.home-page { height: 100%; max-width: none; display: block; }
+.home-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(370px, .82fr); grid-template-areas: 'rider side'; grid-template-rows: minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.home-side { grid-area: side; min-height: 0; display: grid; grid-template-rows: minmax(0, 1.55fr) minmax(0, 1fr) minmax(0, .85fr); gap: 12px; }
+.home-side > .home-panel { grid-area: auto; }
+.home-panel { min-height: 0; overflow: hidden; padding: 14px; display: flex; flex-direction: column; border-radius: 15px; }
+.home-rider { grid-area: rider; }
+.home-panel-head { min-height: 44px; padding-bottom: 9px; }
 .home-panel-head h2 { font-size: 19px; }
-.home-eyebrow, .home-kicker { font-size: 12px; }
-.home-row-copy b { font-size: 14.5px; }
-.home-row-copy small { font-size: 12.5px; }
-.home-panel-head .btn, .home-row .btn { font-size: 12.5px; }
+.home-kicker { font-size: 10px; letter-spacing: .08em; }
+.home-panel-head .btn, .home-row .btn { font-size: 12px; }
+.home-panel-body { min-height: 0; flex: 1; overflow: hidden; }
 .home-row { padding: 7px 2px; }
-.home-empty { padding: 15px 10px; }
+.home-row-copy b { font-size: 13px; }
+.home-row-copy small { font-size: 11.5px; }
+.home-empty { padding: 13px 10px; }
 .home-friend-avatar.offline i { background: #73757b; box-shadow: none; }
-.home-rider { display: flex; flex-direction: column; }
-.home-rider .home-panel-body { flex: 1; display: flex; flex-direction: column; }
-.home-rider-preview { position: relative; flex: 1; min-height: 320px; display: grid; place-items: center; overflow: hidden; border-radius: 14px; background: radial-gradient(ellipse at 50% 58%, rgba(255,125,46,.11), rgba(10,11,13,.45) 57%, rgba(8,9,11,.85)); }
-.home-rider-preview img { max-width: 95%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
-.home-rider-preview .ico { width: 65px; height: 65px; color: var(--accent); opacity: .6; }
-.home-rider-preview .home-preview-wait { color: var(--muted); font-size: 12px; text-align: center; }
-.home-rider-meta { display: flex; gap: 15px; align-items: center; justify-content: space-between; padding: 9px 2px 0; }
-.home-rider-meta b, .home-rider-meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-rider-meta b { font-size: 14.5px; }.home-rider-meta small { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-.home-scroll { overflow: hidden; }
-.home-page { height: 100%; grid-template-rows: auto minmax(0, 1fr); }
-.home-grid { min-height: 0; grid-template-rows: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, .85fr); }
-.home-panel { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-.home-panel-body { min-height: 0; overflow: auto; flex: 1; }
-.home-rider .home-panel-body { overflow: hidden; }
-.home-rider-preview { min-height: 0; }
-.home-rider-preview img { max-width: 100%; max-height: 100%; }
-.home-preview-wait { display: flex; align-items: center; flex-direction: column; gap: 10px; }
-.home-render-host { position: fixed; top: 0; left: -10000px; width: 640px; height: 600px; pointer-events: none; }
-.home-render-host canvas { width: 100%; height: 100%; }
+.home-rider .home-panel-body { display: flex; flex-direction: column; }
+.home-rider-preview { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; border-radius: 12px; background: radial-gradient(ellipse at 50% 55%, #282828 0%, #131416 60%, #0b0c0e 100%); }
+.home-rider-preview .stage-canvas { cursor: grab; }
+.home-rider-preview.is-loading .stage-canvas { visibility: hidden; }
+.home-rider-preview .ico { width: 60px; height: 60px; color: var(--accent); opacity: .55; }
+.home-preview-wait { display: flex; align-items: center; flex-direction: column; gap: 10px; text-align: center; color: var(--muted); font-size: 12px; }
+.home-rider-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; padding: 13px 3px 11px; border-bottom: 1px solid var(--border); }
+.home-rider-meta > div { min-width: 0; }
+.home-rider-meta small, .home-rider-meta b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-rider-meta small { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+.home-rider-meta b { margin-top: 3px; font-size: 14px; }
+.home-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 11px; }
+.home-shortcuts button { min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--border); background: var(--raised); color: var(--text); border-radius: 10px; padding: 10px 12px; font-family: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.home-shortcuts button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.home-shortcuts button .ico { width: 15px; height: 15px; color: var(--accent); }
+.home-shortcuts button .ico:last-child { width: 12px; height: 12px; margin-left: auto; color: var(--muted); }
 .home-recent-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--raised); color: var(--text-2); flex: none; }
 .home-recent-icon .ico { width: 16px; height: 16px; }
-@media (max-width: 900px) { .home-grid { grid-template-columns: 1fr 1fr; }.home-rider-preview { min-height: 260px; } }
-@media (max-width: 760px) { .home-scroll { overflow-y: auto; }.home-page { height: auto; }.home-grid { grid-template-columns: 1fr; grid-template-areas: 'rider' 'servers' 'friends' 'recents'; grid-template-rows: auto; }.home-hero { flex-wrap: wrap; gap: 10px; } .home-rider-preview { min-height: 240px; } }
+@media (max-height: 780px) and (min-width: 761px) { .home-side { grid-template-rows: minmax(0, 1.35fr) minmax(0, 1.05fr) minmax(0, .75fr); }.home-panel { padding: 12px; }.home-panel-head { min-height: 40px; }.home-row { padding: 5px 2px; }.home-servers .home-row:nth-child(n+4), .home-friends .home-row:nth-child(n+3), .home-recents .home-row:nth-child(n+2) { display: none; } }
+@media (max-height: 660px) and (min-width: 761px) { .home-servers .home-row:nth-child(n+3), .home-friends .home-row:nth-child(n+2) { display: none; } }
+@media (max-width: 900px) { .home-grid { grid-template-columns: minmax(0, 1fr) minmax(320px, .9fr); } .home-rider-meta { grid-template-columns: 1fr; gap: 7px; } }
+@media (max-width: 760px) { .home-scroll { overflow-y: auto !important; }.home-page, .home-grid { height: auto; }.home-grid { grid-template-columns: 1fr; grid-template-areas: 'rider' 'side'; grid-template-rows: auto auto; }.home-rider-preview { min-height: 280px; }.home-side { grid-template-rows: auto; }.home-panel-body { overflow: visible; } }
+
 
 /* App backdrop choices. The default adds color without competing with content. */
 body:not([data-background]), body[data-background="ember"] { background:

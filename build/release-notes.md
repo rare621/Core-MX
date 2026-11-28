@@ -1,11 +1,11 @@
-CoreMX 1.0.57
+CoreMX 1.0.58
 
-Hi everyone! This update gives CoreMX a new Home screen so you can see your rider and bike, check who's riding, join live servers, and jump back into a recent server from one place. It opens when you start the app.
+Hi everyone! This update makes sharing your gear with friends clearer and gives Home a live look at your rider and bike.
 
-- Your rider and bike now appear together in the outfit preview. Choosing gear moves the view closer so you can see what you're changing, and the bike is shown by default.
-- You can choose an app background in Settings. We also tightened up the Home screen and top navigation so they use the window space better.
-- CoreMX asks what to do with unsaved rider changes before you launch the game or join a server.
-- Live server addresses should stay available while someone is still riding, even if their game briefly stops reporting the address. The server list and rider count have also had some cleanup.
-- Gear choices can keep a local preview image, so opening them again is faster. The full 3D view is still there when you want it.
+- CoreMX no longer uploads your gear files. It shares the item name, a file fingerprint, and the matching MXB Mods download. Your friend's app gets the mod from MXB Mods and checks that it is the same file.
+- Friends now shows which gear cannot be shared yet. If you installed it another way, or your copy is older than the available download, reinstall it through CoreMX so friends can get it too.
+- The in-game rider overlay and Friends page give clearer reasons when an item is missing or still being installed. Your own outfit stays selected when you get another rider's gear.
+- Home now shows a live 3D preview of your rider on your bike. You can turn it to look around, then jump straight into your outfit, mods, or a server.
+- Bike livery matching better understands Kawasaki's KX250F/KX250 and KX450F/KX450 names while still asking you to check uncertain matches.
 
-Sorry for all the updates lately! Thanks for sticking with CoreMX and helping me make it better. I'm excited to finally get these improvements into your hands.
+Sorry for the quick succession of updates, and thanks for helping me make CoreMX better!

@@ -714,8 +714,11 @@ async function catalogReports(rec, cache, changed = {}) {
     const keys = gearKeys.keysForFiles(files).slice(0, 250);
     if (!keys.length) continue;
     const shas = {};
+    // v30: the fingerprints this install recorded (what the download really gave), when it has them.
+    for (const key of keys) if (/^[a-f0-9]{64}$/.test(String(rec.gearShas?.[key] || ''))) shas[key] = rec.gearShas[key];
     for (const rel of files) {
       if (!/\.(pkz|pnt)$/i.test(rel) || /^(game|user):/.test(rel)) continue;
+      if (rec.gearShas) continue;   // recorded at install: a file changed since then isn't what the download gives
       const [key] = gearKeys.keysForFile(rel);
       if (!key || !keys.includes(key)) continue;
       const abs = path.resolve(modsDir(), rel);
@@ -726,7 +729,35 @@ async function catalogReports(rec, cache, changed = {}) {
       if (!cache[rel] || cache[rel].stamp !== stamp) { cache[rel] = { stamp, sha: await fileSha256(abs) }; changed.hashed = true; }
       shas[key] = cache[rel].sha;
     }
-    out.push({ postId: Number(rec.postId), link: rec.link, title: rec.title, download, keys, shas, background: !!(rec.backgroundDownloads && rec.backgroundDownloads[download]) });
+    out.push({ postId: Number(rec.postId), link: rec.link, title: rec.title, download, keys, shas, background: !!(rec.backgroundDownloads && rec.backgroundDownloads[download]), ...(Number(rec.installedAt) > 0 ? { installedAt: Number(rec.installedAt) } : {}) });
+  }
+  return out;
+}
+// v30: fingerprints of the gear items an install wrote, by catalog key: a .pkz model or .pnt paint's
+// SHA-256, or a model installed as a folder packed the way gear sync packs it (gear-sync modelBundle).
+const MODEL_KIND = { helmets: 'helmet', boots: 'boots', protections: 'protection', riders: 'rider' };
+async function installGearShas(written) {
+  const out = {}, folders = new Map();
+  for (const rel of written || []) {
+    if (/^(game|user):/.test(rel)) continue;
+    const p = rel.replace(/\\/g, '/'), s = p.split('/');
+    const [key] = gearKeys.keysForFile(p);
+    if (!key) continue;
+    const oneFile = /\.pnt$/i.test(p) || /\.pkz$/i.test(p) && (s[0] === 'rider' && s.length === 3 || s[0] === 'rider' && s[1] === 'riders' && s.length === 3 || s[0] === 'tyres' && s.length === 2);
+    if (oneFile) {
+      const abs = path.resolve(modsDir(), ...s);
+      if (!insideRoots(abs)) continue;
+      const st = await fsp.stat(abs).catch(() => null);
+      if (st && st.isFile() && st.size <= 600 * 1048576) out[key] = await fileSha256(abs);
+      continue;
+    }
+    if (s[0] === 'rider' && MODEL_KIND[s[1]] && s.length > 3 && !/\.pkz$/i.test(s[2])) folders.set(key, { kind: MODEL_KIND[s[1]], name: s[2] });
+    else if (s[0] === 'tyres' && s.length > 2) folders.set(key, { kind: 'tyres', name: s[1] });
+  }
+  for (const [key, m] of folders) {
+    if (out[key]) continue;
+    const buf = await require('./src/lib/gear-sync').modelBundle({ modsDir: modsDir(), kind: m.kind, name: m.name }).catch(() => null);
+    if (buf) out[key] = crypto.createHash('sha256').update(buf).digest('hex');
   }
   return out;
 }
@@ -941,6 +972,7 @@ function installKey(j, written) { return j.postId ? String(j.postId) : j.shopKey
 async function recordInstall(j, written) {
   const key = installKey(j, written);
   const hashes = {};
+  const gearShas = j.plan?.root === 'game' || j.plan?.root === 'user' ? {} : await installGearShas(written).catch(() => ({}));
   if (['plugin', 'animation', 'animationGame'].includes(j.plan?.kind)) for (const entry of j.plan.entries.filter((e) => e.dest && written.includes(planPrefix(j.plan) + e.dest))) {
     hashes[planPrefix(j.plan) + entry.dest] = await pluginFiles.digest(entry.abs);
   }
@@ -961,6 +993,9 @@ async function recordInstall(j, written) {
       backgroundDownloads: { ...(prev?.backgroundDownloads || {}), ...(j.url && j.background ? { [j.url]: true } : {}) },
       source: j.url || j.file, kind: j.plan && j.plan.kind, installOptions: j.plan?.options, graphicsActive: j.plan?.kind === 'graphics' ? true : undefined,
       hashes: { ...(prev?.hashes || {}), ...hashes }, files: Array.from(new Set([...(prev && (j.plan?.root !== 'game' || j.plan?.kind === 'animationGame') ? prev.files : []), ...written])),
+      // v30: each gear item's fingerprint as this download placed it (by gear catalog key), so friends
+      // can get the exact same file from the same MXB Mods download. Never sent anywhere but as a hash.
+      gearShas: { ...(prev?.gearShas || {}), ...gearShas },
     };
     return all;
   });
@@ -1768,7 +1803,8 @@ function registerIpc() {
   handle('online:adminActivity', (days) => online.adminActivity(Math.max(1, Math.min(90, Number(days) || 30))));
   handle('online:createAnnouncement', (title, message) => online.createAnnouncement(title, message));
   handle('online:paintSync', (on) => online.setPaintSync(on));
-  handle('online:paintSyncNow', (friendId) => online.syncPaints(friendId));
+  // A sync you start yourself asks the server again for every gear link (none remembered).
+  handle('online:paintSyncNow', (friendId) => { online.forgetCatalog(); return online.syncPaints(friendId); });
   // where: { id, address } of the server row clicked (servers can share a name).
   const serverWhere = (w) => ({ id: typeof w?.id === 'string' ? w.id.slice(0, 160) : undefined, address: typeof w?.address === 'string' ? w.address.slice(0, 64) : undefined });
   handle('online:serverRiders', (server, where) => online.serverRiders(String(server || '').slice(0, 64), serverWhere(where)));
@@ -2393,7 +2429,7 @@ app.whenReady().then(async () => {
       const protectedPaths = Object.values(store.get('installs'))
         .filter((r) => r.shopKey || /mxbikes-shop|mxb-hub/i.test(String(r.link || '')))
         .flatMap((r) => r.files || []);
-      return bike ? { prof, bike, bikeName: bike, protectedPaths, stockPkz: stockRiderPkz(), appearance: bikeSwaps.shared(bike), sourceFor: paintsync.modSources(store.get('installs')) } : null;
+      return bike ? { prof, bike, bikeName: bike, protectedPaths, stockPkz: stockRiderPkz(), appearance: bikeSwaps.shared(bike), sourceFor: paintsync.modSources(store.get('installs')), ownLink: paintsync.ownLinks(store.get('installs'), store.get('catalogShas') || {}) } : null;
     },
     resolveServerAddress: async (name) => {
       const matches = [...((await knownServerAddresses()).get(serverNameKey(name)) || [])];

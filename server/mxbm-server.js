@@ -36,7 +36,7 @@ function warnStore(size) {
   storeWarnedAt = Date.now();
   console.warn(`Synced file storage is ${Math.round(100 * size / MAX_STORE)}% full (${(size / 1073741824).toFixed(1)} of ${(MAX_STORE / 1073741824).toFixed(0)} GB). Raise --maxstore in start-server.cmd before it fills up.`);
 }
-const VERSION = 29;
+const VERSION = 30;
 const ADMIN_STEAM_ID = '76561198098586128';
 // Sign in with Steam (OpenID 2.0): Steam itself confirms which account signs in, so nobody can claim
 // someone else's Steam ID. --steamopenid points elsewhere only for tests. --openregister yes keeps the
@@ -92,8 +92,7 @@ async function cleanCache() {
     if (result?.removed) console.log(`Cache cleanup: removed ${result.removed} unused files (${(result.bytes / 1048576).toFixed(1)} MB)`);
   } catch (error) { console.warn('Cache cleanup:', error.message); }
 }
-cleanCache();
-setInterval(cleanCache, 30000).unref();
+void cleanCache; // stored files are purged instead (purgeStoredFiles)
 const presence = new Map(); // steamId -> { at, share, state }
 const hostIps = new Map(); // steamId -> { ip, at } (IPv4 seen on /v1/hostip)
 let saveTimer = null;
@@ -136,9 +135,17 @@ function modSource(src) {
   if (!src || !Number.isSafeInteger(src.postId) || src.postId <= 0 || !/^https:\/\/mxb-mods\.com\/[^\s"<>]*$/i.test(String(src.link || '')) || String(src.link).length > 300) return null;
   return { postId: src.postId, title: str(src.title, 100), link: String(src.link), ...(/^https:\/\/[^\s"<>]+$/i.test(String(src.image || '')) && String(src.image).length <= 300 ? { image: String(src.image) } : {}),
     ...(/^https?:\/\/[^\s"<>]+$/i.test(String(src.download || '')) && String(src.download).length <= 300 ? { download: String(src.download) } : {}),
-    ...(src.fileName ? { fileName: str(src.fileName, 120) } : {}) };
+    ...(src.fileName ? { fileName: str(src.fileName, 120) } : {}), ...(src.exact === true && src.download ? { exact: true } : {}) };
 }
 const catalogScore = (e) => (e.by || []).length - 2 * (e.bad || []).length;
+// The file this download gives now: the most recently first-reported one (entries from before v30
+// have no times: their last listed file).
+function catalogLatest(e) {
+  const shas = e.shas || [];
+  if (!shas.length) return null;
+  const at = e.shaAt || {};
+  return shas.reduce((best, s) => ((at[s] || 0) >= (at[best] || 0) ? s : best), shas[0]);
+}
 
 // ---------- helpers ----------
 const str = (v, n = 100) => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, n);
@@ -200,8 +207,9 @@ function storeSize() {
   for (const sha of Object.keys(db.r2 || {})) if (!fs.existsSync(path.join(FILES, sha))) n += db.r2[sha].size || 0;
   return n;
 }
-// A synced file is available when it's on this PC or (checked) in R2.
-const haveFile = (sha) => !!(db.r2 && db.r2[sha]) || fs.existsSync(path.join(FILES, sha));
+// v30: the service stores no gear files (no uploads, no downloads). Gear comes only from the MXB Mods
+// download it was installed from, matched by its SHA-256 (see the gear catalog). Nothing is ever "here".
+const haveFile = () => false;
 
 // ---------- on-demand uploads ----------
 // A synced file is uploaded only when someone needs it. A rider missing a file asks for it
@@ -268,12 +276,14 @@ function ownerOnline(sha) {
 // the available ones, and what they can't get yet counts as asked for (so the owner uploads it).
 function itemsFor(u, pending) {
   const items = (u.loadout && u.loadout.items) || [];
-  if (pending) return items.map((it) => ({ ...it, available: haveFile(it.sha256) }));
-  for (const it of items) if (!haveFile(it.sha256)) want(it.sha256, '*');
-  return items.filter((it) => haveFile(it.sha256));
+  // v30: nothing is stored, so nothing is available here. Apps from before v30 that don't ask with
+  // `pending` get no items (they would only wait for files that never come).
+  if (pending) return items.map((it) => ({ ...it, available: false }));
+  return [];
 }
 // Files this user wears that someone asked for and that aren't uploaded yet.
-const toUpload = (u, ownerId) => ((u && u.loadout && u.loadout.items) || []).filter((it) => !haveFile(it.sha256) && wantedFrom(it.sha256, ownerId)).map((it) => it.sha256);
+// v30: never ask an app to upload (older apps upload only what is listed here).
+const toUpload = () => [];
 
 // Only real HTTP status numbers; a connection that is already gone or answered is left alone
 // (an upload cut off mid-way used to pass "ECONNRESET" here and crash the service).
@@ -392,7 +402,7 @@ function presenceView(id, viewer = []) {
 
 // ---------- routes ----------
 const routes = {
-  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'on-demand', ...(R2 ? ['r2-files'] : [])], users: Object.keys(db.users).length, activeUsers: onlineCount(), servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
+  'GET /v1/health': async () => [200, { ok: true, version: VERSION, features: ['hosting', 'hostip', 'observed-host-address', 'links-only', 'catalog-latest'], users: Object.keys(db.users).length, activeUsers: onlineCount(), servers: Object.values(db.servers).filter((s) => Date.now() - s.lastSeen < SERVER_TTL).length }],
 
   // Old apps (before Sign in with Steam) claimed a Steam ID without proof. Closed unless
   // --openregister yes; accounts made this way are not verified.
@@ -738,6 +748,15 @@ const routes = {
       Object.assign(e, { link: entry.link, title: entry.title });
       const sha = String(shas[key] || '').toLowerCase();
       if (/^[a-f0-9]{64}$/.test(sha) && !(e.shas || []).includes(sha)) { e.shas = [...(e.shas || []), sha].slice(-CATALOG_SHAS); added++; }
+      // v30: when each file was first reported from this download. The newest is what the download
+      // gives now (a creator updated it): the older ones are out of date.
+      if (/^[a-f0-9]{64}$/.test(sha)) {
+        e.shaAt = Object.fromEntries(Object.entries(e.shaAt || {}).filter(([s]) => (e.shas || []).includes(s)));
+        // The time the reporter installed it (never later than now): an old install reported for the
+        // first time must not look like the newest file.
+        const at = Number(body.installedAt) > 0 ? Math.min(Date.now(), Number(body.installedAt)) : Date.now();
+        if (!e.shaAt[sha] || at < e.shaAt[sha]) { e.shaAt[sha] = at; added++; }
+      }
       if (background && !(e.bgBy || []).includes(me.id)) { e.bgBy = [...(e.bgBy || []), me.id].slice(-CATALOG_VOTERS); added++; }
       if (!e.by.includes(me.id)) { e.by = [...e.by, me.id].slice(-CATALOG_VOTERS); added++; }
       e.bad = e.bad.filter((id) => id !== me.id);
@@ -753,7 +772,7 @@ const routes = {
     const matches = {};
     for (const key of keys) {
       const list = (db.catalog[key] || []).filter((e) => catalogScore(e) > 0).sort((a, b) => catalogScore(b) - catalogScore(a)).slice(0, 3);
-      if (list.length) matches[key] = list.map((e) => ({ postId: e.postId, link: e.link, title: e.title, download: e.download, votes: catalogScore(e), shas: e.shas || [], background: (e.bgBy || []).length > 0 }));
+      if (list.length) matches[key] = list.map((e) => ({ postId: e.postId, link: e.link, title: e.title, download: e.download, votes: catalogScore(e), shas: e.shas || [], latest: catalogLatest(e), background: (e.bgBy || []).length > 0 }));
     }
     return [200, { matches }];
   },
@@ -787,9 +806,8 @@ const routes = {
     });
     me.user.loadout = { bike: str(body.bike, 100), bikeName: str(body.bikeName, 100), items, equipped, unavailable, at: Date.now() };
     save();
-    // Apps with on-demand uploads get only the files someone asked for; older apps everything missing.
-    const onDemand = body.onDemand === true;
-    return [200, { ok: true, missing: items.filter((it) => !haveFile(it.sha256) && (!onDemand || wantedFrom(it.sha256, me.id))).map((it) => it.sha256) }];
+    // v30: no uploads. `missing` stays empty, so older apps never upload either.
+    return [200, { ok: true, missing: [] }];
   },
   // Outfits of mutual friends.
   'GET /v1/loadouts': async (req, body, me) => {
@@ -827,7 +845,7 @@ const routes = {
       // Matched only by name on the server's rider list (no plugin): skipped when their CoreMX shows
       // them on another server, or is closed with files not uploaded (they could never be sent).
       const elsewhere = online && p.state && p.state.inEvent && p.state.key !== key;
-      const byName = !here && !elsewhere && nameOnList(u.name, riderNames) && (online || (u.loadout.items || []).every((it) => haveFile(it.sha256)));
+      const byName = !here && !elsewhere && nameOnList(u.name, riderNames);
       if (!here && !byName) continue;
       out.push({ id, name: u.name, via: here ? 'plugin' : 'name', ...(here ? { num: p.state.raceNumber || null, bikeId: p.state.bikeId || '' } : {}), ...u.loadout, items: itemsFor(u, body.pending === true), online: !!(p && now - p.at < ONLINE_TTL) });
       if (out.length >= 32) break;
@@ -839,15 +857,8 @@ const routes = {
   'POST /v1/want': async (req, body, me) => {
     if (!me) return [401, { error: 'not signed in' }];
     const shas = [...new Set((Array.isArray(body.shas) ? body.shas : []).filter((x) => /^[a-f0-9]{64}$/.test(String(x))))].slice(0, 64);
-    const worn = new Set();
-    for (const u of Object.values(db.users)) if (u.sharePaints !== false) for (const it of (u.loadout?.items || [])) worn.add(it.sha256);
-    const states = {};
-    for (const sha of shas) {
-      if (!worn.has(sha) && !haveFile(sha)) { states[sha] = 'gone'; continue; }
-      want(sha, me.id);
-      states[sha] = haveFile(sha) ? 'ready' : ownerOnline(sha) ? 'uploading' : 'offline';
-    }
-    return [200, { states }];
+    // v30: files are never sent through the service.
+    return [200, { states: Object.fromEntries(shas.map((sha) => [sha, 'gone'])) }];
   },
   // The rider's CoreMX installed these files: their requests end (the files may be deleted later by
   // the usual rules, never before).
@@ -1029,10 +1040,9 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (req.method === 'GET' && url.pathname === '/v1/auth/steam/return') return steamReturn(req, res, url).catch(() => send(res, 500, { error: 'server error' }));
   if (needsVerify(me, `${req.method} ${url.pathname}`)) { req.resume(); return send(res, 403, VERIFY_ERROR); }
-  const fm = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})$/);
-  if (fm) return fileRoute(req, res, fm[1]);
-  const fu = url.pathname.match(/^\/v1\/files\/([a-f0-9]{64})\/(upload|uploaded)$/);
-  if (fu && req.method === 'POST') { req.resume(); return (fu[2] === 'upload' ? uploadGrant : uploadCheck)(req, res, fu[1]); }
+  // v30: gear files are no longer uploaded to or downloaded from the service.
+  if (/^\/v1\/files(\/|$)/.test(url.pathname)) { req.resume(); return send(res, 410, { error: 'CoreMX no longer shares gear files through its service. Update CoreMX: gear now comes from MXB Mods.' }); }
+  void fileRoute; void uploadGrant; void uploadCheck;
   const route = routes[`${req.method} ${url.pathname}`];
   if (!route) return send(res, 404, { error: 'not found' });
   try {
@@ -1176,7 +1186,34 @@ async function sweepUntracked() {
   }
   if (removed) console.log(`R2: removed ${removed} untracked file${removed === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`);
 }
-if (R2) { setTimeout(r2Upkeep, 5000).unref(); setInterval(r2Upkeep, Math.min(30000, R2_GRACE)).unref(); }
+// v30: delete every gear file this service ever stored: in R2 (the whole bucket's files/ objects,
+// tracked or not) and on this PC. Runs at start and then hourly, in case anything is left behind.
+void r2Upkeep;
+let purging = false;
+async function purgeStoredFiles() {
+  if (purging) return;
+  purging = true;
+  let removed = 0, bytes = 0;
+  try {
+    if (R2 && R2.list) {
+      for (const obj of await R2.list()) {
+        const sha = (obj.key.match(/^files\/([a-f0-9]{64})$/) || [])[1];
+        if (!sha) continue;
+        await R2.remove(sha); removed++; bytes += obj.size || 0;
+      }
+    }
+    for (const f of fs.readdirSync(FILES)) {
+      if (!/^[a-f0-9]{64}(\.tmp)?$/.test(f)) continue;
+      const file = path.join(FILES, f);
+      try { bytes += fs.statSync(file).size; fs.unlinkSync(file); removed++; } catch {}
+    }
+    if (Object.keys(db.r2 || {}).length || Object.keys(db.wants || {}).length) { db.r2 = {}; db.wants = {}; save(); }
+    if (removed) console.log(`Gear files: deleted ${removed} stored file${removed === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB). The service no longer stores gear.`);
+  } catch (e) { console.warn('Gear file purge:', e.message); }
+  finally { purging = false; }
+}
+setTimeout(purgeStoredFiles, 3000).unref();
+setInterval(purgeStoredFiles, 60 * 60 * 1000).unref();
 
 server.requestTimeout = 60000;
 server.listen(PORT, () => console.log(`CoreMX online service on port ${server.address().port} (data: ${DATA})${R2 ? ` · files in R2 bucket ${R2.bucket}` : ''}`));

@@ -21,7 +21,16 @@ test('bike identity normalizes spacing and preserves displacement, stroke/model 
   assert.equal(livery.identify('2023 Kawasaki KX 250').model, 'KX250');
   assert.deepEqual(livery.identify(bike).years, [2023]);
   assert.equal(livery.compare(livery.requirement('paint.pnt', '2023 KX 250'), bike), 'match');
-  for (const incompatible of [old, other, 'MX1OEM_2023_Kawasaki_KX450', 'MX2OEM_2023_Kawasaki_KX250F']) assert.equal(livery.compare(livery.requirement('paint.pnt', '2023 KX250'), incompatible), 'incompatible');
+  for (const incompatible of [old, other, 'MX1OEM_2023_Kawasaki_KX450']) assert.equal(livery.compare(livery.requirement('paint.pnt', '2023 KX250'), incompatible), 'incompatible');
+  // Kawasaki dropped the F (KX250F is the KX250 from 2021, KX450F the KX450 from 2019): may be the same
+  // bike, so the player checks; never a sure match by name alone.
+  assert.equal(livery.compare(livery.requirement('paint.pnt', '2023 KX250'), 'MX2OEM_2023_Kawasaki_KX250F'), 'unknown');
+  const camo = livery.requirement('Solitude Visuals Camo KX250F.pnt', 'Solitude Visuals Camo KX250F');
+  assert.equal(livery.compare(camo, bike), 'unknown', 'a KX250F livery can be for the 2023 KX250');
+  assert.equal(livery.compare(camo, 'MX2OEM_2002_Kawasaki_KX250'), 'incompatible', 'a 2002 KX250 is the two-stroke');
+  assert.equal(livery.compare(livery.requirement('p.pnt', '2019 KX250F camo'), bike), 'incompatible', 'other years still differ');
+  assert.equal(livery.compare(livery.requirement('p.pnt', 'KX450F kit'), 'MX1OEM_2023_Kawasaki_KX450'), 'unknown');
+  assert.equal(livery.compare(livery.requirement('p.pnt', 'YZ250F kit'), 'MX2OEM_2023_Yamaha_YZ250'), 'incompatible', 'Yamaha still sells both');
   assert.equal(livery.identify('2023 KTM 250 SX-F').model, livery.identify('2023 KTM SXF250').model);
   assert.equal(livery.identify('Suzuki RM-Z 250 2022').model, 'RMZ250');
   assert.deepEqual(livery.identify('Suzuki RM-Z 250 2022').years, [2022]);

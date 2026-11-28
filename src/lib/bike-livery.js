@@ -44,11 +44,21 @@ function requirement(rel, title) {
   if (!req.version && req.model === fromTitle.model) req.version = fromTitle.version;
   return { ...req, exact, label: exact || [req.years.join('/'), req.brand, req.model].filter(Boolean).join(' ') || 'Bike not identified' };
 }
+// Kawasaki dropped the F from its four-strokes: the KX450F is called KX450 from 2019, the KX250F KX250
+// from 2021 (an older KX250 is the two-stroke). A livery naming one and a bike named the other can be the
+// same bike: not incompatible, but not a sure match either (the creator's instructions decide).
+function kawasakiRename(req, bike) {
+  const [a, b] = [req, bike].map((x) => String(x.model || '').match(/^KX(250|450)(F?)$/));
+  if (!a || !b || a[1] !== b[1] || a[2] === b[2]) return false;
+  if (a[1] === '450') return true;
+  const plain = a[2] ? bike : req;
+  return plain.years.every((year) => year >= 2021);
+}
 function compare(req, name) {
   if (req.exact) return req.exact.toLowerCase() === name.toLowerCase() ? 'match' : 'incompatible';
   const bike = identify(name);
   if (req.ambiguous) return 'unknown';
-  if (req.brand && bike.brand && req.brand !== bike.brand || req.model && bike.model && req.model !== bike.model) return 'incompatible';
+  if (req.brand && bike.brand && req.brand !== bike.brand || req.model && bike.model && req.model !== bike.model && !kawasakiRename(req, bike)) return 'incompatible';
   if (req.years.length && bike.years.length && !req.years.some((year) => bike.years.includes(year))) return 'incompatible';
   if (req.version && bike.version && req.version !== bike.version) return 'incompatible';
   return req.model && bike.model === req.model && req.years.length && bike.years.length && (!req.version || req.version === bike.version) ? 'match' : 'unknown';

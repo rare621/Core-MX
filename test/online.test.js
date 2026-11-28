@@ -426,13 +426,14 @@ test('gear a rider could not send is installed from its MXB Mods page once, and 
   assert.equal(asked.length, 1);
 });
 
-test('a rider whose CoreMX is offline gets 10 minutes before CoreMX looks elsewhere or asks you', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-offline-grace-'));
+test('v30: an item of a rider with no exact MXB Mods download is nolink; nothing is searched for or fetched from the service', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-nolink-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const sha = 'd'.repeat(64);
   const loadout = { id: 'rider', name: 'Rider', bike: 'Fixture', num: 2, equipped: [{ slot: 'suitPaint', value: 'Kit' }], unavailable: [],
     items: [{ slot: 'suitPaint', label: 'Kit', value: 'Kit', rider: 'default_mx', path: 'rider/riders/default_mx/paints/Kit.pnt', sha256: sha, size: 10, needs: [], available: false }] };
-  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 27 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : /want$/.test(url) ? { states: { [sha]: 'offline' } } : {})));
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { urls.push(String(url)); return new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 30 } : /server-riders$/.test(url) ? { loadouts: [loadout] } : /catalog\/lookup$/.test(url) ? { matches: {} } : {})); });
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   const asked = [];
@@ -440,11 +441,11 @@ test('a rider whose CoreMX is offline gets 10 minutes before CoreMX looks elsewh
     store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 'fixture-token', received: {} } : key === 'friends' ? [] : undefined, set: () => {} },
     modsDir: () => root, haveMod: async () => true, findGear: (req) => asked.push(req.name),
   });
-  assert.equal((await client.syncServerRiders('Server', ['rider']))[0].items[0].state, 'offline');
-  assert.deepEqual(asked, [], 'just offline: wait for their CoreMX');
+  assert.equal((await client.syncServerRiders('Server', ['rider']))[0].items[0].state, 'nolink');
   now += 11 * 60 * 1000;
   await client.syncServerRiders('Server', ['rider']);
-  assert.deepEqual(asked, ['Kit'], 'still offline after 10 minutes: look on MXB Mods');
+  assert.deepEqual(asked, [], 'never a name search');
+  assert.ok(!urls.some((u) => /\/v1\/(files|want|received)/.test(u)), 'nothing is asked of or fetched from the service');
 });
 
 test('uploads to R2 report bytes sent, have no overall time limit, and give up on a dead connection', async (t) => {
@@ -467,24 +468,48 @@ test('uploads to R2 report bytes sent, have no overall time limit, and give up o
   await assert.rejects(online.putFile(`${base}/dead`, crypto.randomBytes(8 * 1024 * 1024), () => {}, 300), /no progress|stalled|socket|hang up|ECONNRESET/i);
 });
 
-test('a friend whose CoreMX is closed: their files just wait, nothing is searched for or asked about', async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-offline-'));
+test('v30: an item of a friend comes from the exact MXB Mods download their CoreMX installed it from', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-exact-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const sha = '9'.repeat(64);
+  const source = { postId: 42, title: 'Camo kit', link: 'https://mxb-mods.com/camo/', download: 'https://example.test/camo.zip', exact: true };
   const loadout = { id: 'friend', name: 'Uhh_sal', bike: 'B', equipped: [{ slot: 'suitPaint', value: 'BLACK CAMO FXR' }], unavailable: [],
-    items: [{ slot: 'suitPaint', label: 'Kit', value: 'BLACK CAMO FXR', rider: 'default_mx', path: 'rider/riders/default_mx/paints/BLACK CAMO FXR.pnt', sha256: sha, size: 10, needs: [], available: false }] };
-  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 28 } : /loadouts/.test(url) ? { loadouts: [loadout] } : /want$/.test(url) ? { states: { [sha]: 'offline' } } : {})));
-  let now = Date.now();
-  t.mock.method(Date, 'now', () => now);
+    items: [{ slot: 'suitPaint', label: 'Kit', value: 'BLACK CAMO FXR', rider: 'default_mx', path: 'rider/riders/default_mx/paints/BLACK CAMO FXR.pnt', sha256: sha, size: 10, needs: [], available: false, source }] };
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { urls.push(String(url)); return new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 30 } : /loadouts/.test(url) ? { loadouts: [loadout] } : {})); });
   const asked = [];
   const { client } = fixture({
     store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 't', received: {}, paintSync: true } : key === 'friends' ? [{ code: 'friend' }] : undefined, set: () => {} },
-    modsDir: () => root, haveMod: async () => true, currentOutfit: async () => null, findGear: (req) => asked.push(req.name),
+    modsDir: () => root, haveMod: async () => true, currentOutfit: async () => null,
+    findGear: (req) => asked.push(req), gearStatus: () => ({ state: 'installing' }),
   });
-  await client.syncPaints();
-  now += 11 * 60 * 1000;
   const st = await client.syncPaints();
-  assert.equal(st.paintSync.friends[0].items[0].state, 'offline');
-  assert.deepEqual(asked, [], 'not searched for on MXB Mods');
-  assert.deepEqual(st.paintSync.needsYou, [], 'not in Missing gear');
+  assert.equal(st.paintSync.friends[0].items[0].state, 'page');
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].exact, true);
+  assert.equal(asked[0].source.download, source.download, 'that very download');
+  assert.ok(!urls.some((u) => /\/v1\/(files|want|received)/.test(u)), 'nothing comes through the service');
+});
+
+test('v30: between syncs a friend item keeps what the last sync found (no flipping back to ready)', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mxb-friend-keep-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const sha = '7'.repeat(64);
+  const loadout = { id: 'friend', name: 'Shawn', bike: 'B', equipped: [{ slot: 'glovesPaint', value: 'Evo' }], unavailable: [],
+    items: [{ slot: 'glovesPaint', label: 'Gloves', value: 'Evo', rider: 'default_mx', path: 'rider/riders/default_mx/gloves/Evo.pnt', sha256: sha, size: 10, needs: [], available: false }] };
+  t.mock.method(globalThis, 'fetch', async (url) => new Response(JSON.stringify(/health$/.test(url) ? { ok: true, version: 30 } : /loadouts/.test(url) ? { loadouts: [loadout] } : /catalog\/lookup$/.test(url) ? { matches: {} } : {})));
+  const changes = [];
+  const { client } = fixture({
+    store: { get: (key) => key === 'online' ? { url: 'https://example.test', token: 't', received: {}, paintSync: true } : key === 'friends' ? [{ code: 'friend' }] : undefined, set: () => {} },
+    modsDir: () => root, haveMod: async () => true, currentOutfit: async () => null, onChange: () => changes.push(1),
+  });
+  const st = await client.syncPaints();
+  assert.equal(st.paintSync.friends[0].items[0].state, 'nolink');
+  for (let i = 0; i < 3; i++) await client.refreshFriendGear(true);
+  assert.equal(client.status().paintSync.friends[0].items[0].state, 'nolink', 'a refresh keeps it');
+  assert.equal((await client.friendLoadout('friend')).items[0].state, 'nolink', 'opening their gear keeps it');
+  await client.refreshFriendGear(true);   // once after opening their gear: your files are checked again
+  const before = changes.length;
+  for (let i = 0; i < 3; i++) await client.refreshFriendGear(true);
+  assert.equal(changes.length, before, 'nothing changed: the page is not redrawn again and again');
 });

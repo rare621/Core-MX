@@ -25,10 +25,11 @@ function blockedBy(report, slot) {
 }
 const catalogKeys = require('./gear-keys');
 const RELOAD_FOR = { bikePaint: 'bikepaints', helmet: 'helmets', helmetPaint: 'helmetpaints', gogglesPaint: 'helmetpaints', suitPaint: 'riderpaints', glovesPaint: 'riderpaints', boots: 'boots', bootsPaint: 'bootpaints', protection: 'protections', protectionPaint: 'protectionpaints' };
-// "wait" lines tell the overlay why a rider's item isn't in your game yet: uploading (their CoreMX is
+// "wait" lines tell the overlay why a rider's item isn't in your game yet (since 1.0.58: installing, outdated, nolink
+// and failed for gear from MXB Mods; uploading and offline only came from before): uploading (their CoreMX is
 // sending it), offline (their CoreMX is closed), paid (not shared), bike (comes with a bike you don't
 // have), failed. Older plugins skip these lines. status: rider id -> sync report (items, unavailable).
-const WAIT_ITEM = { page: 'installing', waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed', stalled: 'failed' };
+const WAIT_ITEM = { page: 'installing', waiting: 'uploading', uploading: 'uploading', offline: 'offline', failed: 'failed', stalled: 'failed', linkfailed: 'failed', nolink: 'nolink', outdated: 'outdated', ready: 'installing' };
 function waitLines(lo, report, clean) {
   if (!report) return [];
   const out = [];
@@ -145,33 +146,64 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     }
     annotate(results);
   }
-  // Order for a file another rider shares: the service (R2) first; if that fails, the upload stalls or
-  // their CoreMX is closed, its MXB Mods page, the shared catalog, a name search, then the player (see
-  // noteFailedItems). Pages before R2 only with the setting online.pagesFirst = true (off by default).
-  // Before that: when the shared gear list (service v28) has this exact file (same SHA-256) from an MXB
-  // Mods download other riders installed in the background, it's installed from there and never goes
-  // through the service. Lookups are kept 10 minutes.
+  // v30: a file another rider shares comes only from the MXB Mods download that gives exactly it (same
+  // SHA-256): the one their CoreMX installed it from, else one from the shared gear catalog that other
+  // riders installed in the background. Nothing comes through the service. Lookups are kept 10 minutes.
   const exactLookups = new Map();
-  async function exactEntry(key, sha) {
-    if (!key || !/^[a-f0-9]{64}$/.test(String(sha || ''))) return null;
+  // A found entry is kept 10 minutes; "nothing yet" only 1 minute, since someone (you, too) may have
+  // just installed it. Your own catalog report and a sync you start yourself forget them all.
+  async function catalogList(key) {
     let hit = exactLookups.get(key);
-    if (!hit || Date.now() - hit.at > 10 * 60 * 1000) { hit = { at: Date.now(), list: (await catalogLookup([key]).catch(() => ({})))[key] || [] }; exactLookups.set(key, hit); }
-    return hit.list.find((e) => e.background && (e.shas || []).includes(sha)) || null;
+    if (!hit || Date.now() - hit.at > (hit.list.length ? 10 * 60 * 1000 : 60 * 1000)) { hit = { at: Date.now(), list: (await catalogLookup([key]).catch(() => ({})))[key] || [] }; exactLookups.set(key, hit); }
+    return hit.list;
+  }
+  // v30: the catalog's view of this exact file: { entry } when a download gives exactly it now (one
+  // that worked in the background first; one that needs a browser window is still the right link),
+  // { outdated: entry } when that download has since given a newer file, else {}.
+  async function exactMatch(key, sha) {
+    if (!key || !/^[a-f0-9]{64}$/.test(String(sha || ''))) return {};
+    const list = (await catalogList(key)).filter((e) => (e.shas || []).includes(sha)).sort((a, b) => (b.background ? 1 : 0) - (a.background ? 1 : 0));
+    const entry = list.find((e) => !e.latest || e.latest === sha);
+    return entry ? { entry } : list.length ? { outdated: list[0] } : {};
+  }
+  async function exactEntry(key, sha) { return (await exactMatch(key, sha)).entry || null; }
+  // v30: for an item you wear, the MXB Mods download that gives exactly this file: your own install
+  // records first (ownLink), then the shared gear catalog. 'outdated' when the catalog says that
+  // download now gives a newer file. Shared as a link and fingerprint only.
+  async function linkFor(it, cur, bike, ownLink) {
+    // catalogKey: given for a package a paint comes inside (see paintsync share).
+    const key = it.catalogKey || catalogKeys.keyForItem(it.slot, it.value, cur, bike);
+    if (!key) return { state: 'none' };
+    const page = (e) => ({ postId: e.postId, title: String(e.title || '').slice(0, 100), link: e.link, download: e.download, exact: true });
+    const mine = ownLink ? ownLink(key, it.sha256) : null;
+    const { entry, outdated } = await exactMatch(key, it.sha256);
+    if (outdated && !entry) return { state: 'outdated', source: { ...page(outdated), exact: false } };
+    if (mine) {
+      // The catalog knows your download now gives another file (a creator update): out of date.
+      const moved = (await catalogList(key)).find((e) => e.download === mine.download && e.latest && e.latest !== it.sha256);
+      if (moved) return { state: 'outdated', source: { ...mine, exact: false } };
+      return { state: 'linked', source: mine };
+    }
+    if (entry) return { state: 'linked', source: page(entry) };
+    return { state: 'none' };
   }
   async function viaPage(lo, it) {
     const cur = Object.fromEntries((lo.equipped || []).map((e) => [e.slot, e.value]));
     const name = it.value || cur[it.slot];
     if (!name) return null;
     const catalogKey = catalogKeys.keyForItem(it.slot, name, cur, lo.bike);
-    if (cfg().pagesFirst === true) findGear({ slot: it.slot, name, source: it.source || null, who: lo.name || '', catalogKey, pageOnly: true });
-    else {
-      const exact = await exactEntry(catalogKey, it.sha256);
-      if (exact) findGear({ slot: it.slot, name, source: exact, who: lo.name || '', catalogKey, pageOnly: true, exact: true });
-    }
+    // v30: only a download that gives exactly this file: the owner's (their own install of it), else
+    // the shared catalog. Their file being older than what the download gives now: 'outdated'.
+    const own = it.source && it.source.exact === true && it.source.download ? it.source : null;
+    const match = own ? {} : await exactMatch(catalogKey, it.sha256);
+    const exact = own || match.entry;
+    if (!exact) return match.outdated ? { state: 'outdated' } : null;
+    findGear({ slot: it.slot, name, source: exact, who: lo.name || '', catalogKey, pageOnly: true, exact: true });
     let st = gearStatus(it.slot, name);
     // Installed, yet the file still isn't there: not in that download. The next option, or the service.
     if (st && st.state === 'installed') { gearStillMissing(it.slot, name); st = gearStatus(it.slot, name); }
-    return st && ['searching', 'installing'].includes(st.state) ? st : null;
+    // v30: the exact download is the only option (no name search): if it fails, say so.
+    return st && ['searching', 'installing'].includes(st.state) ? st : { state: 'linkfailed', error: (st && st.error) || 'Installing its MXB Mods download failed' };
   }
   // A file the service couldn't deliver either: its download failed, the owner's upload hasn't come
   // after 3 minutes ('stalled'), or their CoreMX is closed ('offline'). The name search, then the player.
@@ -389,36 +421,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!res.ok) throw new Error(data.error || `Online service answered ${res.status}`);
     return data;
   }
-  // Paint files: raw bytes by SHA-256.
-  async function upload(sha, buf, onBytes = () => {}) {
-    // Newer services hand out a link to upload straight to cloud storage (R2), so the file doesn't
-    // travel through the service PC's connection. Older services answer 404 here: upload as before.
-    const ask = await request(`/v1/files/${sha}/upload`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000) });
-    const grant = ask.ok ? await ask.json().catch(() => ({})) : null;
-    if (!ask.ok && ask.status !== 404) throw new Error(((await ask.json().catch(() => ({}))).error) || `Upload failed (${ask.status})`);
-    if (grant && grant.existed) return;
-    if (grant && grant.url) {
-      const put = await putFile(grant.url, buf, onBytes)
-        .catch((e) => { throw new Error(`Upload failed (${e.code || e.message})`); });
-      if (!put.ok) throw new Error(`Upload failed (${put.status})`);
-      const done = await request(`/v1/files/${sha}/uploaded`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120000) });
-      if (!done.ok) { const d = await done.json().catch(() => ({})); throw new Error(d.error || `Upload check failed (${done.status})`); }
-      return;
-    }
-    const res = await request(`/v1/files/${sha}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buf, signal: AbortSignal.timeout(120000) });
-    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Upload failed (${res.status})`); }
-  }
-  async function download(sha, onProgress = () => {}) {
-    const res = await request(`/v1/files/${sha}`, { signal: AbortSignal.timeout(120000) });
-    if (!res.ok) throw new Error(`Download failed (${res.status})`);
-    const chunks = []; let size = 0;
-    for await (const chunk of res.body) {
-      size += chunk.length;
-      if (size > MAX_FILE) throw new Error('Shared file exceeds the sync size limit');
-      chunks.push(chunk); onProgress(size);
-    }
-    return Buffer.concat(chunks);
-  }
+  // v30: gear files are never uploaded to or downloaded from the CoreMX service (see paintsync.js).
 
   // ---------- plugin state ----------
   async function readState() {
@@ -627,7 +630,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         needsSignIn: !c.token && needsSignIn, signingIn: signing ? { confirmed: signing.confirmed } : null, verified: c.token ? (c.verified ?? null) : null },
       serverShare: c.serverShare !== false,
       upnp: { enabled: c.upnp !== false, state: upnp.state, error: upnp.error, at: upnp.at, port: HOST_PORT, doubleNat: !!upnp.doubleNat, firewall: upnp.firewall || null, hosting: !!upnp.hostingSince },
-      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting, needsYou: needsYou() },
+      paintSync: { enabled: c.paintSync !== false, busy: paint.busy, error: paint.error, shared: paint.shared, unavailable: paint.unavailable, unlinked: paint.unlinked || null, progress: paint.progress, friends: paint.report, at: paint.at, received: Object.keys(c.received || {}).length, waiting: paint.waiting, needsYou: needsYou() },
     };
   }
 
@@ -803,6 +806,20 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   // when the player explicitly refreshes after installing something locally.
   const gearKeys = new Map();
   const gearKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.slot, it.path, it.sha256]), lo.equipped, lo.unavailable]);
+  // Between syncs a friend's gear is only looked at on this PC: an item you don't have reads 'ready'.
+  // What the last sync found for that same file (installing from MXB Mods, not shared, out of date,
+  // failed) still holds, so it's kept: otherwise the list flips back and forth with every refresh.
+  const LINK_STATES = new Set(['page', 'nolink', 'outdated', 'linkfailed']);
+  function keepLinkStates(prev, next) {
+    if (!prev || !next) return;
+    for (const it of next.items || []) {
+      if (it.state !== 'ready') continue;
+      const old = (prev.items || []).find((p) => p.slot === it.slot && p.sha256 === it.sha256);
+      if (!old || !LINK_STATES.has(old.state)) continue;
+      it.state = old.state;
+      for (const k of ['error', 'page', 'find']) { if (old[k] !== undefined) it[k] = old[k]; else delete it[k]; }
+    }
+  }
   async function refreshFriendGear(force = false) {
     if (!cfg().token) return paint.report || [];
     const { loadouts = [] } = await call('GET', '/v1/loadouts?pending=1');
@@ -811,7 +828,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     let changed = loadouts.length !== previous.size;
     const seen = new Set();
     for (const lo of loadouts) {
-      const key = gearKey(lo) + (lo.items || []).map((it) => it.available === false ? '0' : '1').join('') + (lo.online ? 'on' : 'off');
+      const key = gearKey(lo);
       const previousKey = gearKeys.get(lo.id);
       seen.add(lo.id);
       if (!force && previousKey === key && previous.has(lo.id)) {
@@ -819,8 +836,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
         continue;
       }
       const [checked] = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: [lo] });
-      // Not uploaded yet: say whether their CoreMX is online to send it (asked for by the next sync).
-      for (const it of checked.items) if (it.state === 'waiting' && cfg().paintSync !== false) it.state = paintsync.pendingState(it.sha256, lo.online !== false);
+      keepLinkStates(previous.get(lo.id), checked);
       next.push(checked);
       gearKeys.set(lo.id, key);
       if (!previous.has(lo.id) || previousKey !== key || JSON.stringify(previous.get(lo.id).items.map((it) => [it.state, it.needs, it.error])) !== JSON.stringify(checked.items.map((it) => [it.state, it.needs, it.error]))) changed = true;
@@ -851,11 +867,14 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
       // its "current bike" can be another one), so riders on your server can apply it.
       const o = await currentOutfit(current?.inEvent && current.bikeId ? current.bikeId : null);
       if (o) {
-        const shared = await paintsync.share({ call, upload, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, appearance: o.appearance, protectedPaths: o.protectedPaths || [], stockPkz: o.stockPkz || null, sourceFor: o.sourceFor, onProgress: progress });
+        const shared = await paintsync.share({ call, modsDir: modsDir(), prof: o.prof, bike: o.bike, bikeName: o.bikeName, appearance: o.appearance, protectedPaths: o.protectedPaths || [], stockPkz: o.stockPkz || null, sourceFor: o.sourceFor, linkFor: (it, cur, bike) => linkFor(it, cur, bike, o.ownLink), onProgress: progress });
         paint.shared = shared.items; paint.unavailable = shared.unavailable;
+        // v30: what you wear that friends can't get yet (no MXB Mods download with this exact file, or
+        // an older version than the download gives now): the Friends tab lists these to reinstall.
+        paint.unlinked = shared.items.filter((it) => it.share !== 'linked' && it.share !== 'withModel').map((it) => ({ slot: it.slot, label: it.label, value: it.value, state: it.share === 'outdated' ? 'outdated' : 'none', source: it.source || null }));
       }
       const received = { ...(cfg().received || {}) };
-      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, friendId, onProgress: progress });
+      const results = await paintsync.fetchFriends({ call, modsDir: modsDir(), received, have: haveMod, viaPage, friendId, onProgress: progress });
       paintsync.touchReceived(received, results);
       paint.report = friendId ? [...(paint.report || []).filter((p) => p.id !== friendId), ...results] : results;
       noteWaiting(paint.report);
@@ -872,9 +891,10 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     if (!(store.get('friends') || []).some((f) => f.code === friendId)) throw new Error('Add this rider as a friend first');
     await syncFriends();
     const results = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, friendId });
+    const old = (paint.report || []).find((lo) => lo.id === friendId);
+    keepLinkStates(old, results[0]);
     annotate(results);
     if (results[0]) {
-      const old = (paint.report || []).find((lo) => lo.id === friendId);
       const viewKey = (lo) => JSON.stringify([lo.bike, (lo.items || []).map((it) => [it.sha256, it.state, it.needs, it.error]), lo.equipped, lo.unavailable]);
       if (!old || viewKey(old) !== viewKey(results[0])) {
         paint.report = [...(paint.report || []).filter((lo) => lo.id !== friendId), results[0]];
@@ -914,7 +934,6 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const report = await paintsync.listFriends({ call, modsDir: modsDir(), received: cfg().received || {}, have: haveMod, preloaded: loadouts });
     markNeeded(report);
     noteUnavailable(report);
-    await paintsync.requestMissing(call, report); // their owners start uploading now
     return report.map((r) => ({ ...r, via: (loadouts.find((l) => l.id === r.id) || {}).via || 'plugin' }));
   }
   async function syncServerRiders(server, ids, where) {
@@ -925,7 +944,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     paint.busy = true; onChange(status());
     try {
       const received = { ...(cfg().received || {}) };
-      const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: loadouts, onProgress: progress });
+      const results = await paintsync.fetchFriends({ call, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: loadouts, onProgress: progress });
       paintsync.touchReceived(received, results);
       setCfg({ received });
       if (results.some((p) => p.items.some((it) => it.state === 'downloaded'))) await onInstalled();
@@ -953,7 +972,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     const riders = withGameRider(all, s.riders || []).filter((l) => Number(l.num) > 0 && l.bikeId && l.bike && l.bikeId.toLowerCase() === l.bike.toLowerCase());
     if (!riders.length) { if (looksKey) clearLooks(); return; }
     const received = { ...(cfg().received || {}) };
-    const results = await paintsync.fetchFriends({ call, download, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: riders, onProgress: () => {} });
+    const results = await paintsync.fetchFriends({ call, modsDir: modsDir(), received, have: haveMod, viaPage, preloaded: riders, onProgress: () => {} });
     paintsync.touchReceived(received, results);
     setCfg({ received });
     noteUnavailable(results);
@@ -979,7 +998,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
   const catalogReady = () => !!cfg().token && cfg().verified !== false;
   async function reportCatalog(entry) {
     if (!catalogReady()) return false;
-    try { await call('POST', '/v1/catalog/report', entry); return true; } catch { return false; }
+    try { await call('POST', '/v1/catalog/report', entry); exactLookups.clear(); return true; } catch { return false; }
   }
   async function catalogLookup(keys) {
     if (!catalogReady() || !keys.length) return {};
@@ -1027,7 +1046,7 @@ function create({ store, userDir, installDir, appDir, modsDir, isGameRunning, st
     return result;
   }
 
-  return { start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, refreshGearStatus, reportCatalog, catalogLookup, catalogBad, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
+  return { forgetCatalog: () => exactLookups.clear(), start, stop, status, installPlugin, removePlugin, connect, disconnect, signIn, signInCode, cancelSignIn, leaderboard, setShare, servers, syncFriends, refreshFriendGear, friendLoadout, noteJoin, serverRiders, syncServerRiders, setServerShare, setUpnp, checkFirewall, allowFirewall, refresh: readState, syncPaints, refreshGearStatus, reportCatalog, catalogLookup, catalogBad, setPaintSync, removeReceived, known: (ids) => call('POST', '/v1/known', { ids }),
     notifications: () => call('GET', '/v1/notifications'),
     shareMod: (to, postId, title) => call('POST', '/v1/modshare', { to, postId, title }),
     readNotification: (id) => call('POST', '/v1/notifications/read', { id }),

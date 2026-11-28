@@ -1,4 +1,8 @@
 // Sync only the currently equipped models and paints. Original paint bytes stay intact.
+// v30: no file is uploaded or downloaded through the CoreMX service. Each item you wear is shared as
+// its fingerprint (SHA-256) and, when one is known, the MXB Mods download that gives exactly that file
+// (your own install records, or the shared gear catalog). A friend's CoreMX installs that download from
+// MXB Mods and checks the fingerprint. Items with no such download aren't shared.
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -7,6 +11,7 @@ const profile = require('./profile');
 const pnt = require('./pnt');
 const gear = require('./gear-assets');
 const { chainOf, readChain } = require('./asset-sources');
+const gearKeys = require('./gear-keys');
 const { modelBundle, validateModel, MAX_FILE } = require('./gear-sync');
 const { validateRiderPaint } = require('./paint-compat');
 const tyres = require('./tyres');
@@ -16,8 +21,11 @@ const PAID_MESSAGE = 'Paid mod — not installing.';
 const ACCOUNT_BOUND_MESSAGE = 'This file is tied to your account. Your friend needs their own copy.';
 const syncError = (e) => e.code === 'MXBM_ACCOUNT_BOUND' ? ACCOUNT_BOUND_MESSAGE : e.message;
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const fileSha = (file) => new Promise((resolve, reject) => { const h = crypto.createHash('sha256'); fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject); });
 const safeRel = (p) => typeof p === 'string' && /^(bikes|rider|tyres)\/.+\.(pnt|pkz)$/i.test(p) && !p.split('/').some((x) => !x || x === '.' || x === '..') && !/[\\:\0]/.test(p) && (!/\.pkz$/i.test(p) || /^(rider\/(?:riders\/[^/]+|(?:helmets|boots|protections)\/[^/]+)|tyres\/[^/]+)\.pkz$/i.test(p));
 const readable = (buf) => { try { return pnt.names(buf).length > 0; } catch { return false; } };
+// A creator-locked file as MX Bikes reads it (KCOL footer). Only its fingerprint is ever used.
+const sealedPaint = (buf) => Buffer.isBuffer(buf) && buf.length >= 170 && buf.toString('ascii', buf.length - 62, buf.length - 58) === 'KCOL';
 const modelOf = { helmetPaint: 'helmet', gogglesPaint: 'helmet', bootsPaint: 'boots', protectionPaint: 'protection' };
 const defaults = (kind, name) => kind === 'rider' ? /^(default_mx|default_sm)$/i.test(name) : kind === 'protection' ? /^(full|neck)$/i.test(name) : name === 'default';
 
@@ -69,13 +77,14 @@ async function outfitFiles(modsDir, prof, bike, protectedPaths = [], stockPkz = 
       if (!data && s.id !== 'bikePaint' && stockPkz && await gear.paintSource({ modsDir, rider, stockPkz }, s.id, c).catch(() => null)) continue;
       // A livery inside the bike's own package (readable, or encrypted like the OEM bikes') comes with the bike.
       if (s.id === 'bikePaint' && (data ? data.archivePath : bikeDir && fs.existsSync(bikeDir + '.pkz'))) { unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: WITH_BIKE_MESSAGE, included: 'bike' }); continue; }
-      if (!data || !readable(data.buf) || !safeRel(target)) throw new Error('Paint file is missing or unreadable (it may be locked by its creator)');
+      const lockedLoose = data && !data.archivePath && sealedPaint(data.buf);
+      if (!data || !(readable(data.buf) || lockedLoose) || !safeRel(target)) throw new Error('Paint file is missing or unreadable (it may be locked by its creator)');
       const needs = [];
       if (s.id === 'bikePaint') needs.push({ kind: 'bike', name: bike });
       if (modelOf[s.id] && c[modelOf[s.id]] && !defaults(modelOf[s.id], c[modelOf[s.id]])) needs.push({ kind: modelOf[s.id], name: c[modelOf[s.id]], rider });
       if (['suitPaint', 'glovesPaint'].includes(s.id) && !defaults('rider', rider)) needs.push({ kind: 'rider', name: rider });
       if (protectedItem(target)) unavailable.push({ slot: s.id, label: s.label + ': ' + name, error: PAID_MESSAGE });
-      else items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs });
+      else items.push({ slot: s.id, label: s.label + ': ' + name, value: name, rider, path: target, sha256: sha256(data.buf), size: data.buf.length, buf: data.buf, needs, ...(data.archivePath ? { packagePath: data.archivePath } : {}) });
     } catch (e) {
       // Where it lives: the paint file, then the model it belongs to (a paint inside a model package).
       const mk = modelOf[s.id], folder = { helmet: 'helmets', boots: 'boots', protection: 'protections' }[mk];
@@ -130,12 +139,40 @@ function modSources(installs) {
     return null;
   };
 }
+// v30: (catalogKey, sha) -> the MXB Mods download you installed that gave exactly this file, or null.
+// From free MXB Mods pages. The fingerprint is the one recorded at install (gearShas); installs from
+// before that use the fingerprint last read from the installed file (catalogShas), as the gear catalog
+// does. A download that needed a browser window is still the right link (background: false): a friend's
+// CoreMX says it has to be opened in the browser. Background downloads are preferred.
+function ownLinks(installs, cache = {}) {
+  const recs = Object.values(installs || {}).filter((r) => r && !r.shopKey && Number.isSafeInteger(Number(r.postId)) && Number(r.postId) > 0 && /^https:\/\/mxb-mods\.com\//i.test(String(r.link || '')));
+  return (key, sha) => {
+    if (!key || !/^[a-f0-9]{64}$/.test(String(sha || ''))) return null;
+    let fallback = null;
+    for (const r of recs) {
+      const per = r.downloads && Object.keys(r.downloads).length ? Object.entries(r.downloads) : r.source ? [[r.source, r.files]] : [];
+      for (const [download, files] of per) {
+        if (!/^https?:\/\//i.test(download) || download.length > 300 || !Array.isArray(files)) continue;
+        if (!gearKeys.keysForFiles(files).includes(key)) continue;
+        const exact = r.gearShas ? r.gearShas[key] === sha
+          : files.some((f) => cache[f] && cache[f].sha === sha && gearKeys.keysForFile(f)[0] === key);
+        if (!exact) continue;
+        const hit = { postId: Number(r.postId), title: String(r.title || '').slice(0, 100), link: String(r.link).slice(0, 300), download, exact: true,
+          ...(/^https:\/\//i.test(String(r.image || '')) ? { image: String(r.image).slice(0, 300) } : {}) };
+        if (r.backgroundDownloads?.[download]) return hit;
+        if (!fallback) fallback = hit;
+      }
+    }
+    return fallback;
+  };
+}
 const SOURCE_MESSAGE = 'Too big or locked to send. Riders get it from its MXB Mods page (CoreMX installs it for them).';
 // Files that come with the bike itself (its default tyre, a livery inside the bike's package): anyone
 // riding that bike has them, so they are not uploaded.
 const WITH_BIKE_MESSAGE = 'Comes with the bike';
 
-async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, sourceFor = () => null, onProgress = () => {} }) {
+// linkFor(item, cur, bike) -> { state: 'linked' | 'outdated' | 'none', source? }: see online.js.
+async function share({ call, modsDir, prof, bike, bikeName, appearance, protectedPaths = [], stockPkz = null, sourceFor = () => null, linkFor = async () => ({ state: 'none' }), onProgress = () => {} }) {
   const outfit = await outfitFiles(modsDir, prof, bike, protectedPaths, stockPkz);
   outfit.unavailable = outfit.unavailable.map(({ files, ...u }) => {
     if (u.error === PAID_MESSAGE) return u;
@@ -143,22 +180,36 @@ async function share({ call, upload, modsDir, prof, bike, bikeName, appearance, 
     return source ? { ...u, error: SOURCE_MESSAGE, source } : u;
   });
   if (appearance) outfit.unavailable.push(appearance);
-  // The free MXB Mods page each shared file was installed from: other riders install from there
-  // first (service v27), and use the file sent through the service only if that doesn't work.
+  // Each item: the MXB Mods download that gives exactly this file (v30). Only the fingerprint, the
+  // item's name and place, and that link are shared; the file itself never leaves this PC.
   const where = (p) => [p, p.replace(/\.pkz$/i, ''), p.replace(/^rider\/riders\/default_mx\/(paints|gloves)\//i, 'rider/$1/')];
-  const items = outfit.items, meta = items.map(({ buf, ...m }) => { const source = sourceFor(where(m.path)); return source ? { ...m, source } : m; });
-  // onDemand: the service asks for a file only once someone needs it (see server/mxbm-server.js).
-  const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable, onDemand: true };
-  const r = await call('POST', '/v1/loadout', payload);
-  const missing = items.filter((i) => (r.missing || []).includes(i.sha256));
-  let completed = 0;
-  for (const it of missing) {
-    onProgress({ phase: 'uploading', label: it.label, completed, total: missing.length, loaded: 0, size: it.size });
-    await upload(it.sha256, it.buf, (loaded) => onProgress({ phase: 'uploading', label: it.label, completed, total: missing.length, loaded, size: it.size }));
-    onProgress({ phase: 'uploading', label: it.label, completed: ++completed, total: missing.length, loaded: it.size, size: it.size });
+  const cur = Object.fromEntries(outfit.equipped.map((e) => [e.slot, e.value]));
+  const meta = [];
+  // A paint inside a package (a model's own .pkz, or a paint pack) comes with that package: it gets the
+  // package's link (the model's, when it's the model you wear). Models first, so their links are known.
+  const ordered = [...outfit.items].sort((a, b) => (b.modelKind ? 1 : 0) - (a.modelKind ? 1 : 0));
+  const byPath = new Map();
+  for (const { buf, packagePath, ...m } of ordered) {
+    onProgress({ phase: 'checking', label: m.label, completed: meta.length, total: outfit.items.length });
+    let link;
+    const pkgRel = packagePath ? path.relative(modsDir, packagePath).split(path.sep).join('/') : null;
+    if (pkgRel && byPath.has(pkgRel.toLowerCase())) link = byPath.get(pkgRel.toLowerCase());
+    else if (pkgRel && !pkgRel.startsWith('..')) {
+      const key = gearKeys.keysForFile(pkgRel)[0];
+      const pkgSha = key ? await fileSha(packagePath).catch(() => null) : null;
+      link = pkgSha ? await Promise.resolve(linkFor({ ...m, sha256: pkgSha, catalogKey: key }, cur, bike)).catch(() => ({ state: 'none' })) : { state: 'none' };
+      byPath.set(pkgRel.toLowerCase(), link);
+    } else link = await Promise.resolve(linkFor(m, cur, bike)).catch(() => ({ state: 'none' }));
+    if (m.modelKind) byPath.set(m.path.toLowerCase(), link);
+    // Not linked and inside the model you wear: it's listed (and fixed) with that model.
+    const inWornModel = pkgRel && outfit.items.some((o) => o.modelKind && o.path.toLowerCase() === pkgRel.toLowerCase());
+    const state = link.state === 'linked' ? 'linked' : inWornModel ? 'withModel' : link.state || 'none';
+    const page = link.source || sourceFor(where(m.path));
+    meta.push({ ...m, share: state, ...(page ? { source: link.state === 'linked' ? page : { ...page, exact: false } } : {}) });
   }
-  if (missing.length) await call('POST', '/v1/loadout', payload);
-  // Keep the former array return shape for the Sharing summary.
+  meta.sort((a, b) => outfit.items.findIndex((i) => i.slot === a.slot) - outfit.items.findIndex((i) => i.slot === b.slot));
+  const payload = { bike, bikeName, items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable, onDemand: true };
+  await call('POST', '/v1/loadout', payload);
   return { items: meta, equipped: outfit.equipped, unavailable: outfit.unavailable };
 }
 
@@ -201,8 +252,6 @@ async function inspectItem(it, { modsDir, have = () => true, received = {} }) {
     if (data && !owned) return { ...entry, state: 'name-taken', error: 'A different paint with this name is already installed' };
   }
   if (existing && (!received[it.path] || sha256(existing) !== received[it.path].sha256)) return { ...entry, state: 'name-taken', error: 'A different file with this name is already installed' };
-  // Needed, but its owner hasn't uploaded it yet (uploads happen once someone needs a file).
-  if (it.available === false) return { ...entry, state: 'waiting' };
   return entry;
 }
 
@@ -273,6 +322,7 @@ const pendingState = (sha, ownerOnline, now = Date.now()) => {
   return now - (asked.get(sha) || now) > STALL_AFTER ? 'stalled' : 'uploading';
 };
 async function requestMissing(call, report, now = Date.now()) {
+  if (call !== 'legacy') return;   // v30: files are never sent through the service
   const waiting = report.flatMap((lo) => lo.items.filter((it) => it.state === 'waiting'));
   if (!waiting.length) return;
   for (const it of waiting) if (!asked.has(it.sha256)) asked.set(it.sha256, now);
@@ -291,44 +341,21 @@ async function requestMissing(call, report, now = Date.now()) {
 // viaPage(lo, item): for a file you don't have, try its MXB Mods page first (the owner's, or the shared
 // catalog). A truthy answer means it's being installed from there: the file isn't asked for or
 // downloaded through the service this time (state 'page'). Falsy: the file comes through the service.
-async function fetchFriends({ call, download, modsDir, received, have, friendId, preloaded, viaPage = null, onProgress = () => {} }) {
+// v30: a file you don't have comes only from the MXB Mods download that gives exactly it (viaPage
+// returns its install state, or { state: 'outdated' } / null). Nothing is downloaded from the service:
+// without such a download the item is 'nolink' (their CoreMX found no MXB Mods download for it) or
+// 'outdated' (the download now gives a newer file than theirs).
+async function fetchFriends({ call, modsDir, received, have, friendId, preloaded, viaPage = null, onProgress = () => {} }) {
   const report = await listFriends({ call, modsDir, received, have, friendId, preloaded });
-  if (viaPage) for (const lo of report) for (const it of lo.items) {
+  for (const lo of report) for (const it of lo.items) {
     if (!['ready', 'waiting'].includes(it.state)) continue;
-    const page = await Promise.resolve(viaPage(lo, it)).catch(() => null);
-    if (page) { it.state = 'page'; it.page = page; }
+    const page = viaPage ? await Promise.resolve(viaPage(lo, it)).catch(() => null) : null;
+    if (page && page.state === 'linkfailed') { it.state = 'linkfailed'; it.error = page.error; }
+    else if (page && page.state === 'outdated') { it.state = 'outdated'; it.error = 'They have an older version than its MXB Mods download gives now'; }
+    else if (page) { it.state = 'page'; it.page = page; }
+    else { it.state = 'nolink'; it.error = "Their CoreMX has no MXB Mods download for this exact file (installed another way)"; }
   }
-  await requestMissing(call, report);
-  const pending = report.flatMap((lo) => lo.items.filter((it) => it.state === 'ready').map((it) => ({ lo, it })));
-  let completed = 0;
-  for (const { lo, it } of pending) {
-    const progress = (loaded) => onProgress({ phase: 'downloading', friendId: lo.id, friendName: lo.name || '', label: it.label, completed, total: pending.length, loaded, size: it.size });
-    progress(0);
-    try {
-      const buf = await download(it.sha256, progress);
-      if (sha256(buf) !== it.sha256 || buf.length !== it.size || (it.modelKind ? !await validateModel(buf, it.modelKind) : !readable(buf))) throw new Error('Shared file failed validation');
-      const dst = path.resolve(modsDir, ...it.path.split('/'));
-      // Recheck immediately before writing, including symlink ancestors.
-      const root = await fsp.realpath(modsDir);
-      await fsp.mkdir(path.dirname(dst), { recursive: true });
-      const parent = await fsp.realpath(path.dirname(dst));
-      if (!parent.toLowerCase().startsWith(root.toLowerCase() + path.sep)) throw new Error('Destination is outside your mods folder');
-      const latest = await inspectItem(it, { modsDir, received, have });
-      if (latest.state !== 'ready') { Object.assign(it, latest); }
-      else {
-        if (received[it.path]) await fsp.writeFile(dst, buf);
-        else await fsp.writeFile(dst, buf, { flag: 'wx' });
-        received[it.path] = { sha256: it.sha256, from: lo.name || lo.id, at: Date.now() };
-        it.state = 'downloaded'; it.needs = [];
-      }
-    } catch (e) { it.state = 'failed'; it.error = e.message; }
-    completed++;
-    onProgress({ phase: 'downloading', friendId: lo.id, label: it.label, completed, total: pending.length, loaded: 0, size: 0 });
-  }
-  // Tell the service which asked-for files are installed now, so it may let them go (it keeps them
-  // until then, even across an interrupted download). Older services have no /v1/received.
-  const done = [...new Set(report.flatMap((lo) => lo.items.filter((it) => it.state === 'downloaded' || (it.state === 'have' && asked.has(it.sha256))).map((it) => it.sha256)))];
-  if (done.length) { try { await call('POST', '/v1/received', { shas: done.slice(0, 64) }); for (const sha of done) asked.delete(sha); } catch {} }
+  void onProgress;
   // Refresh requirements after models have been installed.
   for (const lo of report) for (const it of lo.items) {
     it.needs = [];
@@ -389,4 +416,4 @@ async function pruneReceived(modsDir, received, { days, now = Date.now(), keep =
   }
   return n;
 }
-module.exports = { WITH_BIKE_MESSAGE, requestMissing, pendingState, modSources, outfitFiles, share, listFriends, fetchFriends, removeReceived, touchReceived, pruneReceived, safeRel, readable };
+module.exports = { WITH_BIKE_MESSAGE, requestMissing, pendingState, modSources, ownLinks, outfitFiles, share, listFriends, fetchFriends, removeReceived, touchReceived, pruneReceived, safeRel, readable };

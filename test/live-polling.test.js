@@ -29,9 +29,9 @@ test('progress and failed friends refreshes stay bounded instead of immediately 
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/renderer/live.js'), 'utf8'), context);
   const pending = context.friendGearSummary([{ state: 'have' }, { state: 'downloaded' }, { state: 'ready' }]);
-  assert.equal(pending.text, '1 update queued · 2 of 3 free files synced');
+  assert.equal(pending.text, '1 installing from MXB Mods · 2 of 3 files synced');
   assert.equal(pending.complete, false);
-  assert.equal(context.friendGearSummary([{ state: 'have' }, { state: 'downloaded' }]).text, '2 of 2 free files synced');
+  assert.equal(context.friendGearSummary([{ state: 'have' }, { state: 'downloaded' }]).text, '2 of 2 files synced');
   const status = { service: { connected: true }, plugin: { installed: true }, game: { running: false }, paintSync: {} };
   for (let i = 0; i < 100; i++) listeners['online:status'](status);
   await new Promise((resolve) => setImmediate(resolve));

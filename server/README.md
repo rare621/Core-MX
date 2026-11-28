@@ -11,7 +11,7 @@ Powers **Live servers** (every server an app user rides on, with its track and r
 4. On your router, forward **TCP 60000** to this PC. Giving this PC a fixed local IP in the router helps, so the forward keeps working.
 5. Double-click **start-server.cmd** and leave the window open. Close it to stop the service.
 
-State is saved next to the script (`mxbm-data.json`, plus paint files in `mxbm-files\`), so it survives restarts.
+State is saved next to the script (`mxbm-data.json`), so it survives restarts. Since v30 the service stores no gear files (`mxbm-files\` is emptied on start).
 On first start, the server also creates `admin.key` next to `mxbm-data.json`. Keep it private and back it up; it is needed to unlock the Admin tab in the app. You can alternatively supply `MXBM_ADMIN_KEY` as a server environment variable.
 Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <file>` and `--maxstore <MB>` change where data lives and the synced file storage cap (default 4096 MB, or 102400 MB with R2).
 
@@ -19,7 +19,11 @@ Run it by hand with `node mxbm-server.js --port 60000` if you prefer; `--data <f
 
 Stop the server window, then copy **mxbm-server.js**, **cache-cleanup.js** and **r2.js** from the new release ZIP into your existing server folder. Start **start-server.cmd** again. Keep **mxbm-data.json**, **admin.key** (if present), and **mxbm-files** where they are: those contain the accounts, admin credential, and shared files. No account reset or port-forwarding change is needed.
 
-## Store synced files in Cloudflare R2 (recommended)
+## Cloudflare R2 (no longer used for gear)
+
+Since service v30 no gear files are stored anywhere. If `r2.json` is present, v30 uses it only to delete every gear file left in the bucket (at start and hourly). After that has run once you can delete the bucket and `r2.json`. The notes below describe how R2 worked up to v29.
+
+### Up to v29
 
 By default, every paint and gear model riders share is stored on this PC and downloaded from it, which uses this PC's upload speed for every download. With R2, files are uploaded and downloaded straight to and from Cloudflare R2 instead. This PC only hands out short-lived links and checks each upload. R2 doesn't charge for downloads, and the first 10 GB of storage each month is free.
 
@@ -54,6 +58,7 @@ Accounts are created by **Sign in with Steam**: the app opens Steam's own sign-i
 - **v27: shared gear catalog.** Every CoreMX install from an MXB Mods page reports which gear files that download really put on the PC (helmets, boots, protections, rider models, paints, liveries, tyres) with the page and download. When a rider's gear can't be sent (over the sync limit, or locked), other riders' CoreMX installs it from a page in this list, after the owner's own page and before a name search. An install that didn't contain the item counts against that entry; entries with more of those than confirmations are no longer handed out. Stored in `mxbm-data.json` (`catalog`), verified accounts only. Shared outfit items also carry the MXB Mods page the owner installed them from: other riders get the file through the service first, and install from that page (then the catalog, then a name search) when the download fails, the upload stalls or the owner is offline.
 - **v28: exact files from MXB Mods instead of R2.** Catalog reports also carry each gear file's SHA-256 (the fingerprint gear sync uses) and whether the download worked in the background (straight from its link, no browser window). When a rider wears a file whose fingerprint matches an entry that riders installed in the background, other riders install that exact download from MXB Mods and the file is never uploaded to R2. Anything else (edited files, other versions, downloads that need a browser) goes through R2 first as before.
 - **v28: who can make you upload.** A rider's request for one of your files makes your CoreMX upload it only while their CoreMX is open (heard from in the last 10 minutes) and only if they are a mutual friend or on the same server as you right now. A request from someone you rode with earlier keeps an already uploaded file stored until they have it, but no longer makes you upload.
+- **v30: no gear files on the service.** The service stores no gear files at all. On start (and hourly) it deletes every gear file it ever stored, in R2 (`files/` objects, tracked or not) and in `mxbm-files`, and clears its records of them. `/v1/files/...` uploads and downloads answer `410`, a loadout never asks for uploads (older apps too), and `/v1/want` answers `gone`. An outfit shares only each item's fingerprint (SHA-256) and, when known, the MXB Mods download that gives exactly that file; other riders' CoreMX installs that download from MXB Mods and checks the fingerprint. Catalog entries now also say which file a download gives now (`latest`, from each report's install time), so CoreMX can tell a rider when their copy is out of date. `/v1/health` lists `links-only`.
 - **v29: keep live server addresses stable.** If a rider's game briefly stops reporting an address while they remain on the same live server, retain the last known address so Join does not unexpectedly switch to Set address. A fresh valid report replaces the saved address.
 - **Return address:** behind the coremx.app website proxy (`coremx-website-proxy.js`), the proxy tells the service the public address. `start-server.cmd` also passes `--publicurl https://coremx.app`; set it to your own address if you run the service elsewhere.
 

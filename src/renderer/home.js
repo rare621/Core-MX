@@ -2,7 +2,7 @@
 'use strict';
 
 // Home loads account and server data first; its rider snapshot renders later.
-S.home = { rider: null, request: null, introPlayed: false, previewKey: null, previewImage: null, previewBusy: false };
+S.home = { rider: null, request: null, introPlayed: false, previewKey: null, previewBusy: false, viewer: null, modelOk: false };
 
 function finishStartup() {
   const screen = $('#startupScreen');
@@ -18,29 +18,16 @@ function homePut(id, html) {
   if (box && box._lastHtml !== html) { box.innerHTML = html; box._lastHtml = html; }
 }
 
-async function warmHomeRiderPreview() {
-  try {
-    const hint = JSON.parse(localStorage.getItem('coremx.homePreview') || 'null');
-    if (!hint || typeof hint.key !== 'string' || typeof hint.profile !== 'string' || typeof hint.bike !== 'string') return;
-    const image = await api.invoke('rider:thumbCacheGet', hint.key);
-    if (!image || S.home.previewBusy || S.home.previewImage || S.home.rider &&
-      (S.home.rider.profile !== hint.profile || S.home.rider.bike && S.home.rider.bike.id !== hint.bike)) return;
-    S.home.previewHint = hint;
-    S.home.previewKey = hint.key;
-    S.home.previewImage = image;
-    drawHome();
-  } catch {}
-}
-
 function renderHome(c) {
   const entrance = S.home.introPlayed ? '' : ' home-enter';
   S.home.introPlayed = true;
-  c.innerHTML = `<div class="view home-view"><div class="main"><div class="scroller home-scroll"><div class="home-page${entrance}">
-    <section class="home-hero"><div class="home-hero-copy"><div class="home-eyebrow">YOUR MX BIKES HOME</div><h1 id="homeGreeting">Ready to ride?</h1></div><div class="home-actions"><button class="btn btn-primary" data-home-go="game">${icon('play')}Start riding</button><button class="btn" data-home-go="host">${icon('signal')}Host a World</button></div></section>
-    <div class="home-grid"><section class="home-panel home-servers"><div class="home-panel-head"><div><span class="home-kicker">GO RIDE</span><h2>Live servers</h2></div><button class="btn btn-sm" data-home-go="online">View all ${icon('chevron')}</button></div><div id="homeServers" class="home-panel-body"></div></section>
-      <section class="home-panel home-friends"><div class="home-panel-head"><div><span class="home-kicker">YOUR CREW</span><h2>Friends</h2></div><button class="btn btn-sm" data-home-go="friends">View friends ${icon('chevron')}</button></div><div id="homeFriends" class="home-panel-body"></div></section>
-      <section class="home-panel home-rider"><div class="home-panel-head"><div><span class="home-kicker">READY FOR THE GATE</span><h2>Your rider</h2></div><button class="btn btn-sm" data-home-go="rider">Edit outfit ${icon('chevron')}</button></div><div id="homeRider" class="home-panel-body"></div></section>
-      <section class="home-panel home-recents"><div class="home-panel-head"><div><span class="home-kicker">JUMP BACK IN</span><h2>Recently played</h2></div><button class="btn btn-sm" data-home-go="recents">See all ${icon('chevron')}</button></div><div id="homeRecents" class="home-panel-body"></div></section>
+  c.innerHTML = `<div class="view home-view"><div class="main">
+    <div class="toolbar home-toolbar"><div class="home-heading"><h2 id="homeGreeting">Welcome back</h2></div><div class="grow"></div><button class="btn" data-home-go="host">${icon('signal')}Host a World</button><button class="btn btn-primary" data-home-go="online">${icon('play')}Play online</button></div>
+    <div class="scroller home-scroll"><div class="home-page${entrance}"><div class="home-grid">
+      <section class="home-panel home-rider"><div class="home-panel-head"><div><span class="home-kicker">YOUR SETUP</span><h2>Ready to ride</h2></div><button class="btn btn-sm" data-home-go="rider">Edit outfit ${icon('chevron')}</button></div><div id="homeRider" class="home-panel-body"></div><div class="home-shortcuts"><button data-home-go="library">${icon('library')}My Mods ${icon('chevron')}</button><button data-home-go="get">${icon('globe')}Get Mods ${icon('chevron')}</button></div></section>
+      <div class="home-side"><section class="home-panel home-servers"><div class="home-panel-head"><div><span class="home-kicker">ONLINE</span><h2>Live servers</h2></div><button class="btn btn-sm" data-home-go="online">View all ${icon('chevron')}</button></div><div id="homeServers" class="home-panel-body"></div></section>
+        <section class="home-panel home-friends"><div class="home-panel-head"><div><span class="home-kicker">YOUR FRIENDS</span><h2>Friends</h2></div><button class="btn btn-sm" data-home-go="friends">View all ${icon('chevron')}</button></div><div id="homeFriends" class="home-panel-body"></div></section>
+        <section class="home-panel home-recents"><div class="home-panel-head"><div><span class="home-kicker">QUICK JOIN</span><h2>Recently played</h2></div><button class="btn btn-sm" data-home-go="recents">View all ${icon('chevron')}</button></div><div id="homeRecents" class="home-panel-body"></div></section></div>
     </div></div></div></div></div>`;
   drawHome();
 }
@@ -51,7 +38,7 @@ function drawHome() {
   const connected = !!st?.service?.connected;
   const steamName = S.accounts?.steam?.name || st?.service?.name || '';
   const greeting = $('#homeGreeting');
-  if (greeting) greeting.textContent = steamName ? `Ready to ride, ${steamName}?` : 'Ready to ride?';
+  if (greeting) greeting.textContent = steamName ? `Welcome back, ${steamName}` : 'Welcome back';
   const servers = S.live?.servers?.servers || [];
   const liveFriends = new Map((S.live?.friends || []).map((f) => [f.id, f]));
   const friends = (S.friends || []).map((f) => ({ f, l: liveFriends.get(f.code) }));
@@ -86,11 +73,12 @@ function drawHome() {
 
   const rider = S.home.rider;
   const activeProfile = S.rider?.profile || rider?.profile;
-  const selectedBike = S.rider?.bike ? S.rider?.bikes?.find((b) => b.id === S.rider.bike) : rider?.bike;
+  const selectedBike = S.rider?.bike ? S.rider?.bikes?.find((b) => b.id === S.rider.bike) || (rider?.bike?.id === S.rider.bike ? rider.bike : null) : rider?.bike;
   const bikeName = selectedBike ? prettifyBike(selectedBike.id || selectedBike.name || '') : 'Choose your bike';
-  const preview = S.home.previewImage ? `<img src="${S.home.previewImage}" alt="Your rider on ${esc(bikeName)}">`
-    : `<div class="home-preview-wait">${icon('helmet')}<div>${S.home.previewBusy ? 'Preparing your rider and bike…' : 'Your rider and bike will appear here'}</div></div>`;
-  homePut('homeRider', `<div class="home-rider-preview">${preview}</div><div class="home-rider-meta"><div><b>${esc(activeProfile || 'Loading rider…')}</b><small>${esc(bikeName)}</small></div><button class="btn btn-sm" data-home-go="rider">Customize ${icon('chevron')}</button></div>`);
+  const preview = S.home.modelOk ? '' : `<div class="home-preview-wait">${icon('helmet')}<div>${S.home.previewBusy ? 'Preparing your rider and bike…' : 'Your rider and bike will appear here'}</div></div>`;
+  homePut('homeRider', `<div class="home-rider-preview ${S.home.modelOk ? '' : 'is-loading'}" id="homeRiderStage" aria-label="3D preview of your rider on ${esc(bikeName)}">${preview}</div><div class="home-rider-meta"><div><small>RIDER</small><b>${esc(activeProfile || 'Loading rider…')}</b></div><div><small>BIKE</small><b>${esc(bikeName)}</b></div></div>`);
+  const stage = $('#homeRiderStage');
+  if (stage && S.home.viewer && S.home.viewer.el.parentElement !== stage) stage.prepend(S.home.viewer.el);
 }
 
 async function refreshHome() {
@@ -110,12 +98,12 @@ async function refreshHome() {
       if (!profile) return;
       if (S.home.rider?.profile !== profile) {
         S.home.rider = { profile, bike: null };
-        if (S.home.previewHint?.profile !== profile) S.home.previewImage = null;
+        S.home.modelOk = false;
       }
       drawHome();
       const bikes = await api.invoke('rider:bikes', profile);
       const bike = bikes.find((b) => b.selected) || bikes.find((b) => b.installed) || bikes[0];
-      if (S.home.rider?.profile !== profile || S.home.rider?.bike?.id !== bike?.id && S.home.previewHint?.bike !== bike?.id) S.home.previewImage = null;
+      if (S.home.rider?.profile !== profile || S.home.rider?.bike?.id !== bike?.id) S.home.modelOk = false;
       S.home.rider = { profile, bike };
       drawHome();
       if (S.home.rider.bike) {
@@ -136,50 +124,37 @@ async function prepareHomeRiderPreview() {
     .map((it) => [it.id, it.size, it.mtime].join(':')).join('|');
   let stamp = 2166136261;
   for (let i = 0; i < sources.length; i++) stamp = Math.imul(stamp ^ sources.charCodeAt(i), 16777619);
-  const key = JSON.stringify(['home-rider-v1', profile, bike.id, loadout.current, loadout.identity?.riderNumber, stamp >>> 0]);
-  if (S.home.previewKey === key && S.home.previewImage) return;
-  if (S.home.previewBusy) { S.home.previewKey = key; S.home.previewImage = null; S.home.previewPending = true; return; }
+  const key = JSON.stringify(['home-rider-live-v1', profile, bike.id, loadout.current, loadout.identity?.riderNumber, stamp >>> 0]);
+  if (S.home.previewKey === key && S.home.modelOk && S.home.viewer) return;
+  if (S.home.previewBusy) { S.home.previewKey = key; S.home.previewPending = true; return; }
   S.home.previewBusy = true;
   S.home.previewKey = key;
-  S.home.previewImage = null;
+  S.home.modelOk = false;
   drawHome();
   try {
-    const cached = await api.invoke('rider:thumbCacheGet', key);
-    if (cached) {
-      if (S.home.previewKey === key) {
-        S.home.previewImage = cached;
-        S.home.previewHint = { key, profile, bike: bike.id };
-        try { localStorage.setItem('coremx.homePreview', JSON.stringify(S.home.previewHint)); } catch {}
-      }
-      return;
-    }
-    // The startup gate never waits for 3D. Render only after it has gone away.
+    // The startup gate never waits for 3D. Build the scene once Home is visible.
     if ($('#startupScreen') && !$('#startupScreen').classList.contains('done')) {
       await new Promise((resolve) => setTimeout(resolve, 2500));
     }
+    if (!window.RiderViewer) await new Promise((resolve) => window.addEventListener('riderviewer-ready', resolve, { once: true }));
+    if (S.view !== 'home' || S.home.previewKey !== key) return;
     const [riderModel, bikeModel] = await Promise.all([
       api.invoke('rider:model', profile, bike.id, loadout.current),
       api.invoke('bike:model', profile, bike.id, loadout.current.bikePaint || '', 1024,
-        { ...loadout.current, riderNumber: loadout.identity?.riderNumber ?? '' }),
+        { ...loadout.current, riderNumber: loadout.identity?.riderNumber ?? '' }).catch(() => null),
     ]);
-    if (S.home.previewKey !== key) return;
-    const host = document.createElement('div');
-    host.className = 'home-render-host';
-    document.body.appendChild(host);
-    let viewer;
-    try {
-      viewer = window.RiderViewer.create(host);
-      viewer.loadScene({ rider: riderModel, bike: bikeModel });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const image = viewer.el.querySelector('canvas')?.toDataURL('image/webp', 0.84);
-      if (image && S.home.previewKey === key) {
-        S.home.previewImage = image;
-        S.home.previewHint = { key, profile, bike: bike.id };
-        try { localStorage.setItem('coremx.homePreview', JSON.stringify(S.home.previewHint)); } catch {}
-        const installedBike = (S.items || []).find((item) => item.group === 'bikes' && item.name === bike.id && !item.disabled);
-        api.invoke('rider:thumbCacheSave', key, image, installedBike?.id || null).catch(() => {});
-      }
-    } finally { viewer?.dispose(); host.remove(); }
+    if (S.view !== 'home' || S.home.previewKey !== key) return;
+    const stage = $('#homeRiderStage');
+    if (!stage) return;
+    if (!S.home.viewer) {
+      const host = document.createElement('div');
+      host.className = 'stage-canvas';
+      stage.prepend(host);
+      S.home.viewer = window.RiderViewer.create(host);
+    } else if (S.home.viewer.el.parentElement !== stage) stage.prepend(S.home.viewer.el);
+    if (bikeModel) S.home.viewer.loadScene({ rider: riderModel, bike: bikeModel });
+    else S.home.viewer.load(riderModel);
+    S.home.modelOk = true;
   } catch (e) { console.warn('Home rider preview:', e.message); }
   finally {
     S.home.previewBusy = false;
@@ -205,6 +180,7 @@ document.addEventListener('click', (e) => {
   if (!link) return;
   if (link.dataset.homeGo === 'host') { S.onlineTab = 'host'; go('online'); }
   else if (link.dataset.homeGo === 'recents') { S.onlineTab = 'recents'; go('online'); }
+  else if (link.dataset.homeGo === 'online') { S.onlineTab = 'servers'; go('online'); }
   else go(link.dataset.homeGo);
 });
 

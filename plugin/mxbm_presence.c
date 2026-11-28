@@ -345,7 +345,7 @@ EXPORT void RaceSession(void *_pData, int _iDataSize) {
  *  - If the game ever crashes inside this DLL, the hook is switched off and stays off until
  *    CoreMX ships a new plugin (HOOK_BUILD changes); the app shows a pop-up for both.
  * Research notes: plugin/MISMATCH_NOTES.md. */
-#define HOOK_BUILD 6
+#define HOOK_BUILD 7
 #define RVA_UI_SLOT  0x566C48u
 #define RVA_SIG      0xAFDF3u
 #define RVA_RETURN   0xAFE1Eu
@@ -1079,8 +1079,11 @@ static int g_looksOk = -1; /* fingerprint check: -1 not yet, 0 failed, 1 ok */
  * the right name (sent over the network) while the rider was drawn with defaults because the files
  * arrived after he was built, so a matching name alone does not mean it is shown. */
 /* Why a rider's item isn't in your game yet, from CoreMX ("wait" lines in mxbm_looks.txt): code is
- * uploading (their CoreMX is sending it), offline (their CoreMX is closed), bike (comes with a bike
- * you don't have), paid (not shared) or failed. Read by the overlay's Riders tab. */
+ * installing (CoreMX is installing it from its MXB Mods download), bike (comes with a bike you don't
+ * have), paid (not shared), outdated (their copy is older than its MXB Mods download gives now: they
+ * reinstall it), nolink (no MXB Mods download gives their exact file: they reinstall it through CoreMX),
+ * nomatch (you choose it in CoreMX) or failed. Since CoreMX 1.0.58 no files are uploaded; uploading and
+ * offline only come from older apps. Read by the overlay's Riders tab. */
 typedef struct { int num; char bike[64]; char code[12]; char label[44]; } LookWait;
 #define WAIT_MAX (LOOK_MAX * 4)
 static LookWait g_waits[WAIT_MAX];
@@ -1417,12 +1420,15 @@ static const GameList *ovModelList(int row) {
   }
 }
 
-/* The first reason code CoreMX gave for this rider's missing items (uploading first), or NULL. */
+/* The order reasons are shown in (the most useful first). */
+#define WAIT_CODES 9
+static const char *const WAIT_ORDER[WAIT_CODES] = { "installing", "uploading", "offline", "bike", "paid", "outdated", "nolink", "nomatch", "failed" };
+/* The first reason code CoreMX gave for this rider's missing items, or NULL. */
 static const char *riderWaitCode(const LookStatus *st) {
-  static const char *const ORDER[7] = { "uploading", "installing", "offline", "bike", "paid", "nomatch", "failed" };
+  const char *const *ORDER = WAIT_ORDER;
   int k, i;
   lock();
-  for (k = 0; k < 7; k++) for (i = 0; i < g_waitCount; i++)
+  for (k = 0; k < WAIT_CODES; k++) for (i = 0; i < g_waitCount; i++)
     if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { unlock(); return ORDER[k]; }
   unlock();
   return NULL;
@@ -1439,12 +1445,12 @@ static unsigned char *riderRecord(unsigned char *base, const LookStatus *st) {
   return 0;
 }
 
-/* The most useful reason CoreMX gave for this rider's missing items (uploading first). */
+/* The most useful reason CoreMX gave for this rider's missing items. */
 static int riderWait(const LookStatus *st, char *line) {
-  static const char *const ORDER[7] = { "uploading", "installing", "offline", "bike", "paid", "nomatch", "failed" };
+  const char *const *ORDER = WAIT_ORDER;
   LookWait w; int found = 0, k, i;
   lock();
-  for (k = 0; k < 7 && !found; k++)
+  for (k = 0; k < WAIT_CODES && !found; k++)
     for (i = 0; i < g_waitCount; i++)
       if (g_waits[i].num == st->num && _stricmp(g_waits[i].bike, st->bike) == 0 && strcmp(g_waits[i].code, ORDER[k]) == 0) { w = g_waits[i]; found = 1; break; }
   unlock();
@@ -1457,8 +1463,10 @@ static int riderWait(const LookStatus *st, char *line) {
     else if (!strcmp(w.code, "bike")) sprintf(line, "%.32s: comes with a bike you don't have", w.label);
     else if (!strcmp(w.code, "paid")) sprintf(line, "%.36s: paid, not shared", w.label);
     else if (!strcmp(w.code, "installing")) sprintf(line, "%.30s: CoreMX is installing it from MXB Mods...", w.label);
+    else if (!strcmp(w.code, "outdated")) sprintf(line, "%.28s: %.24s%s copy is out of date, they need to reinstall it", w.label, who, sfx);
+    else if (!strcmp(w.code, "nolink")) sprintf(line, "%.28s: %.24s needs to reinstall it through CoreMX", w.label, st->name[0] ? st->name : "they");
     else if (!strcmp(w.code, "nomatch")) sprintf(line, "%.30s: not found, choose it in CoreMX (Missing gear)", w.label);
-    else sprintf(line, "%.36s: couldn't be downloaded", w.label);
+    else sprintf(line, "%.36s: couldn't be installed from MXB Mods", w.label);
   }
   return 1;
 }
@@ -1771,7 +1779,7 @@ static void riderTodo(unsigned char *base, LookStatus *st, char *status, char *t
   else if (waiting) { strcpy(status, "Ready: pits & back"); sprintf(todo, "Go to the pits and back to the track to see their %.30s", st->models); *dot = 0xFFFFB46C; }
   else if (st->missing) {
     const char *code = riderWaitCode(st);
-    strcpy(status, code && !strcmp(code, "uploading") ? "Uploading" : code && !strcmp(code, "offline") ? "Their CoreMX is off" : code && !strcmp(code, "paid") ? "Paid gear" : code && !strcmp(code, "installing") ? "Installing" : code && !strcmp(code, "nomatch") ? "Needs you" : "Missing items");
+    strcpy(status, code && !strcmp(code, "uploading") ? "Uploading" : code && !strcmp(code, "offline") ? "Their CoreMX is off" : code && !strcmp(code, "paid") ? "Paid gear" : code && !strcmp(code, "installing") ? "Installing" : code && !strcmp(code, "nomatch") ? "Needs you" : code && !strcmp(code, "outdated") ? "Out of date" : code && !strcmp(code, "nolink") ? "Not shared" : "Missing items");
     if (!riderWait(st, todo)) {
       if (st->firstMissing[0]) sprintf(todo, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
       else sprintf(todo, "%d item%s not available to you yet", st->missing, st->missing == 1 ? "" : "s");
@@ -1944,7 +1952,7 @@ EXPORT void Draw(int _iState, int *_piNumQuads, void **_ppQuad, int *_piNumStrin
         else if (waiting) sprintf(line, "New %.40s queued: go to the pits and back to the track", st->models);
         else if (st->missing && riderWait(st, line)) { /* line set: why it isn't here yet */ }
         else if (st->missing && st->firstMissing[0]) sprintf(line, "Needs %.40s%s (check CoreMX sync)", st->firstMissing, st->missing > 1 ? " and more" : "");
-        else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, still uploading or not installed)", st->missing, st->missing == 1 ? "" : "s");
+        else if (st->missing) sprintf(line, "%d item%s not available to you yet (paid, or not on MXB Mods yet)", st->missing, st->missing == 1 ? "" : "s");
         else if (st->paints) sprintf(line, "Up to date (livery and paints applied)");
         else sprintf(line, "Up to date");
         ovText(line, x0 + 0.030f, y + 0.023f, 0.0135f, 0, waiting ? 0xFF6CB4FF : vr && st->missing ? 0xFF4FC3FF : 0xFF6CE07A);

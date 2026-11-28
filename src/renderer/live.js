@@ -386,8 +386,8 @@ async function joinLiveServer(s) {
     if (!/timeout/.test(e.message || '')) toast(esc(cleanErr(e)), 'info', 5000);
     return join();
   }
-  // Their files: ready to download, being uploaded by their CoreMX (files are uploaded once someone
-  // needs them), or waiting for their CoreMX to come online.
+  // Their files: each comes from the MXB Mods download it was installed from (v30; nothing is
+  // uploaded). Older states can't occur any more but are still counted, harmlessly.
   const UPLOADING = ['waiting', 'uploading'];
   const count = (r, states) => r.items.filter((it) => states.includes(it.state)).length;
   const sizeOf = (r) => r.items.filter((it) => it.state === 'ready').reduce((n, it) => n + (it.size || 0), 0);
@@ -410,7 +410,7 @@ async function joinLiveServer(s) {
   };
   const m = modal({
     title: `Riders on ${esc(s.name)}`, size: 'sm',
-    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} CoreMX. Download their gear so you see their bikes and outfits in game? Files their CoreMX is still uploading are waited for (up to a minute and a half). Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
+    body: `<p class="muted" style="margin-top:0">${want.length === 1 ? 'A rider' : `${want.length} riders`} on this server use${want.length === 1 ? 's' : ''} CoreMX. Download their gear so you see their bikes and outfits in game? CoreMX installs each item from the MXB Mods download it came from, and checks it is the exact same file. Your own outfit stays as it is.</p><div class="sr-list">${want.map(row).join('')}</div><div class="sr-progress muted" hidden></div>`,
     foot: `<button class="btn" data-sr-skip>Join without gear</button><span class="grow"></span><button class="btn btn-primary" data-sr-go>${icon('download')}Download & join</button>`,
   });
   let joinNow = false;
@@ -419,18 +419,18 @@ async function joinLiveServer(s) {
     const ids = $$('[data-sr]', m).filter((c) => c.checked).map((c) => want[Number(c.dataset.sr)].id);
     if (!ids.length) { m.close(); return join(); }
     e.target.disabled = true;
-    // While waiting for uploads, the other button joins right away (the rest arrives while you ride).
+    // The other button joins right away while CoreMX checks the riders' gear.
     const skip = $('[data-sr-skip]', m); skip.textContent = 'Join now';
-    const p = $('.sr-progress', m); p.hidden = false; p.innerHTML = '<div class="spinner"></div> Downloading gear…';
-    let got = 0, failed = 0, pending = 0, offline = 0;
+    const p = $('.sr-progress', m); p.hidden = false; p.innerHTML = '<div class="spinner"></div> Checking gear…';
+    let got = 0, failed = 0, pending = 0, unlinked = 0;
     const started = Date.now();
     try {
       for (;;) {
         const results = await api.invoke('online:syncServerRiders', s.name, ids, { id: s.id, address: s.address });
         if (joinNow) return;
-        got += results.reduce((n, r) => n + count(r, ['downloaded']), 0);
-        failed = results.reduce((n, r) => n + count(r, ['failed']), 0);
-        offline = results.reduce((n, r) => n + count(r, ['offline']), 0);
+        got += results.reduce((n, r) => n + count(r, ['downloaded', 'page']), 0);
+        failed = results.reduce((n, r) => n + count(r, ['failed', 'linkfailed']), 0);
+        unlinked = results.reduce((n, r) => n + count(r, ['nolink', 'outdated']), 0);
         const waiting = results.filter((r) => count(r, UPLOADING));
         pending = waiting.reduce((n, r) => n + count(r, UPLOADING), 0);
         if (!pending || Date.now() - started > 90 * 1000) break;
@@ -438,8 +438,8 @@ async function joinLiveServer(s) {
         await new Promise((resolve) => setTimeout(resolve, 4000));
         if (joinNow) return;
       }
-      const notes = [failed ? `${failed} couldn't be downloaded` : '', pending ? `${pending} still uploading (added while you ride)` : '', offline ? `${offline} wait for their CoreMX to come online` : ''].filter(Boolean);
-      toast(`Downloaded ${plural(got, 'file')}${notes.length ? ` · ${notes.join(' · ')}` : ''}`, failed ? 'info' : 'ok', 4500);
+      const notes = [failed ? `${failed} couldn't be installed` : '', unlinked ? `${unlinked} not on MXB Mods as their exact file` : ''].filter(Boolean);
+      toast(`${got ? `Installing ${plural(got, 'item')} from MXB Mods (see Downloads)` : 'Nothing to install'}${notes.length ? ` · ${notes.join(' · ')}` : ''}`, failed ? 'info' : 'ok', 5000);
     } catch (err) { toast(esc(cleanErr(err)), 'err', 6000); }
     if (joinNow) return;
     m.close(); join();
@@ -508,17 +508,14 @@ async function setLiveServerAddress(server) {
 function friendGearSummary(items) {
   const files = items || [];
   const got = files.filter((it) => it.state === 'downloaded' || it.state === 'have').length;
-  const queued = files.filter((it) => it.state === 'ready').length;
-  const uploading = files.filter((it) => it.state === 'uploading').length;
-  const notUploaded = files.filter((it) => it.state === 'waiting' || it.state === 'stalled').length;
-  const offline = files.filter((it) => it.state === 'offline').length;
-  const attention = files.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
-  const count = `${got} of ${files.length} free files synced`;
-  return { got, queued: queued + uploading, attention, complete: got === files.length,
-    text: queued ? `${queued} update${queued === 1 ? '' : 's'} queued · ${count}`
-      : uploading ? `Waiting for ${uploading} file${uploading === 1 ? '' : 's'} to upload from their CoreMX… · ${count}`
-      : notUploaded ? `${notUploaded} file${notUploaded === 1 ? '' : 's'} not uploaded yet (Sync to get ${notUploaded === 1 ? 'it' : 'them'}) · ${count}`
-      : offline ? `${offline} file${offline === 1 ? '' : 's'} download when their CoreMX is online · ${count}`
+  const queued = files.filter((it) => it.state === 'ready' || it.state === 'page').length;
+  // v30: gear comes only from its MXB Mods download. Without one (or an older version) it can't come.
+  const noLink = files.filter((it) => it.state === 'nolink' || it.state === 'outdated').length;
+  const attention = files.filter((it) => ['failed', 'linkfailed', 'name-taken', 'skipped'].includes(it.state)).length;
+  const count = `${got} of ${files.length} files synced`;
+  return { got, queued, attention: attention + noLink, complete: got === files.length,
+    text: queued ? `${queued} installing from MXB Mods · ${count}`
+      : noLink ? `${noLink} file${noLink === 1 ? '' : 's'} they need to reinstall through CoreMX · ${count}`
       : attention ? `${attention} file${attention === 1 ? '' : 's'} need attention · ${count}` : count };
 }
 async function renderFriends(c) {
@@ -596,7 +593,8 @@ async function renderFriends(c) {
   const pluginTip = alert ? '' : st && st.plugin.available && (!st.plugin.installed || st.plugin.needsUpdate)
     ? `<div class="fr-banner tip">${icon('info')}<div>${st.plugin.needsUpdate ? 'Close MX Bikes and update the game plugin to report server sessions.' : 'Install the game plugin so friends can see which server you\'re on.'}</div><button class="btn btn-sm" data-act="live-plugin-install">${st.plugin.needsUpdate ? 'Update plugin' : 'Install'}</button></div>` : '';
   const missing = connected ? (ps?.needsYou || []).length : 0;
-  const missingTip = missing ? `<div class="fr-banner tip">${icon('alert')}<div><b>${missing} item${missing === 1 ? '' : 's'} of other riders' gear</b> CoreMX couldn't find by itself.</div><button class="btn btn-sm btn-primary" data-missing-open-all>Missing gear</button></div>` : '';
+  const missingTip = (missing ? `<div class="fr-banner tip">${icon('alert')}<div><b>${missing} item${missing === 1 ? '' : 's'} of other riders' gear</b> CoreMX couldn't find by itself.</div><button class="btn btn-sm btn-primary" data-missing-open-all>Missing gear</button></div>` : '') + (connected ? unlinkedTipHtml(ps) : '');
+  if (connected && c.id === 'content') noteUnlinked(ps);
 
   // Your own card: who you are and what your friends are up to.
   const counts = { ride: rows.filter((r) => r.s[0] === 'ride').length, on: rows.filter((r) => r.s[0] === 'on').length };
@@ -613,7 +611,7 @@ async function renderFriends(c) {
     st?.service?.connected, st?.service?.name, st?.service?.error, st?.service?.verified, st?.service?.signingIn, st?.service?.needsSignIn, st?.service?.defaultUrl, st?.service?.share,
     st?.serverShare, st?.plugin?.available, st?.plugin?.installed, st?.plugin?.needsUpdate,
     st?.paintSync?.enabled, st?.paintSync?.error,
-    st?.paintSync?.received, st?.paintSync?.friends, steam.name, steam.avatarData,
+    st?.paintSync?.received, st?.paintSync?.friends, st?.paintSync?.unlinked, steam.name, steam.avatarData,
   ]);
   // Skip a redraw only while this exact Friends page is still on screen: #content is shared by
   // every page, so the key is kept on the page's own root element, which other pages replace.
@@ -801,16 +799,60 @@ function findMod(name) {
 function friendProgressHtml() {
   const ps = S.live.status && S.live.status.paintSync;
   const p = ps && ps.progress;
-  // Between syncs: files you need that a friend's CoreMX is still uploading (they download once there).
-  if (ps && !(ps.busy && p) && ps.waiting?.length) {
-    const files = ps.waiting.reduce((n, w) => n + w.files, 0);
-    return `<div class="friend-sync-progress" role="status"><div><b>Waiting for uploads</b><span>${files} file${files === 1 ? '' : 's'}</span></div><progress aria-label="Waiting for friends' uploads"></progress><div class="muted">${ps.waiting.map((w) => `${esc(w.name || 'A friend')}'s CoreMX is uploading ${w.files} file${w.files === 1 ? '' : 's'}…`).join(' · ')}</div></div>`;
-  }
   if (!ps || !ps.busy || !p) return '';
   const ratio = p.size ? Math.min(1, p.loaded / p.size) : 0;
   const pct = p.total ? Math.min(100, (p.completed + ratio) / p.total * 100) : 0;
-  return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'uploading' ? 'Sharing your outfit' : p.phase === 'downloading' ? (p.friendName ? `Downloading ${esc(p.friendName)}'s files` : 'Downloading equipped files') : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
+  return `<div class="friend-sync-progress" role="status"><div><b>${p.phase === 'checking' && p.total ? 'Checking your outfit on MXB Mods' : 'Checking files'}</b><span>${p.total ? `${p.completed} / ${p.total}` : ''}</span></div><progress max="100" ${p.total ? `value="${pct}"` : ''} aria-label="Outfit sync progress"></progress><div class="muted">${esc(p.label || '')}${p.size ? ` · ${fmtSize(p.loaded)} / ${fmtSize(p.size)}` : ''}</div></div>`;
 }
+
+// ---------- Your gear friends can't get yet (v30) ----------
+// CoreMX shares gear only as a link to the MXB Mods download that gives exactly your file (checked by
+// its fingerprint, from your own installs or every CoreMX rider's). Gear installed another way, or an
+// older version than the download gives now, can't reach friends until you reinstall it through CoreMX.
+const UNLINKED_SEEN = 'cmx.unlinkedSeen';
+function unlinkedRows(ps) { return (ps && Array.isArray(ps.unlinked) ? ps.unlinked : []); }
+function unlinkedTipHtml(ps) {
+  const rows = unlinkedRows(ps);
+  if (!rows.length) return '';
+  const old = rows.filter((r) => r.state === 'outdated').length;
+  return `<div class="fr-banner tip">${icon('alert')}<div><b>${rows.length} item${rows.length === 1 ? '' : 's'} of your gear can't reach friends yet.</b> ${old ? `${old} ${old === 1 ? 'is' : 'are'} out of date. ` : ''}Reinstall ${rows.length === 1 ? 'it' : 'them'} through CoreMX.</div><button class="btn btn-sm btn-primary" data-unlinked-open>Show list</button></div>`;
+}
+function unlinkedRowHtml(r, i) {
+  const page = r.source && r.source.postId ? `<button class="btn btn-sm btn-primary" data-unlinked-post="${i}">${icon('download')}Reinstall from MXB Mods</button>` : `<button class="btn btn-sm" data-unlinked-find="${esc(r.value || '')}">${icon('search')}Search Get Mods</button>`;
+  const why = r.state === 'outdated' ? 'Out of date: its MXB Mods download now gives a newer version.' : r.source && r.source.postId ? 'This copy is not the one its MXB Mods download gives.' : "Not installed through CoreMX, and no CoreMX rider has installed this exact file from MXB Mods yet.";
+  const how = r.source && r.source.postId ? 'Open its page, click Delete, then click Install.' : 'Search for the mod on Get Mods, click Delete, then click Install.';
+  return `<div class="friend-gear-row"><span class="slot-ico">${icon(GEAR_ICON[r.slot] || 'shirt')}</span><div><b>${esc(r.value || r.label)}</b><div class="muted">${esc(r.label || r.slot)}</div><small class="sync-warning">${esc(why)}</small><small class="muted" style="display:block">${esc(how)}</small><div>${page}</div></div></div>`;
+}
+function openUnlinked() {
+  const rows = unlinkedRows(S.live.status && S.live.status.paintSync);
+  if (!rows.length) return;
+  const old = rows.filter((r) => r.state === 'outdated');
+  const none = rows.filter((r) => r.state !== 'outdated');
+  const section = (title, list) => list.length ? `<div class="section-title" style="margin-top:12px">${title}</div><div class="friend-gear-list">${list.map((r) => unlinkedRowHtml(r, rows.indexOf(r))).join('')}</div>` : '';
+  const m = modal({ title: 'Gear your friends can’t get yet', size: 'md',
+    body: `<p class="muted" style="margin-top:0">CoreMX doesn’t send your files to anyone. Friends get each item from the same MXB Mods download you used, and CoreMX checks it’s the exact same file. These items don’t have such a download yet. For each one, search for the mod on Get Mods, click Delete, then click Install. Your friends get it on the next sync.</p>${section('Out of date', old)}${section('Not installed through CoreMX', none)}`,
+    foot: '<button class="btn" data-close>Later</button>' });
+  m.addEventListener('click', onUnlinkedClick);
+  function onUnlinkedClick(e) {
+    const post = e.target.closest('[data-unlinked-post]');
+    if (post) { const r = rows[Number(post.dataset.unlinkedPost)]; if (r && r.source) { m.close(); openPost({ id: r.source.postId, title: r.source.title, link: r.source.link, image: r.source.image }); } return; }
+    const find = e.target.closest('[data-unlinked-find]');
+    if (find) { m.close(); findMod(find.dataset.unlinkedFind); }
+  }
+}
+// Shown once for each new set of items (the first visit, and again when something new can't be shared).
+function noteUnlinked(ps) {
+  const rows = unlinkedRows(ps);
+  if (!rows.length) return;
+  const sig = rows.map((r) => `${r.slot}|${r.value}|${r.state}`).sort().join(';');
+  let seen = '';
+  try { seen = localStorage.getItem(UNLINKED_SEEN) || ''; } catch {}
+  const before = new Set(seen.split(';').filter(Boolean));
+  if (sig.split(';').every((s) => before.has(s))) return;
+  try { localStorage.setItem(UNLINKED_SEEN, [...new Set([...before, ...sig.split(';')])].slice(-200).join(';')); } catch {}
+  setTimeout(openUnlinked, 300);
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-unlinked-open]')) openUnlinked(); });
 
 // Saved friends ({ code, name }) get their photo from the online friend list ({ id, avatar }).
 function withPhoto(f) { const live = (S.live.friends || []).find((l) => l.id === f.code); return live && live.avatar ? { ...f, avatar: live.avatar } : f; }
@@ -841,8 +883,8 @@ function unsharedLabel(slot, equipped) {
     const stock = !model || /^(default|default_mx|default_sm|full|neck|none)$/i.test(model);
     return stock ? 'Included with the game' : `Comes with the ${owner === 'protection' ? 'protector' : owner === 'rider' ? 'rider model' : owner}`;
   }
-  if (['helmet', 'boots', 'protection', 'rider'].includes(slot.slot) && value && !/^(default|default_mx|default_sm|full|neck|none)$/i.test(value)) return 'Not uploaded yet — still sharing';
-  return value && /Paint$/.test(slot.slot) ? 'Not uploaded yet — still sharing' : 'Included with the game';
+  if (['helmet', 'boots', 'protection', 'rider'].includes(slot.slot) && value && !/^(default|default_mx|default_sm|full|neck|none)$/i.test(value)) return 'Not shared yet';
+  return value && /Paint$/.test(slot.slot) ? 'Not shared yet' : 'Included with the game';
 }
 // MX2OEM_2023_Kawasaki_KX250 -> 2023 Kawasaki KX250
 function prettyBikeId(id) { return String(id || '').replace(/^(?:MX|SM|EN)[A-Z0-9]*OEM_/i, '').replace(/_/g, ' '); }
@@ -883,15 +925,15 @@ async function openFriendDetails(friend) {
     const l = (S.live.friends || []).find((f) => f.id === friend.code);
     const track = l && (l.trackName || l.trackId);
     const missing = track && !trackHave(l);
-    const stateLabels = { page: 'Installing from MXB Mods…', have: 'Already installed — skipped', ready: 'Ready to install', downloaded: 'Installed', waiting: 'Not uploaded yet — Sync equipped gear to get it', stalled: 'Their CoreMX hasn\'t sent it yet — asked again each sync', uploading: 'Uploading from their CoreMX…', offline: 'Downloads when their CoreMX is online', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
+    const stateLabels = { page: 'Installing from MXB Mods…', have: 'Already installed — skipped', ready: 'Installs from MXB Mods on the next sync', downloaded: 'Installed', nolink: 'Not on MXB Mods as this exact file. They need to reinstall it through CoreMX.', outdated: 'They have an older version than MXB Mods has now. They need to reinstall it.', linkfailed: 'Installing it from MXB Mods failed', 'name-taken': 'Different version installed — kept', failed: 'Installation failed', skipped: 'Cannot sync' };
     const rows = (outfit && outfit.equipped && outfit.equipped.length ? outfit.equipped : (outfit && outfit.items || []).map((it) => ({ slot: it.slot, label: it.label, value: it.value }))).map((slot) => {
       const item = (outfit.items || []).find((it) => it.slot === slot.slot);
       const unavailable = (outfit.unavailable || []).find((it) => it.slot === slot.slot);
       if (unavailable && unavailable.state !== 'have' && /paid|store-protected/i.test(unavailable.error || '')) return '';
       const itemDone = item && item.find && ['nomatch', 'failed', 'installed'].includes(item.find.state);
-      const state = item ? (itemDone ? findLabel(item.find) : stateLabels[item.state] || 'Shared') : unavailable ? unavailable.state === 'have' ? (unavailable.included === 'bike' ? 'Comes with the bike — you have it' : /paid|store-protected/i.test(unavailable.error || '') ? 'Paid mod — already installed' : 'Already installed') : unavailable.find ? findLabel(unavailable.find) : unavailable.source && !BOUND.test(unavailable.error || '') ? 'Too big or locked to send. CoreMX installs it from MXB Mods for you (see Downloads).' : unavailable.error : unsharedLabel(slot, outfit.equipped);
+      const state = item ? (itemDone ? findLabel(item.find) : item.state === 'linkfailed' && item.error ? `Installing it from MXB Mods failed: ${item.error}` : stateLabels[item.state] || 'Shared') : unavailable ? unavailable.state === 'have' ? (unavailable.included === 'bike' ? 'Comes with the bike — you have it' : /paid|store-protected/i.test(unavailable.error || '') ? 'Paid mod — already installed' : 'Already installed') : unavailable.find ? findLabel(unavailable.find) : unavailable.source && !BOUND.test(unavailable.error || '') ? 'Too big or locked to send. CoreMX installs it from MXB Mods for you (see Downloads).' : unavailable.error : unsharedLabel(slot, outfit.equipped);
       const needs = item && item.needs || [];
-      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'name-taken'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.state !== 'have' ? findButtons(unavailable, slot) : itemDone ? findButtons(item, slot) : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
+      return `<div class="friend-gear-row"><span class="slot-ico">${icon(({ helmet: 'helmet', bikePaint: 'bike', boots: 'boot', glovesPaint: 'glove' })[slot.slot] || 'shirt')}</span><div><b>${esc(slot.label)}</b><div>${esc(slot.value || 'Default')}</div><small class="${unavailable && unavailable.state !== 'have' || item && ['failed', 'linkfailed', 'nolink', 'outdated', 'name-taken', 'ready', 'page', 'waiting'].includes(item.state) ? 'sync-warning' : 'muted'}">${esc(state)}${item ? ` · ${fmtSize(item.size)}` : ''}</small>${unavailable && unavailable.state !== 'have' ? findButtons(unavailable, slot) : itemDone ? findButtons(item, slot) : ''}${needs.map((n) => `<div class="sync-warning">Needs ${esc(n.name)} <button class="btn btn-sm" data-friend-find="${esc(n.name)}">Find model</button></div>`).join('')}</div></div>`;
     }).join('');
     $('.modal-body', m).innerHTML = `<div class="friend-session"><b>${l && l.online ? l.inGame ? 'In MX Bikes' : 'Online in the manager' : 'Offline'}</b>${l && l.inEvent ? `<div>${esc(l.server || 'In a session — the server name appears once they ride out')}${track ? ` · ${esc(track)}` : ''}${sessionLabel(l) ? ` · ${esc(sessionLabel(l))}` : ''}</div><div class="friend-session-actions">${track && missing ? '<button class="btn" data-friend-track>Download track</button>' : ''}${l.address ? `<button class="btn btn-primary" data-friend-modal-join>${icon('play')}${missing ? 'Get track & join' : 'Join friend'}</button>` : '<span class="muted">Join from the game server list until the server address is known.</span>'}</div>` : ''}</div><div data-friend-progress>${friendProgressHtml()}</div>${error ? `<div class="notice danger">${icon('alert')}<div>${esc(error)}</div></div>` : ''}${loading ? '<div class="loadmore"><div class="spinner"></div></div>' : outfit ? `<div class="friend-outfit-summary"><b>Currently equipped</b><span class="muted">${esc(prettyBikeId(outfit.bikeName || outfit.bike || ''))} · shared ${esc(timeAgo(outfit.at))}</span></div><p class="muted">Sync adds the missing files to your mods folder. Your own outfit stays selected.</p>${paidModsSummary(outfit?.unavailable || [])}<div class="friend-gear-list">${rows}</div>` : '<div class="set-card muted">No outfit shared yet. Both riders need the latest manager and online server, outfit sync enabled, and must add each other as friends.</div>'}`;
     const list = $('.friend-gear-list', m);
@@ -918,9 +960,12 @@ async function openFriendDetails(friend) {
       const ps = S.live.status.paintSync;
       if (ps.error) throw new Error(ps.error);
       const result = (ps.friends || []).find((f) => f.id === friend.code);
-      const failed = result && result.items.filter((it) => ['failed', 'name-taken', 'skipped'].includes(it.state)).length;
-      const count = result && result.items.filter((it) => it.state === 'downloaded').length || 0;
-      toast(failed ? `${failed} files need attention — see the list` : count ? `Installed ${count} missing equipped files` : 'You already have the equipped files', failed ? 'info' : 'ok', 4500);
+      const attention = result ? result.items.filter((it) => ['failed', 'linkfailed', 'nolink', 'outdated', 'name-taken', 'skipped'].includes(it.state)) : [];
+      const count = result && result.items.filter((it) => it.state === 'page' || it.state === 'downloaded').length || 0;
+      // Name what needs attention and why (the list shows the same item in yellow).
+      const why = (it) => it.state === 'nolink' ? `${esc(friend.name || 'they')} needs to reinstall it through CoreMX` : it.state === 'outdated' ? 'their copy is out of date' : it.state === 'name-taken' ? 'you have a different version' : "couldn't be installed";
+      const named = attention.slice(0, 2).map((it) => `<b>${esc(it.value || it.label)}</b>: ${why(it)}`).join(' · ') + (attention.length > 2 ? ` · and ${attention.length - 2} more` : '');
+      toast(attention.length ? named : count ? `Installing ${count} missing item${count === 1 ? '' : 's'} from MXB Mods (see Downloads)` : 'You already have the equipped files', attention.length ? 'info' : 'ok', 6000);
       S.gearThumbs.clear();
     } catch (e) { error = cleanErr(e); }
     syncing = false;
